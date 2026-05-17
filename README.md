@@ -1,6 +1,6 @@
-# ⚡ AidiPanel
-
 <div align="center">
+
+# ⚡ AidiPanel
 
 **A lightweight, fast server control panel built on Nginx + FastCGI Cache + PHP-FPM + Redis**
 
