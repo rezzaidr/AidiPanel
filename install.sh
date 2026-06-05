@@ -937,6 +937,7 @@ _install_proftpd() {
   if [[ -f /etc/proftpd/proftpd.conf ]]; then
     # Prevent the stock FTP listener on port 21; AidiPanel exposes ProFTPD as SFTP on 2022.
     sed -i -E 's/^[[:space:]]*Port[[:space:]]+[0-9]+[[:space:]]*$/Port 2022/' /etc/proftpd/proftpd.conf
+    sed -i -E 's/^[[:space:]]*ListOptions[[:space:]].*$/# &/' /etc/proftpd/proftpd.conf
   fi
 
   cat > /etc/proftpd/conf.d/aidipanel.conf <<'PROFTPD_CONF'
