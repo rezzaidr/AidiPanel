@@ -1213,10 +1213,20 @@ _deploy_panel_app() {
     return 0
   fi
 
-  warn "Panel app directory not found alongside installer."
-  warn "Stack installed successfully. To deploy the panel app later:"
-  warn "  1. Upload the panel-app/ directory to your server"
-  warn "  2. Run: bash panel-app/deploy-panel.sh"
+  log "Panel app directory not found locally; downloading from GitHub..."
+  local tmp_dir downloaded_app
+  tmp_dir="$(mktemp -d)"
+  curl -fsSL --retry 3 --connect-timeout 15 \
+    "https://github.com/rezzaidr/aidipanel/archive/refs/heads/master.tar.gz" \
+    -o "${tmp_dir}/aidipanel.tar.gz" \
+    || { rm -rf "$tmp_dir"; die "Failed to download AidiPanel repository archive."; }
+  tar -xzf "${tmp_dir}/aidipanel.tar.gz" -C "$tmp_dir" \
+    || { rm -rf "$tmp_dir"; die "Failed to extract AidiPanel repository archive."; }
+  downloaded_app="${tmp_dir}/aidipanel-master/panel-app"
+  [[ -d "${downloaded_app}/public" ]] \
+    || { rm -rf "$tmp_dir"; die "Downloaded archive does not contain panel-app/public."; }
+  _do_deploy_app "$downloaded_app"
+  rm -rf "$tmp_dir"
   return 0
 }
 
