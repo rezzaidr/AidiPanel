@@ -7,7 +7,7 @@
   <meta name="description" content="A free, lightweight server control panel built on Nginx + FastCGI Cache + PHP-FPM + Redis. Install in minutes via SSH.">
   <meta property="og:title" content="AidiPanel — Nginx Server Panel">
   <meta property="og:description" content="Lighter than CloudPanel. No Varnish. Pure Nginx FastCGI Cache.">
-  <meta property="og:url" content="https://rezzaidr.github.io/aidipanel">
+  <meta property="og:url" content="https://rezzaid.github.io/aidipanel">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -659,8 +659,8 @@
       <li><a href="#architecture">Architecture</a></li>
       <li><a href="#install">Install</a></li>
       <li><a href="#cli">CLI</a></li>
-      <li><a href="https://github.com/rezzaidr/aidipanel" target="_blank">GitHub</a></li>
-      <li><a href="https://github.com/rezzaidr/aidipanel/blob/main/docs/installation.md" class="nav-cta">Docs →</a></li>
+      <li><a href="https://github.com/rezzaid/aidipanel" target="_blank">GitHub</a></li>
+      <li><a href="https://github.com/rezzaid/aidipanel/tree/main/docs" class="nav-cta">Docs →</a></li>
     </ul>
   </div>
 </nav>
@@ -670,7 +670,7 @@
   <div class="container">
     <div class="hero-badge">
       <span class="hero-badge-dot"></span>
-      v1.1.0 — Free & Open Source
+      v1.2.8 — Free & Open Source
     </div>
 
     <h1>
@@ -685,7 +685,7 @@
     </p>
 
     <div class="hero-actions">
-      <a href="https://github.com/rezzaidr/aidipanel" class="btn btn-primary" target="_blank">
+      <a href="https://github.com/rezzaid/aidipanel" class="btn btn-primary" target="_blank">
         ★ GitHub
       </a>
       <a href="#install" class="btn btn-ghost">
@@ -695,7 +695,7 @@
 
     <div class="install-box">
       <span class="install-label">$ ssh root@server</span>
-      <span class="install-cmd">curl -fsSL https://raw.githubusercontent.com/rezzaidr/aidipanel/main/install.sh | bash</span>
+      <span class="install-cmd">curl -fsSL https://raw.githubusercontent.com/rezzaid/aidipanel/main/install.sh | bash</span>
       <button class="install-copy" onclick="copyInstall(this)">copy</button>
     </div>
   </div>
@@ -870,20 +870,21 @@
     <div class="install-steps">
       <div class="step-card">
         <div class="step-num">STEP 01</div>
-        <div class="step-title">Run the installer</div>
+        <div class="step-title">One-command install</div>
         <pre class="step-code">bash &lt;(curl -fsSL \
   https://raw.githubusercontent.com/\
-  rezzaidr/aidipanel/main/install.sh)</pre>
-        <div class="step-note">Supports Debian 11/12 and Ubuntu 22.04/24.04 on x86_64 & ARM64.</div>
+  rezzaid/aidipanel/main/install.sh)</pre>
+        <div class="step-note">Installs full stack <strong>and</strong> deploys panel app automatically. Supports Debian 11/12 &amp; Ubuntu 22.04/24.04 on x86_64 &amp; ARM64.</div>
       </div>
       <div class="step-card">
         <div class="step-num">STEP 02</div>
-        <div class="step-title">Deploy panel app</div>
-        <pre class="step-code">scp -r aidipanel-app/ \
-  root@server:~/
-cd ~/aidipanel-app
-bash deploy-panel.sh</pre>
-        <div class="step-note">The web panel is separate so you can update it independently of the server stack.</div>
+        <div class="step-title">Access the panel</div>
+        <pre class="step-code"># Open in browser:
+https://&lt;your-server-ip&gt;:8443
+
+# Login: admin
+# Password: shown at end of install</pre>
+        <div class="step-note">A random password is generated and displayed at install completion. It's also saved to <code style="color:var(--brand)">/opt/aidipanel/credentials.conf</code>.</div>
       </div>
       <div class="step-card">
         <div class="step-num">STEP 03</div>
@@ -952,10 +953,10 @@ bash deploy-panel.sh</pre>
       <h2>Ready to install?</h2>
       <p>Fresh VPS → working panel → your first WordPress site in under 15 minutes.</p>
       <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
-        <a href="https://github.com/rezzaidr/aidipanel" class="btn btn-primary" target="_blank">
+        <a href="https://github.com/rezzaid/aidipanel" class="btn btn-primary" target="_blank">
           ★ Star on GitHub
         </a>
-        <a href="https://github.com/rezzaidr/aidipanel/blob/main/docs/installation.md" class="btn btn-ghost" target="_blank">
+        <a href="https://github.com/rezzaid/aidipanel/tree/main/docs" class="btn btn-ghost" target="_blank">
           Read the Docs →
         </a>
       </div>
@@ -967,14 +968,14 @@ bash deploy-panel.sh</pre>
 <footer>
   <div class="footer-inner">
     <div class="footer-left">
-      © 2025 <a href="https://github.com/rezzaidr" style="color:inherit;text-decoration:none">rezzaidr</a>
+      © 2026 <a href="https://github.com/rezzaid" style="color:inherit;text-decoration:none">rezzaid</a>
       · AidiPanel is MIT licensed
     </div>
     <ul class="footer-links">
-      <li><a href="https://github.com/rezzaidr/aidipanel" target="_blank">GitHub</a></li>
-      <li><a href="https://github.com/rezzaidr/aidipanel/blob/main/docs/installation.md" target="_blank">Docs</a></li>
-      <li><a href="https://github.com/rezzaidr/aidipanel/issues" target="_blank">Issues</a></li>
-      <li><a href="https://github.com/rezzaidr/aidipanel/releases" target="_blank">Releases</a></li>
+      <li><a href="https://github.com/rezzaid/aidipanel" target="_blank">GitHub</a></li>
+      <li><a href="https://github.com/rezzaid/aidipanel/tree/main/docs" target="_blank">Docs</a></li>
+      <li><a href="https://github.com/rezzaid/aidipanel/issues" target="_blank">Issues</a></li>
+      <li><a href="https://github.com/rezzaid/aidipanel/releases" target="_blank">Releases</a></li>
     </ul>
   </div>
 </footer>
@@ -982,7 +983,7 @@ bash deploy-panel.sh</pre>
 <script>
   // Copy install command
   function copyInstall(btn) {
-    const cmd = "curl -fsSL https://raw.githubusercontent.com/rezzaidr/aidipanel/main/install.sh | bash";
+    const cmd = "curl -fsSL https://raw.githubusercontent.com/rezzaid/aidipanel/main/install.sh | bash";
     navigator.clipboard.writeText(cmd).then(() => {
       btn.textContent = 'copied!';
       btn.style.color = 'var(--green)';

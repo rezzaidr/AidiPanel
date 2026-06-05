@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <title><?= e($pageTitle ?? 'AidiPanel') ?> — AidiPanel</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
@@ -23,9 +24,15 @@
     ::-webkit-scrollbar { width: 4px; height: 4px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 4px; }
-    .sidebar-link { @apply flex items-center gap-2.5 px-3 py-2 text-sm text-gray-600 rounded-lg transition-all; }
-    .sidebar-link:hover { @apply bg-gray-100 text-gray-900; }
-    .sidebar-link.active { @apply bg-brand-pale text-brand font-medium; }
+    /* sidebar-link: plain CSS, @apply tidak didukung Tailwind CDN */
+    .sidebar-link {
+      display: flex; align-items: center; gap: 10px;
+      padding: 7px 12px; font-size: 0.875rem; color: #4b5563;
+      border-radius: 8px; transition: all 0.15s; text-decoration: none;
+      white-space: nowrap;
+    }
+    .sidebar-link:hover { background: #f3f4f6; color: #111827; }
+    .sidebar-link.active { background: #EEEDFE; color: #3C3489; font-weight: 500; }
   </style>
 </head>
 <body class="bg-gray-50 h-full font-sans antialiased" x-data="{ mobileSidebar: false }">
@@ -37,7 +44,7 @@
 
     <!-- Logo -->
     <div class="h-14 flex items-center gap-2.5 px-4 border-b border-gray-200 shrink-0">
-      <div class="w-8 h-8 bg-brand rounded-lg flex items-center justify-center">
+      <div class="w-8 h-8 rounded-lg flex items-center justify-center" style="background:#3C3489">
         <i class="ti ti-server text-white text-base"></i>
       </div>
       <span class="text-sm font-semibold text-gray-900">AidiPanel</span>
@@ -50,53 +57,55 @@
         $isActive = fn(string $path) => str_starts_with($uri, $path) ? 'active' : '';
       ?>
 
-      <p class="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-3 mb-1">Overview</p>
+      <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider px-3 mb-1" style="font-size:10px">Overview</p>
       <a href="/dashboard" class="sidebar-link <?= $uri === '/dashboard' || $uri === '/' ? 'active' : '' ?>">
-        <i class="ti ti-layout-dashboard text-base"></i> Dashboard
+        <i class="ti ti-layout-dashboard" style="font-size:16px"></i> Dashboard
       </a>
       <a href="/sites" class="sidebar-link <?= $isActive('/sites') ?>">
-        <i class="ti ti-world text-base"></i> Sites
+        <i class="ti ti-world" style="font-size:16px"></i> Sites
       </a>
 
-      <p class="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-3 mt-4 mb-1">Server</p>
+      <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider px-3 mt-4 mb-1" style="font-size:10px">Server</p>
       <a href="/cache" class="sidebar-link <?= $isActive('/cache') ?>">
-        <i class="ti ti-bolt text-base"></i> FastCGI Cache
+        <i class="ti ti-bolt" style="font-size:16px"></i> FastCGI Cache
       </a>
       <a href="/php" class="sidebar-link <?= $isActive('/php') ?>">
-        <i class="ti ti-brand-php text-base"></i> PHP-FPM
+        <i class="ti ti-brand-php" style="font-size:16px"></i> PHP-FPM
       </a>
       <a href="/services" class="sidebar-link <?= $isActive('/services') ?>">
-        <i class="ti ti-activity text-base"></i> Services
+        <i class="ti ti-activity" style="font-size:16px"></i> Services
       </a>
 
-      <p class="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-3 mt-4 mb-1">Management</p>
+      <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider px-3 mt-4 mb-1" style="font-size:10px">Management</p>
       <a href="/databases" class="sidebar-link <?= $isActive('/databases') ?>">
-        <i class="ti ti-database text-base"></i> Databases
+        <i class="ti ti-database" style="font-size:16px"></i> Databases
       </a>
       <a href="/ssl" class="sidebar-link <?= $isActive('/ssl') ?>">
-        <i class="ti ti-lock text-base"></i> SSL / TLS
+        <i class="ti ti-lock" style="font-size:16px"></i> SSL / TLS
       </a>
-      <a href="/users" class="sidebar-link <?= $isActive('/users') ?>">
-        <i class="ti ti-users text-base"></i> Users
-      </a>
-      <a href="/logs" class="sidebar-link <?= $isActive('/logs') ?>">
-        <i class="ti ti-file-text text-base"></i> Logs
-      </a>
+      <?php if (!empty($_is_admin)): ?>
+        <a href="/users" class="sidebar-link <?= $isActive('/users') ?>">
+          <i class="ti ti-users" style="font-size:16px"></i> Users
+        </a>
+        <a href="/logs" class="sidebar-link <?= $isActive('/logs') ?>">
+          <i class="ti ti-file-text" style="font-size:16px"></i> Logs
+        </a>
+      <?php endif; ?>
     </nav>
 
-    <!-- Server info -->
+    <!-- Server info footer -->
     <div class="px-3 pb-3 shrink-0">
       <div class="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 flex items-center gap-2">
         <span class="w-2 h-2 rounded-full bg-green-500 shrink-0"></span>
         <div class="overflow-hidden">
           <p class="text-xs font-medium text-gray-800 truncate"><?= e(gethostname() ?: 'server') ?></p>
-          <p class="text-[10px] text-gray-400">AidiPanel v<?= PANEL_VERSION ?></p>
+          <p class="text-gray-400" style="font-size:10px">AidiPanel v<?= PANEL_VERSION ?></p>
         </div>
       </div>
     </div>
   </aside>
 
-  <!-- Main -->
+  <!-- Main content area -->
   <div class="flex-1 flex flex-col overflow-hidden">
 
     <!-- Topbar -->
@@ -115,20 +124,19 @@
             <i class="ti ti-alert-circle"></i> <?= e($_flash_error) ?>
           </div>
         <?php endif; ?>
-
         <div class="flex items-center gap-1.5 ml-2 pl-3 border-l border-gray-200">
-          <div class="w-7 h-7 rounded-full bg-brand-pale flex items-center justify-center">
-            <i class="ti ti-user text-brand text-xs"></i>
+          <div class="w-7 h-7 rounded-full flex items-center justify-center" style="background:#EEEDFE">
+            <i class="ti ti-user text-xs" style="color:#3C3489"></i>
           </div>
           <span class="text-xs text-gray-700"><?= e($_user['username'] ?? 'admin') ?></span>
           <a href="/logout" class="ml-1 text-gray-400 hover:text-gray-700 transition-colors" title="Logout">
-            <i class="ti ti-logout text-sm"></i>
+            <i class="ti ti-logout" style="font-size:14px"></i>
           </a>
         </div>
       </div>
     </header>
 
-    <!-- Content -->
+    <!-- Page content -->
     <main class="flex-1 overflow-y-auto p-5">
       <?= $_content ?? '' ?>
     </main>
@@ -136,26 +144,21 @@
   </div>
 </div>
 
-<!-- CSRF token for JS fetch -->
 <meta name="csrf-token" content="<?= e($_csrf_token ?? '') ?>">
 
 <script>
-// Global fetch helper with CSRF
 window.api = async (url, method = 'GET', body = null) => {
   const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
   const opts = {
     method,
     headers: { 'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/json' },
   };
-  if (body) {
-    if (method === 'POST') {
-      opts.body = JSON.stringify({ ...body, _csrf_token: csrf });
-    }
+  if (body && method === 'POST') {
+    opts.body = JSON.stringify({ ...body, _csrf_token: csrf });
   }
   const res = await fetch(url, opts);
   return res.json();
 };
 </script>
-
 </body>
 </html>

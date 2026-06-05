@@ -15,6 +15,13 @@ class Router
     // Routes that do NOT require authentication
     private array $publicRoutes = ['/login'];
 
+    // Read-only users may browse operational pages, but not sensitive admin views.
+    private array $adminOnlyGetRoutes = [
+        '/logs',
+        '/users',
+        '/sites/{domain}/nginx',
+    ];
+
     public function __construct(Request $request)
     {
         $this->request = $request;
@@ -50,6 +57,10 @@ class Router
                 AuthMiddleware::handle();
             }
 
+            if ($this->requiresAdmin($method, $routePath)) {
+                $this->enforceAdmin();
+            }
+
             // CSRF check for POST requests
             if ($method === 'POST') {
                 CsrfMiddleware::handle($this->request);
@@ -60,6 +71,29 @@ class Router
         }
 
         abort(404, 'Page not found.');
+    }
+
+    private function requiresAdmin(string $method, string $routePath): bool
+    {
+        if ($method === 'POST' && !in_array($routePath, $this->publicRoutes, true)) {
+            return true;
+        }
+
+        return $method === 'GET'
+            && in_array($routePath, $this->adminOnlyGetRoutes, true);
+    }
+
+    private function enforceAdmin(): void
+    {
+        if (Auth::isAdmin()) {
+            return;
+        }
+
+        if ($this->request->isAjax()) {
+            json(['success' => false, 'message' => 'Administrator privileges required.'], 403);
+        }
+
+        abort(403, 'Administrator privileges required.');
     }
 
     /**

@@ -128,29 +128,58 @@ function is_valid_domain(string $domain): bool
     );
 }
 
+function is_valid_proxy_url(string $url): bool
+{
+    if (preg_match('/[\r\n;\s]/', $url)) {
+        return false;
+    }
+
+    $parts = parse_url($url);
+    if (!$parts || !in_array($parts['scheme'] ?? '', ['http', 'https'], true)) {
+        return false;
+    }
+
+    return !empty($parts['host']);
+}
+
 /**
- * Safe shell_exec wrapper — only allows the aidipanel binary
+ * Safe CLI runner — pakai sudo jika dijalankan dari web (www-data)
  */
 function run_cli(string $command, array $args = []): array
 {
-    // Sanitize: only allow aidipanel CLI binary
     $binary = '/usr/local/bin/aidipanel';
     if (!file_exists($binary)) {
-        return ['success' => false, 'output' => 'AidiPanel CLI not found.', 'code' => 1];
+        return ['success' => false, 'output' => 'AidiPanel CLI not found: ' . $binary, 'code' => 1];
     }
 
-    // Build safe argument list
+    // Pastikan log dir bisa ditulis
+    $logDir = '/opt/aidipanel/storage/logs';
+    if (!is_dir($logDir)) {
+        @mkdir($logDir, 0770, true);
+    }
+
+    // Build safe command — set NO_COLOR agar output tidak ada ANSI escape codes
     $safeArgs = array_map('escapeshellarg', $args);
-    $fullCmd  = escapeshellcmd($binary) . ' ' . escapeshellarg($command) . ' ' . implode(' ', $safeArgs);
-    $fullCmd .= ' 2>&1';
+    $cmdParts = [escapeshellcmd($binary), escapeshellarg($command), ...$safeArgs];
+    $cmd      = 'NO_COLOR=1 ' . implode(' ', $cmdParts) . ' 2>&1';
+
+    // Gunakan sudo jika berjalan sebagai www-data
+    // NO_COLOR dipass sebagai arg, bukan env (sudo -E tidak diizinkan)
+    $currentUser = trim((string)(shell_exec('whoami 2>/dev/null') ?: ''));
+    if ($currentUser !== 'root' && file_exists('/usr/bin/sudo')) {
+        $cmd = '/usr/bin/sudo /usr/local/bin/aidipanel ' . escapeshellarg($command) . ' ' . implode(' ', $safeArgs) . ' 2>&1';
+    }
 
     $output   = [];
     $exitCode = 0;
-    exec($fullCmd, $output, $exitCode);
+    exec($cmd, $output, $exitCode);
+
+    // Strip ANSI escape codes dari output (fallback jika NO_COLOR tidak diterapkan)
+    $cleanOutput = preg_replace('/\x1B\[[0-9;]*[A-Za-z]/', '', implode("\n", $output));
 
     return [
         'success' => $exitCode === 0,
-        'output'  => implode("\n", $output),
+        'output'  => $cleanOutput,
         'code'    => $exitCode,
     ];
 }

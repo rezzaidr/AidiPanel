@@ -9,18 +9,26 @@ class DB
 
     private function __construct()
     {
-        $dbPath = STORAGE_ROOT . '/db/aidipanel.sqlite';
+        $dbPath = PANEL_DIR . '/storage/db/aidipanel.sqlite';
         $dir    = dirname($dbPath);
 
         if (!is_dir($dir)) {
-            mkdir($dir, 0750, true);
+            @mkdir($dir, 0770, true);
         }
 
-        $this->pdo = new \PDO('sqlite:' . $dbPath, null, null, [
-            \PDO::ATTR_ERRMODE            => \PDO::ERRMODE_EXCEPTION,
-            \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,
-        ]);
+        $this->pdo = new \PDO(
+            'sqlite:' . $dbPath,
+            null,
+            null,
+            [
+                \PDO::ATTR_ERRMODE            => \PDO::ERRMODE_EXCEPTION,
+                \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,
+                \PDO::ATTR_TIMEOUT            => 5,
+            ]
+        );
+
         $this->pdo->exec('PRAGMA journal_mode=WAL;');
+        $this->pdo->exec('PRAGMA synchronous=NORMAL;');
         $this->pdo->exec('PRAGMA foreign_keys=ON;');
 
         $this->migrate();
@@ -73,14 +81,26 @@ class DB
             );
         ");
 
-        // Seed default admin if not exists
-        $admin = $this->row('SELECT id FROM users WHERE username = ? LIMIT 1', ['admin']);
-        if (!$admin) {
-            $hash = password_hash('admin', PASSWORD_BCRYPT, ['cost' => 12]);
-            $this->run(
-                'INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)',
-                ['admin', $hash, 'admin']
-            );
+        // Seed admin HANYA jika belum ada user sama sekali
+        // Password hash sudah ditulis oleh deploy-panel.sh via CLI —
+        // TIDAK dibaca dari file saat runtime untuk menghindari permission issues
+        $count = (int) $this->pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
+        if ($count === 0) {
+            // Fallback: jika dipanggil tanpa deploy-panel.sh
+            // Baca dari env var yang di-set oleh Nginx fastcgi_param
+            $hash = getenv('AIDIPANEL_ADMIN_HASH') ?: '';
+            if (empty($hash)) {
+                // Last resort: password random, tulis ke /tmp agar bisa dibaca admin
+                $random = bin2hex(random_bytes(10));
+                $hash   = password_hash($random, PASSWORD_BCRYPT, ['cost' => 12]);
+                $fallbackFile = '/tmp/aidipanel-fallback-pass.txt';
+                @file_put_contents($fallbackFile, "admin password (fallback): {$random}\n");
+                @chmod($fallbackFile, 0600);
+                error_log("AidiPanel FALLBACK: admin pass written to {$fallbackFile}");
+            }
+            $this->pdo->prepare(
+                'INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)'
+            )->execute(['admin', $hash, 'admin']);
         }
     }
 

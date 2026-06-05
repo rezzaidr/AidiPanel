@@ -17,6 +17,9 @@ class DatabaseController extends BaseController
         $pass = (string) $this->request->post('pass', '');
 
         if (empty($name)) $this->error('Database name is required.');
+        if ($pass !== '' && !preg_match('/^[A-Za-z0-9_!@#%+=.,:-]{8,128}$/', $pass)) {
+            $this->error('Password must be 8-128 characters and contain only safe symbols.');
+        }
 
         $args = ['--name', $name, '--user', $user];
         if ($pass) $args = array_merge($args, ['--pass', $pass]);
@@ -39,7 +42,7 @@ class DatabaseController extends BaseController
         $name = preg_replace('/[^a-zA-Z0-9_]/', '', (string) $this->request->post('name', ''));
         if (empty($name)) $this->error('Database name is required.');
 
-        $result = run_cli('db:delete', ['--name', $name]);
+        $result = run_cli('db:delete', ['--name', $name, '--force']);
         if (!$result['success']) $this->error('Failed to delete database: ' . $result['output']);
 
         \Core\DB::log('db:delete', "Deleted database: {$name}");

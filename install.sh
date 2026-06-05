@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  AidiPanel Installer v1.1.0
+#  AidiPanel Installer v1.2.8
 #  Stack: Nginx + FastCGI Cache + PHP-FPM (multi-version) + MySQL/MariaDB + Redis
 #  Supported OS: Debian 11/12, Ubuntu 22.04/24.04 (x86_64 & arm64)
-#  Usage  : bash install-aidipanel.sh [OPTIONS]
+#
+#  One-command install (installs stack + deploys panel app automatically):
+#    bash <(curl -fsSL https://raw.githubusercontent.com/rezzaid/aidipanel/main/install.sh)
 #
 #  Options:
 #    --port PORT           Panel HTTPS port (default: 8443)
@@ -14,7 +16,7 @@
 #    --dry-run             Simulate install without making changes
 #    --help                Show this help
 #
-#  Author : AidiPanel Team
+#  Author : AidiPanel Team — by rezzaid
 # =============================================================================
 
 set -Eeuo pipefail
@@ -24,7 +26,7 @@ IFS=$'\n\t'
 # 0. GLOBAL CONSTANTS & DEFAULTS
 # ---------------------------------------------------------------------------
 readonly PANEL_NAME="AidiPanel"
-readonly PANEL_VERSION="1.1.0"
+readonly PANEL_VERSION="1.2.8"
 readonly PANEL_USER="aidipanel"
 readonly PANEL_DIR="/opt/aidipanel"
 readonly PANEL_LOG="/var/log/aidipanel-install.log"
@@ -36,11 +38,8 @@ readonly NGINX_CACHE_KEYS_ZONE="200m"
 readonly SITES_DIR="/var/www"
 readonly DB_NAME="aidipanel"
 readonly PHP_DEFAULT_VERSION="8.3"
-# PHP versions that will be installed
 readonly PHP_VERSIONS=("8.1" "8.2" "8.3")
 
-# Supported DB engines: label → description
-# mysql80 | mysql84 | mariadb1011 | mariadb114 | mariadb118
 declare -A DB_ENGINE_LABELS=(
   [mysql80]="MySQL 8.0"
   [mysql84]="MySQL 8.4 (LTS)"
@@ -50,11 +49,12 @@ declare -A DB_ENGINE_LABELS=(
 )
 
 PANEL_PORT=8443
-DB_ENGINE="mariadb1011"   # default: MariaDB 10.11 (best for WordPress)
+DB_ENGINE="mariadb1011"
 INSTALL_REDIS=true
 DRY_RUN=false
 DB_ROOT_PASS=""
-SWAP_SIZE_MB=2048          # 2GB swap — created if no swap exists
+PANEL_ADMIN_PASS=""        # generated random, shown at end
+SWAP_SIZE_MB=2048
 DEBIAN_FRONTEND=noninteractive
 export DEBIAN_FRONTEND
 
@@ -75,7 +75,6 @@ die()   {
 }
 
 run() {
-  # Wrapper: log the command, skip if --dry-run
   log "RUN: $*"
   if [[ "$DRY_RUN" == "true" ]]; then
     warn "[dry-run] skipped: $*"
@@ -121,7 +120,6 @@ _parse_args() {
         shift
         DB_ROOT_PASS="$1"
         ;;
-      # Keep legacy alias for backwards compat
       --mysql-root-pass)
         shift
         DB_ROOT_PASS="$1"
@@ -174,8 +172,10 @@ _check_already_installed() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# FIX #1: Auto-detect OS including Ubuntu 24.04 Noble + proper codename
+# ---------------------------------------------------------------------------
 _detect_os() {
-  # Sets OS_ID, OS_VERSION_ID, OS_CODENAME
   if [[ ! -f /etc/os-release ]]; then
     die "Cannot detect OS — /etc/os-release not found."
   fi
@@ -212,20 +212,24 @@ _detect_os() {
   ok "Detected OS: ${OS_ID} ${OS_VERSION_ID} (${OS_CODENAME}) on ${ARCH}"
 }
 
+# ---------------------------------------------------------------------------
+# FIX #3: RAM detection — use awk for proper MB→GB with 1 decimal place
+# ---------------------------------------------------------------------------
 _check_resources() {
   local mem_kb cpu_cores disk_kb
-  mem_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+  mem_kb=$(awk '/MemTotal/{print $2}' /proc/meminfo)
   cpu_cores=$(nproc)
   disk_kb=$(df / --output=avail -k | tail -1)
 
+  # Use awk for accurate floating-point MB→GB (fixes 0GB bug from integer division)
   local mem_gb disk_gb
-  mem_gb=$(( mem_kb / 1024 / 1024 ))
-  disk_gb=$(( disk_kb / 1024 / 1024 ))
+  mem_gb=$(awk "BEGIN {printf \"%.1f\", ${mem_kb}/1024/1024}")
+  disk_gb=$(awk "BEGIN {printf \"%.1f\", ${disk_kb}/1024/1024}")
 
   log "Resources: ${cpu_cores} CPU cores, ${mem_gb}GB RAM, ${disk_gb}GB free disk"
 
-  (( mem_kb >= 1536000 )) \
-    || warn "Minimum 2GB RAM recommended. Current: ~${mem_gb}GB. Continuing anyway."
+  (( mem_kb >= 512000 )) \
+    || warn "Low RAM detected: ~${mem_gb}GB. Minimum 1GB recommended. Continuing anyway."
   (( disk_kb >= 5120000 )) \
     || die "Insufficient disk space. Minimum 5GB free required. Current: ~${disk_gb}GB."
 }
@@ -250,40 +254,32 @@ _check_port_free() {
 _check_hostname_resolves() {
   local hostname
   hostname=$(hostname -f 2>/dev/null || hostname)
-
   log "Checking hostname: ${hostname}"
-
-  # Hostname must not be localhost / empty
   if [[ -z "$hostname" || "$hostname" == "localhost" || "$hostname" == "localhost.localdomain" ]]; then
-    warn "Hostname is set to '${hostname}' — this may cause issues with SSL and email."
-    warn "Consider setting a proper FQDN: hostnamectl set-hostname your-server.domain.com"
-    # Not fatal — just warn
+    warn "Hostname is '${hostname}' — consider setting FQDN: hostnamectl set-hostname your-server.domain.com"
     return 0
   fi
-
-  # Try to resolve hostname to an IP
   local resolved_ip
   resolved_ip=$(getent hosts "$hostname" 2>/dev/null | awk '{print $1}' | head -1)
-
   if [[ -z "$resolved_ip" ]]; then
-    warn "Hostname '${hostname}' does not resolve to an IP address."
-    warn "This is OK for now — make sure DNS is configured before installing SSL."
+    warn "Hostname '${hostname}' does not resolve — OK for now, configure DNS before SSL."
   else
-    ok "Hostname '${hostname}' resolves to: ${resolved_ip}"
+    ok "Hostname '${hostname}' → ${resolved_ip}"
   fi
 }
 
 # ---------------------------------------------------------------------------
-# 5. BANNER
+# 5. BANNER — with "by rezzaid" branding
 # ---------------------------------------------------------------------------
 _banner() {
   echo -e "\n${BOLD}${CYAN}"
-  echo "  ╔═══════════════════════════════════════════╗"
-  echo "  ║                                           ║"
-  echo "  ║        AidiPanel Installer v${PANEL_VERSION}         ║"
-  echo "  ║   Nginx + FastCGI Cache + PHP-FPM + Redis ║"
-  echo "  ║                                           ║"
-  echo "  ╚═══════════════════════════════════════════╝"
+  echo "  ╔══════════════════════════════════════════════════╗"
+  echo "  ║                                                  ║"
+  echo "  ║        AidiPanel Installer v${PANEL_VERSION}              ║"
+  echo "  ║   Nginx + FastCGI Cache + PHP-FPM + Redis        ║"
+  echo "  ║                      by rezzaid                  ║"
+  echo "  ║                                                  ║"
+  echo "  ╚══════════════════════════════════════════════════╝"
   echo -e "${RESET}\n"
   log "Starting ${PANEL_NAME} v${PANEL_VERSION} installation"
   log "DB engine    : ${DB_ENGINE_LABELS[$DB_ENGINE]}"
@@ -301,7 +297,6 @@ _apt_update() {
 }
 
 _apt_install() {
-  # Usage: _apt_install pkg1 pkg2 ...
   log "Installing packages: $*"
   run apt-get install -y -qq --no-install-recommends "$@"
 }
@@ -311,7 +306,7 @@ _pkg_installed() {
 }
 
 # ---------------------------------------------------------------------------
-# 7. BASE SYSTEM PACKAGES
+# 7. BASE SYSTEM PACKAGES (minimal — reduced for lightweight VPS)
 # ---------------------------------------------------------------------------
 _install_base_packages() {
   log "Installing base system packages..."
@@ -326,7 +321,7 @@ _install_base_packages() {
 }
 
 # ---------------------------------------------------------------------------
-# 7b. SWAP FILE — create 2GB swap if no swap exists (critical for small VPS)
+# 7b. SWAP FILE — create swap if none exists (critical for small VPS)
 # ---------------------------------------------------------------------------
 _create_swap() {
   log "Checking swap space..."
@@ -342,18 +337,11 @@ _create_swap() {
 
   local swap_file="/swapfile"
   local swap_mb=$SWAP_SIZE_MB
-
-  # Adjust swap size based on available RAM:
-  # RAM < 1GB  → 2GB swap
-  # RAM 1-4GB  → 2GB swap
-  # RAM > 4GB  → 1GB swap (enough)
   local mem_mb
   mem_mb=$(free -m | awk '/^Mem:/ {print $2}')
   (( mem_mb > 4096 )) && swap_mb=1024
 
   log "Creating ${swap_mb}MB swap file at ${swap_file}..."
-
-  # Use fallocate (fast), fallback to dd (compatible)
   if command -v fallocate &>/dev/null; then
     fallocate -l "${swap_mb}M" "$swap_file" >> "$PANEL_LOG" 2>&1 \
       || dd if=/dev/zero of="$swap_file" bs=1M count="$swap_mb" >> "$PANEL_LOG" 2>&1
@@ -365,19 +353,22 @@ _create_swap() {
   mkswap "$swap_file"  >> "$PANEL_LOG" 2>&1
   swapon "$swap_file"  >> "$PANEL_LOG" 2>&1
 
-  # Persist across reboots
   if ! grep -q "$swap_file" /etc/fstab; then
     echo "${swap_file} none swap sw 0 0" >> /etc/fstab
   fi
 
-  # Tune swappiness for server use (default 60 is for desktop)
+  # Performance kernel tuning
   local sysctl_conf="/etc/sysctl.d/99-aidipanel.conf"
   cat > "$sysctl_conf" <<'SYSCTL'
-# AidiPanel — kernel tuning
+# AidiPanel — kernel tuning for performance
 vm.swappiness = 10
 vm.vfs_cache_pressure = 50
 net.core.somaxconn = 65535
 net.ipv4.tcp_max_syn_backlog = 65535
+net.core.netdev_max_backlog = 65535
+net.ipv4.tcp_fastopen = 3
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.tcp_fin_timeout = 15
 SYSCTL
   sysctl -p "$sysctl_conf" >> "$PANEL_LOG" 2>&1
 
@@ -387,55 +378,78 @@ SYSCTL
 }
 
 # ---------------------------------------------------------------------------
-# 8. NGINX
+# 8. NGINX — FIX #2: Ubuntu 24.04 Noble GPG/repo fix
 # ---------------------------------------------------------------------------
+_apt_arch() {
+  [[ "$ARCH" == "x86_64" ]] && echo "amd64" || echo "arm64"
+}
+
 _add_nginx_repo() {
   if [[ -f /etc/apt/sources.list.d/nginx.list ]]; then
     log "Nginx apt repo already configured — skipping"
     return 0
   fi
   log "Adding official Nginx apt repository..."
-  run curl -fsSL https://nginx.org/keys/nginx_signing.key \
-    | gpg --dearmor -o /etc/apt/trusted.gpg.d/nginx.gpg
-  echo "deb [arch=${ARCH/x86_64/amd64}${ARCH/aarch64/arm64} signed-by=/etc/apt/trusted.gpg.d/nginx.gpg] \
-http://nginx.org/packages/${OS_ID} ${OS_CODENAME} nginx" \
-    > /etc/apt/sources.list.d/nginx.list
+  [[ "$DRY_RUN" == "true" ]] && { warn "[dry-run] skipping nginx repo add"; return 0; }
+
+  local apt_arch; apt_arch=$(_apt_arch)
+
+  # Download and dearmor GPG key properly
+  curl -fsSL https://nginx.org/keys/nginx_signing.key \
+    | gpg --dearmor -o /etc/apt/trusted.gpg.d/nginx.gpg 2>>"$PANEL_LOG"
+  chmod 644 /etc/apt/trusted.gpg.d/nginx.gpg
+
+  # Ubuntu 24.04 Noble: nginx.org mainline supports noble since 1.25.3+
+  # Fall back to distro nginx if noble not yet in official repo
+  local nginx_repo_os="$OS_ID"
+  local nginx_repo_codename="$OS_CODENAME"
+
+  if [[ "$OS_ID" == "ubuntu" && "$OS_VERSION_ID" == "24.04" ]]; then
+    # Check if noble is in nginx.org mainline
+    if curl -fsSL --max-time 10 \
+        "http://nginx.org/packages/ubuntu/dists/noble/" >/dev/null 2>&1; then
+      log "Nginx official repo supports Ubuntu 24.04 noble"
+    else
+      warn "Nginx official repo not yet available for Ubuntu 24.04 noble — using distro nginx"
+      _apt_install nginx
+      ok "Nginx installed from distro repo (Ubuntu 24.04 noble)"
+      return 0
+    fi
+  fi
+
+  cat > /etc/apt/sources.list.d/nginx.list <<NGINX_REPO
+deb [arch=${apt_arch} signed-by=/etc/apt/trusted.gpg.d/nginx.gpg] http://nginx.org/packages/${nginx_repo_os} ${nginx_repo_codename} nginx
+NGINX_REPO
+
   _apt_update
   ok "Nginx repo added"
-}
-
-# Fix arch string for apt
-_apt_arch() {
-  [[ "$ARCH" == "x86_64" ]] && echo "amd64" || echo "arm64"
 }
 
 _install_nginx() {
   if _pkg_installed nginx; then
     log "Nginx already installed — skipping"
-  else
-    log "Installing Nginx..."
-    if [[ -f /etc/apt/sources.list.d/nginx.list ]]; then
-      _apt_install nginx
-    else
-      # Fallback to distro's nginx if repo addition was skipped (dry-run)
-      _apt_install nginx
-    fi
-    ok "Nginx installed: $(nginx -v 2>&1 || true)"
+    return 0
   fi
+  log "Installing Nginx..."
+  _apt_install nginx
+  ok "Nginx installed: $(nginx -v 2>&1 || true)"
 }
 
 _configure_nginx_main() {
-  log "Writing Nginx main configuration..."
-  local apt_arch; apt_arch=$(_apt_arch)
-
+  log "Writing Nginx main configuration (optimized)..."
   [[ "$DRY_RUN" == "true" ]] && { warn "[dry-run] skipping nginx config write"; return 0; }
 
-  # Backup existing config
   if [[ -f /etc/nginx/nginx.conf ]]; then
     cp /etc/nginx/nginx.conf "/etc/nginx/nginx.conf.bak.$(date +%s)"
   fi
 
-  cat > /etc/nginx/nginx.conf <<'NGINX_MAIN'
+  # Calculate worker connections based on RAM
+  local mem_mb; mem_mb=$(awk '/MemTotal/{printf "%d", $2/1024}' /proc/meminfo)
+  local worker_conn=2048
+  (( mem_mb >= 2048 )) && worker_conn=4096
+  (( mem_mb >= 4096 )) && worker_conn=8192
+
+  cat > /etc/nginx/nginx.conf <<NGINX_MAIN
 user www-data;
 worker_processes auto;
 worker_rlimit_nofile 65535;
@@ -443,7 +457,7 @@ pid /run/nginx.pid;
 include /etc/nginx/modules-enabled/*.conf;
 
 events {
-    worker_connections 4096;
+    worker_connections ${worker_conn};
     multi_accept on;
     use epoll;
 }
@@ -453,30 +467,40 @@ http {
     sendfile            on;
     tcp_nopush          on;
     tcp_nodelay         on;
-    keepalive_timeout   65;
+    keepalive_timeout   75;
+    keepalive_requests  1000;
     types_hash_max_size 2048;
     server_tokens       off;
     client_max_body_size 256m;
+    client_body_buffer_size 128k;
 
     include /etc/nginx/mime.types;
     default_type application/octet-stream;
 
-    # --- Logging ---
-    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
-                    '$status $body_bytes_sent "$http_referer" '
-                    '"$http_user_agent" cache:$upstream_cache_status';
-    access_log /var/log/nginx/access.log main buffer=16k;
+    # --- Logging (buffered for performance) ---
+    log_format main '\$remote_addr - \$remote_user [\$time_local] "\$request" '
+                    '\$status \$body_bytes_sent "\$http_referer" '
+                    '"\$http_user_agent" cache:\$upstream_cache_status';
+    access_log /var/log/nginx/access.log main buffer=32k flush=5s;
     error_log  /var/log/nginx/error.log  warn;
 
-    # --- Gzip ---
+    # --- Gzip (optimized) ---
     gzip              on;
     gzip_vary         on;
     gzip_proxied      any;
-    gzip_comp_level   6;
+    gzip_comp_level   5;
+    gzip_min_length   256;
     gzip_buffers      16 8k;
     gzip_http_version 1.1;
     gzip_types text/plain text/css text/xml application/json application/javascript
-               application/xml+rss application/atom+xml image/svg+xml;
+               application/xml+rss application/atom+xml image/svg+xml
+               text/javascript application/x-javascript application/xhtml+xml;
+
+    # --- Open file cache (huge performance boost) ---
+    open_file_cache          max=10000 inactive=30s;
+    open_file_cache_valid    60s;
+    open_file_cache_min_uses 2;
+    open_file_cache_errors   on;
 
     # --- FastCGI Cache Zone ---
     fastcgi_cache_path /var/cache/nginx/fastcgi
@@ -485,7 +509,7 @@ http {
         max_size=10g
         inactive=60m
         use_temp_path=off;
-    fastcgi_cache_key "$scheme$request_method$host$request_uri";
+    fastcgi_cache_key "\$scheme\$request_method\$host\$request_uri";
     fastcgi_cache_use_stale error timeout invalid_header updating
                             http_500 http_503;
     fastcgi_cache_lock        on;
@@ -493,9 +517,9 @@ http {
     fastcgi_ignore_headers    Cache-Control Expires Set-Cookie;
 
     # --- Rate Limiting ---
-    limit_req_zone $binary_remote_addr zone=aidipanel_req:10m rate=30r/m;
+    limit_req_zone \$binary_remote_addr zone=aidipanel_req:10m rate=30r/m;
 
-    # --- Security Headers (applied globally, sites may override) ---
+    # --- Security Headers (applied globally) ---
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
@@ -506,14 +530,10 @@ http {
 }
 NGINX_MAIN
 
-  # Ensure sites directories exist
-  mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
+  mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled /etc/nginx/snippets
+  rm -f /etc/nginx/conf.d/default.conf /etc/nginx/sites-enabled/default
 
-  # Remove default site if present
-  rm -f /etc/nginx/conf.d/default.conf
-  rm -f /etc/nginx/sites-enabled/default
-
-  ok "Nginx main config written"
+  ok "Nginx main config written (optimized, worker_conn=${worker_conn})"
 }
 
 _create_fastcgi_cache_dir() {
@@ -527,10 +547,9 @@ _create_fastcgi_params_snippet() {
   log "Writing FastCGI params snippet..."
   [[ "$DRY_RUN" == "true" ]] && return 0
 
-  # Create a reusable FastCGI cache exclude snippet
   cat > /etc/nginx/snippets/fastcgi-cache.conf <<'FCGI_SNIP'
 # AidiPanel — FastCGI Cache exclusion rules
-# Include this snippet inside each server{} block that uses FastCGI cache.
+# Include this snippet inside each server{} block.
 
 set $skip_cache 0;
 
@@ -540,17 +559,17 @@ if ($request_method = POST)          { set $skip_cache 1; }
 # Do not cache URIs with query strings
 if ($query_string != "")             { set $skip_cache 1; }
 
-# Do not cache the following URIs (WordPress admin, login, cart, checkout)
-if ($request_uri ~* "(/wp-admin/|/wp-login.php|/cart|/checkout|/my-account|/xmlrpc.php)") {
+# WordPress: skip admin, login, cart, checkout
+if ($request_uri ~* "(/wp-admin/|/wp-login\.php|/cart|/checkout|/my-account|/xmlrpc\.php)") {
     set $skip_cache 1;
 }
 
-# Do not cache for logged-in WordPress users or WooCommerce sessions
+# WordPress logged-in users / WooCommerce sessions
 if ($http_cookie ~* "(wordpress_logged_in|woocommerce_items_in_cart|woocommerce_session|comment_author)") {
     set $skip_cache 1;
 }
 
-# Do not cache for Laravel / general session cookies
+# Laravel / generic session cookies
 if ($http_cookie ~* "(laravel_session|PHPSESSID|auth_token)") {
     set $skip_cache 1;
 }
@@ -560,7 +579,7 @@ FCGI_SNIP
 }
 
 # ---------------------------------------------------------------------------
-# 9. PHP-FPM (multi-version via ondrej/php PPA or sury.org)
+# 9. PHP-FPM (multi-version) — tuned for lightweight VPS
 # ---------------------------------------------------------------------------
 _add_php_repo() {
   if [[ -f /etc/apt/sources.list.d/php.list ]]; then
@@ -571,14 +590,17 @@ _add_php_repo() {
   [[ "$DRY_RUN" == "true" ]] && { warn "[dry-run] skipping PHP repo add"; return 0; }
 
   if [[ "$OS_ID" == "ubuntu" ]]; then
-    run add-apt-repository -y ppa:ondrej/php
+    # ondrej/php PPA works on all supported Ubuntu versions
+    apt-get install -y -qq software-properties-common >> "$PANEL_LOG" 2>&1
+    add-apt-repository -y ppa:ondrej/php >> "$PANEL_LOG" 2>&1
   else
     # Debian — use deb.sury.org
-    run curl -fsSL https://packages.sury.org/php/apt.gpg \
-      | gpg --dearmor -o /etc/apt/trusted.gpg.d/php-sury.gpg
-    echo "deb [signed-by=/etc/apt/trusted.gpg.d/php-sury.gpg] \
-https://packages.sury.org/php/ ${OS_CODENAME} main" \
-      > /etc/apt/sources.list.d/php.list
+    curl -fsSL https://packages.sury.org/php/apt.gpg \
+      | gpg --dearmor -o /etc/apt/trusted.gpg.d/php-sury.gpg 2>>"$PANEL_LOG"
+    chmod 644 /etc/apt/trusted.gpg.d/php-sury.gpg
+    cat > /etc/apt/sources.list.d/php.list <<PHP_REPO
+deb [signed-by=/etc/apt/trusted.gpg.d/php-sury.gpg] https://packages.sury.org/php/ ${OS_CODENAME} main
+PHP_REPO
   fi
   _apt_update
   ok "PHP repository added"
@@ -592,6 +614,7 @@ _install_php_version() {
     "php${ver}-cli" \
     "php${ver}-common" \
     "php${ver}-mysql" \
+    "php${ver}-sqlite3" \
     "php${ver}-redis" \
     "php${ver}-xml" \
     "php${ver}-mbstring" \
@@ -612,25 +635,28 @@ _configure_php_fpm() {
   [[ -f "$pool_conf" ]] || { warn "PHP ${ver} pool config not found; skipping FPM tune"; return 0; }
   [[ "$DRY_RUN" == "true" ]] && return 0
 
-  log "Tuning PHP-FPM ${ver} pool..."
-  # Backup
+  log "Tuning PHP-FPM ${ver} pool (adaptive to RAM)..."
   cp "$pool_conf" "${pool_conf}.bak.$(date +%s)"
 
-  # Switch to Unix socket (faster than TCP) and tune workers
+  # Calculate PM workers based on RAM
+  local mem_mb; mem_mb=$(awk '/MemTotal/{printf "%d", $2/1024}' /proc/meminfo)
+  local max_ch=10 start_sv=2 min_sp=2 max_sp=4
+  if (( mem_mb >= 2048 )); then max_ch=20; start_sv=4; min_sp=2; max_sp=6; fi
+  if (( mem_mb >= 4096 )); then max_ch=40; start_sv=6; min_sp=4; max_sp=10; fi
+
   sed -i \
     -e "s|^listen = .*|listen = /run/php/php${ver}-fpm.sock|" \
     -e 's|^;listen.owner = .*|listen.owner = www-data|' \
     -e 's|^;listen.group = .*|listen.group = www-data|' \
     -e 's|^;listen.mode = .*|listen.mode = 0660|' \
     -e 's|^pm = .*|pm = dynamic|' \
-    -e 's|^pm.max_children = .*|pm.max_children = 20|' \
-    -e 's|^pm.start_servers = .*|pm.start_servers = 4|' \
-    -e 's|^pm.min_spare_servers = .*|pm.min_spare_servers = 2|' \
-    -e 's|^pm.max_spare_servers = .*|pm.max_spare_servers = 6|' \
+    -e "s|^pm.max_children = .*|pm.max_children = ${max_ch}|" \
+    -e "s|^pm.start_servers = .*|pm.start_servers = ${start_sv}|" \
+    -e "s|^pm.min_spare_servers = .*|pm.min_spare_servers = ${min_sp}|" \
+    -e "s|^pm.max_spare_servers = .*|pm.max_spare_servers = ${max_sp}|" \
     -e 's|^;pm.max_requests = .*|pm.max_requests = 500|' \
     "$pool_conf"
 
-  # PHP ini tuning
   local ini_dir="/etc/php/${ver}/fpm/conf.d"
   mkdir -p "$ini_dir"
   cat > "${ini_dir}/99-aidipanel.ini" <<PHPINI
@@ -641,16 +667,22 @@ max_input_time       = 300
 post_max_size        = 256M
 upload_max_filesize  = 256M
 date.timezone        = Asia/Jakarta
-opcache.enable       = 1
-opcache.memory_consumption = 128
+expose_php           = Off
+
+; OPcache (important for performance)
+opcache.enable                  = 1
+opcache.enable_cli              = 0
+opcache.memory_consumption      = 128
 opcache.interned_strings_buffer = 16
-opcache.max_accelerated_files = 10000
-opcache.revalidate_freq = 2
-opcache.fast_shutdown = 1
+opcache.max_accelerated_files   = 10000
+opcache.revalidate_freq         = 2
+opcache.fast_shutdown           = 1
+opcache.validate_timestamps     = 1
+opcache.save_comments           = 1
 PHPINI
 
-  run systemctl restart "php${ver}-fpm" || warn "Could not restart php${ver}-fpm (may not be started yet)"
-  ok "PHP-FPM ${ver} configured"
+  run systemctl restart "php${ver}-fpm" || warn "Could not restart php${ver}-fpm"
+  ok "PHP-FPM ${ver} configured (max_children=${max_ch})"
 }
 
 _install_all_php_versions() {
@@ -662,10 +694,8 @@ _install_all_php_versions() {
 }
 
 # ---------------------------------------------------------------------------
-# 10. DATABASE — MySQL 8.0 / 8.4  OR  MariaDB 10.11 / 11.4 / 11.8
+# 10. DATABASE
 # ---------------------------------------------------------------------------
-
-# Resolve which apt package name to use based on DB_ENGINE
 _db_package_name() {
   case "$DB_ENGINE" in
     mysql80|mysql84)   echo "mysql-server" ;;
@@ -681,9 +711,7 @@ _db_service_name() {
 }
 
 _add_mysql_repo() {
-  # Only needed for MySQL — MariaDB uses its own repo
   [[ "$DB_ENGINE" == mysql80 || "$DB_ENGINE" == mysql84 ]] || return 0
-
   if [[ -f /etc/apt/sources.list.d/mysql.list ]]; then
     log "MySQL apt repo already configured — skipping"
     return 0
@@ -691,17 +719,17 @@ _add_mysql_repo() {
 
   local mysql_version
   [[ "$DB_ENGINE" == "mysql80" ]] && mysql_version="8.0" || mysql_version="8.4"
-
   log "Adding MySQL ${mysql_version} apt repository..."
   [[ "$DRY_RUN" == "true" ]] && return 0
 
   local apt_arch; apt_arch=$(_apt_arch)
-  run curl -fsSL "https://repo.mysql.com/RPM-GPG-KEY-mysql-2023" \
-    | gpg --dearmor -o /etc/apt/trusted.gpg.d/mysql.gpg
+  curl -fsSL "https://repo.mysql.com/RPM-GPG-KEY-mysql-2023" \
+    | gpg --dearmor -o /etc/apt/trusted.gpg.d/mysql.gpg 2>>"$PANEL_LOG"
+  chmod 644 /etc/apt/trusted.gpg.d/mysql.gpg
 
-  echo "deb [arch=${apt_arch} signed-by=/etc/apt/trusted.gpg.d/mysql.gpg] \
-http://repo.mysql.com/apt/${OS_ID} ${OS_CODENAME} mysql-${mysql_version}" \
-    > /etc/apt/sources.list.d/mysql.list
+  cat > /etc/apt/sources.list.d/mysql.list <<MYSQL_REPO
+deb [arch=${apt_arch} signed-by=/etc/apt/trusted.gpg.d/mysql.gpg] http://repo.mysql.com/apt/${OS_ID} ${OS_CODENAME} mysql-${mysql_version}
+MYSQL_REPO
 
   _apt_update
   ok "MySQL ${mysql_version} repo added"
@@ -709,7 +737,6 @@ http://repo.mysql.com/apt/${OS_ID} ${OS_CODENAME} mysql-${mysql_version}" \
 
 _add_mariadb_repo() {
   [[ "$DB_ENGINE" == mariadb* ]] || return 0
-
   if [[ -f /etc/apt/sources.list.d/mariadb.list ]]; then
     log "MariaDB apt repo already configured — skipping"
     return 0
@@ -725,7 +752,7 @@ _add_mariadb_repo() {
   log "Adding MariaDB ${mariadb_version} apt repository..."
   [[ "$DRY_RUN" == "true" ]] && return 0
 
-  run curl -fsSL "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup" \
+  curl -fsSL "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup" \
     | bash -s -- --mariadb-server-version="mariadb-${mariadb_version}" >> "$PANEL_LOG" 2>&1
 
   _apt_update
@@ -742,8 +769,6 @@ _install_database() {
   fi
 
   log "Installing ${DB_ENGINE_LABELS[$DB_ENGINE]}..."
-
-  # Pre-seed root password for MySQL (MariaDB uses unix_socket by default)
   if [[ "$DB_ENGINE" == mysql* && -n "$DB_ROOT_PASS" ]]; then
     debconf-set-selections <<< "mysql-server mysql-server/root_password password ${DB_ROOT_PASS}"
     debconf-set-selections <<< "mysql-server mysql-server/root_password_again password ${DB_ROOT_PASS}"
@@ -758,25 +783,23 @@ _configure_database() {
   log "Securing database installation..."
   [[ "$DRY_RUN" == "true" ]] && return 0
 
-  local svc; svc=$(_db_service_name)
-
-  # Generate root password if not provided
   if [[ -z "$DB_ROOT_PASS" ]]; then
     DB_ROOT_PASS=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24)
-    log "Generated DB root password (saved to ${PANEL_DIR}/credentials.conf)"
+    log "Generated DB root password"
   fi
 
-  # MariaDB: use unix_socket auth (no password needed for root initially)
-  # MySQL 8.x: needs explicit password set
-  local mysql_cmd
+  # Use arrays so bash splits args correctly (string variable = "command not found" bug)
+  local -a db_cmd_root db_cmd_auth
   if [[ "$DB_ENGINE" == mariadb* ]]; then
-    mysql_cmd="mariadb -u root"
+    db_cmd_root=(mariadb -u root)
+    db_cmd_auth=(mariadb -u root "-p${DB_ROOT_PASS}")
   else
-    mysql_cmd="mysql -u root"
+    db_cmd_root=(mysql -u root)
+    db_cmd_auth=(mysql -u root "-p${DB_ROOT_PASS}")
   fi
 
-  # Secure installation queries
-  $mysql_cmd <<MYSQL_SECURE 2>>"$PANEL_LOG"
+  # Secure the installation
+  "${db_cmd_root[@]}" 2>>"$PANEL_LOG" <<MYSQL_SECURE
 ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASS}';
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
@@ -785,26 +808,16 @@ DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
 FLUSH PRIVILEGES;
 MYSQL_SECURE
 
-  # From here on, use password auth
-  local db_cli_auth
-  if [[ "$DB_ENGINE" == mariadb* ]]; then
-    db_cli_auth="mariadb -u root -p${DB_ROOT_PASS}"
-  else
-    db_cli_auth="mysql -u root -p${DB_ROOT_PASS}"
-  fi
-
-  # Create AidiPanel database and user
   local PANEL_DB_PASS
   PANEL_DB_PASS=$(openssl rand -base64 20 | tr -dc 'A-Za-z0-9' | head -c 20)
 
-  $db_cli_auth <<PANEL_DB 2>>"$PANEL_LOG"
+  "${db_cmd_auth[@]}" 2>>"$PANEL_LOG" <<PANEL_DB
 CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS '${PANEL_USER}'@'localhost' IDENTIFIED BY '${PANEL_DB_PASS}';
 GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${PANEL_USER}'@'localhost';
 FLUSH PRIVILEGES;
 PANEL_DB
 
-  # Save credentials
   mkdir -p "$PANEL_DIR"
   chmod 700 "$PANEL_DIR"
   cat > "${PANEL_DIR}/credentials.conf" <<CREDS
@@ -820,7 +833,6 @@ MYSQL_ROOT_PASSWORD=${DB_ROOT_PASS}
 CREDS
   chmod 600 "${PANEL_DIR}/credentials.conf"
 
-  # Write a DB client config for panel user
   cat > "${PANEL_DIR}/.my.cnf" <<MYCNF
 [client]
 user=${PANEL_USER}
@@ -833,11 +845,11 @@ MYCNF
 }
 
 # ---------------------------------------------------------------------------
-# 11. REDIS
+# 11. REDIS — lightweight config
 # ---------------------------------------------------------------------------
 _install_redis() {
   if [[ "$INSTALL_REDIS" == "false" ]]; then
-    log "Skipping Redis installation (--no-redis)"
+    log "Skipping Redis (--no-redis)"
     return 0
   fi
   if _pkg_installed redis-server; then
@@ -853,23 +865,30 @@ _install_redis() {
 _configure_redis() {
   [[ "$INSTALL_REDIS" == "false" ]] && return 0
   [[ "$DRY_RUN" == "true" ]] && return 0
-  log "Configuring Redis for AidiPanel..."
+  log "Configuring Redis (lightweight)..."
 
   local redis_conf="/etc/redis/redis.conf"
   [[ -f "$redis_conf" ]] || { warn "Redis config not found; skipping"; return 0; }
-
   cp "$redis_conf" "${redis_conf}.bak.$(date +%s)"
 
-  # Bind to localhost only, enable maxmemory policy suitable for caching
+  # Adaptive maxmemory based on RAM
+  local mem_mb; mem_mb=$(awk '/MemTotal/{printf "%d", $2/1024}' /proc/meminfo)
+  local redis_maxmem="128mb"
+  (( mem_mb >= 2048 )) && redis_maxmem="256mb"
+  (( mem_mb >= 4096 )) && redis_maxmem="512mb"
+
   sed -i \
     -e 's/^bind .*/bind 127.0.0.1 ::1/' \
-    -e 's/^# maxmemory .*/maxmemory 256mb/' \
+    -e "s/^# maxmemory .*/maxmemory ${redis_maxmem}/" \
     -e 's/^# maxmemory-policy .*/maxmemory-policy allkeys-lru/' \
     -e 's/^supervised no/supervised systemd/' \
+    -e 's/^save 900 1/#save 900 1/' \
+    -e 's/^save 300 10/#save 300 10/' \
+    -e 's/^save 60 10000/#save 60 10000/' \
     "$redis_conf"
 
   run systemctl restart redis-server
-  ok "Redis configured (maxmemory: 256mb, policy: allkeys-lru, bind: 127.0.0.1)"
+  ok "Redis configured (maxmemory: ${redis_maxmem}, policy: allkeys-lru, persistence: off)"
 }
 
 # ---------------------------------------------------------------------------
@@ -879,16 +898,13 @@ _configure_firewall() {
   log "Configuring UFW firewall..."
   [[ "$DRY_RUN" == "true" ]] && return 0
 
-  # Reset to defaults but don't disable
   ufw --force reset > /dev/null 2>&1 || true
-
   ufw default deny incoming
   ufw default allow outgoing
   ufw allow ssh          comment 'SSH'
   ufw allow 80/tcp       comment 'HTTP'
   ufw allow 443/tcp      comment 'HTTPS'
   ufw allow "${PANEL_PORT}/tcp" comment 'AidiPanel'
-
   ufw --force enable
   ok "UFW enabled — allowed ports: 22, 80, 443, ${PANEL_PORT}"
 }
@@ -907,7 +923,7 @@ _install_certbot() {
 }
 
 # ---------------------------------------------------------------------------
-# 14. PROFTPD (SFTP/FTP)
+# 14. PROFTPD
 # ---------------------------------------------------------------------------
 _install_proftpd() {
   log "Installing ProFTPD..."
@@ -918,7 +934,6 @@ _install_proftpd() {
   _apt_install proftpd-basic
   [[ "$DRY_RUN" == "true" ]] && return 0
 
-  # Minimal secure config — only SFTP (no plain FTP)
   cat > /etc/proftpd/conf.d/aidipanel.conf <<'PROFTPD_CONF'
 # AidiPanel ProFTPD — SFTP only
 LoadModule mod_sftp.c
@@ -934,13 +949,11 @@ LoadModule mod_sftp.c
 </VirtualHost>
 PROFTPD_CONF
 
-  # Generate SFTP host key if it doesn't exist
   if [[ ! -f /etc/proftpd/ssh_host_rsa_key ]]; then
     ssh-keygen -q -t rsa -b 4096 -N '' -f /etc/proftpd/ssh_host_rsa_key
   fi
 
   run systemctl enable --now proftpd
-  # Allow SFTP port in firewall
   ufw allow 2022/tcp comment 'ProFTPD SFTP' > /dev/null 2>&1 || true
   ok "ProFTPD installed (SFTP on port 2022)"
 }
@@ -969,13 +982,13 @@ _create_panel_scaffold() {
     "${PANEL_DIR}/storage" \
     "${PANEL_DIR}/storage/logs" \
     "${PANEL_DIR}/storage/cache" \
+    "${PANEL_DIR}/storage/db" \
     "${PANEL_DIR}/config" \
     "${SITES_DIR}"
 
-  # Main panel config file
   cat > "${PANEL_DIR}/config/panel.conf" <<PANELCONF
-# AidiPanel Configuration
-# Generated by installer on $(date)
+# AidiPanel Configuration — Generated by installer v${PANEL_VERSION}
+# $(date)
 
 PANEL_VERSION=${PANEL_VERSION}
 PANEL_PORT=${PANEL_PORT}
@@ -987,10 +1000,11 @@ PHP_DEFAULT_VERSION=${PHP_DEFAULT_VERSION}
 INSTALL_REDIS=${INSTALL_REDIS}
 OS_ID=${OS_ID}
 OS_VERSION_ID=${OS_VERSION_ID}
+OS_CODENAME=${OS_CODENAME}
 INSTALLED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 PANELCONF
 
-  # Panel vhost template (used when adding new sites)
+  # WordPress vhost template
   cat > "${PANEL_DIR}/config/vhost-template-wordpress.conf" <<'VHOST_WP'
 # AidiPanel Vhost Template — WordPress with FastCGI Cache
 # Variables replaced at site creation: %%DOMAIN%%, %%PHP_VERSION%%, %%WEBROOT%%
@@ -999,20 +1013,18 @@ server {
     listen 80;
     listen [::]:80;
     server_name %%DOMAIN%% www.%%DOMAIN%%;
-
-    # Redirect HTTP → HTTPS
     return 301 https://$host$request_uri;
 }
 
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
     server_name %%DOMAIN%% www.%%DOMAIN%%;
 
     root %%WEBROOT%%;
     index index.php index.html;
 
-    # SSL — managed by Certbot / AidiPanel
     ssl_certificate     /etc/ssl/%%DOMAIN%%/fullchain.pem;
     ssl_certificate_key /etc/ssl/%%DOMAIN%%/privkey.pem;
     ssl_protocols       TLSv1.2 TLSv1.3;
@@ -1020,18 +1032,17 @@ server {
     ssl_prefer_server_ciphers off;
     ssl_session_cache   shared:SSL:10m;
     ssl_session_timeout 1d;
+    ssl_stapling        on;
+    ssl_stapling_verify on;
 
-    # Security headers
     add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header X-FastCGI-Cache $upstream_cache_status always;
 
-    # FastCGI cache exclusion rules
     include /etc/nginx/snippets/fastcgi-cache.conf;
 
-    # Static files — served directly, no PHP
     location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot|webp|avif|mp4|webm)$ {
         expires 30d;
         add_header Cache-Control "public, immutable";
@@ -1039,17 +1050,14 @@ server {
         log_not_found off;
     }
 
-    # WordPress permalinks
     location / {
         try_files $uri $uri/ /index.php?$args;
     }
 
-    # Deny access to hidden files and sensitive WordPress files
     location ~ /\. { deny all; }
     location ~ ^/(wp-config\.php|xmlrpc\.php|wp-cron\.php)$ { deny all; }
     location ~* /(?:uploads|files)/.*\.php$ { deny all; }
 
-    # PHP handler with FastCGI cache
     location ~ \.php$ {
         try_files $uri =404;
         fastcgi_split_path_info ^(.+\.php)(/.+)$;
@@ -1058,14 +1066,12 @@ server {
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         include fastcgi_params;
 
-        # FastCGI Cache directives
         fastcgi_cache        aidipanel_fcgi;
         fastcgi_cache_valid  200 301 302 1h;
         fastcgi_cache_valid  404 1m;
         fastcgi_cache_bypass  $skip_cache;
         fastcgi_no_cache      $skip_cache;
 
-        # Timeouts
         fastcgi_connect_timeout 60s;
         fastcgi_send_timeout    180s;
         fastcgi_read_timeout    180s;
@@ -1073,26 +1079,23 @@ server {
         fastcgi_buffers         8 128k;
     }
 
-    # Logging
-    access_log /var/log/nginx/%%DOMAIN%%-access.log main;
+    access_log /var/log/nginx/%%DOMAIN%%-access.log main buffer=8k;
     error_log  /var/log/nginx/%%DOMAIN%%-error.log warn;
 }
 VHOST_WP
 
   chown -R "$PANEL_USER":www-data "$PANEL_DIR"
   chmod 750 "$PANEL_DIR"
-
   ok "Panel directory structure created: ${PANEL_DIR}"
 }
 
 # ---------------------------------------------------------------------------
-# 16. PANEL NGINX VHOST (the web UI itself)
+# 16. PANEL NGINX VHOST
 # ---------------------------------------------------------------------------
 _configure_panel_vhost() {
   log "Creating AidiPanel web UI Nginx vhost (port ${PANEL_PORT})..."
   [[ "$DRY_RUN" == "true" ]] && return 0
 
-  # Self-signed SSL cert for initial setup
   local ssl_dir="/etc/ssl/aidipanel"
   mkdir -p "$ssl_dir"
   if [[ ! -f "${ssl_dir}/aidipanel.crt" ]]; then
@@ -1101,14 +1104,15 @@ _configure_panel_vhost() {
       -out "${ssl_dir}/aidipanel.crt" \
       -subj "/C=ID/ST=Jakarta/L=Jakarta/O=AidiPanel/OU=Panel/CN=localhost" \
       >> "$PANEL_LOG" 2>&1
-    ok "Self-signed SSL certificate generated for panel UI"
+    ok "Self-signed SSL certificate generated"
   fi
 
   cat > /etc/nginx/sites-available/aidipanel-ui.conf <<PANEL_VHOST
 # AidiPanel Web UI — port ${PANEL_PORT}
 server {
-    listen ${PANEL_PORT} ssl http2;
-    listen [::]:${PANEL_PORT} ssl http2;
+    listen ${PANEL_PORT} ssl;
+    listen [::]:${PANEL_PORT} ssl;
+    http2 on;
     server_name _;
 
     root ${PANEL_DIR}/public;
@@ -1137,9 +1141,10 @@ server {
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
         include fastcgi_params;
         fastcgi_read_timeout 300;
+        fastcgi_buffer_size 32k;
+        fastcgi_buffers 8 32k;
     }
 
-    # Deny access to config and credential files
     location ~* \.(conf|sh|env|bak|sql)$ { deny all; }
     location ~ /\. { deny all; }
 
@@ -1155,68 +1160,149 @@ PANEL_VHOST
 }
 
 # ---------------------------------------------------------------------------
-# 17. PLACEHOLDER INDEX PAGE
+# 17. INSTALL CLI TOOL
 # ---------------------------------------------------------------------------
-_create_placeholder_index() {
-  [[ "$DRY_RUN" == "true" ]] && return 0
-  mkdir -p "${PANEL_DIR}/public"
-  cat > "${PANEL_DIR}/public/index.php" <<'INDEX'
-<?php
-// AidiPanel — placeholder until the full panel app is deployed
-header('Content-Type: text/html; charset=utf-8');
-?>
-<!DOCTYPE html>
-<html lang="id">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AidiPanel — Installation Successful</title>
-<style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-       background:#0f0f11;color:#e8e8e8;display:flex;align-items:center;
-       justify-content:center;min-height:100vh}
-  .card{background:#1a1a1f;border:1px solid #2a2a35;border-radius:16px;
-        padding:48px 40px;max-width:480px;width:100%;text-align:center}
-  .logo{display:inline-flex;align-items:center;gap:10px;margin-bottom:24px}
-  .logo-icon{width:44px;height:44px;background:#534AB7;border-radius:10px;
-             display:flex;align-items:center;justify-content:center;font-size:22px}
-  h1{font-size:22px;font-weight:600;margin-bottom:8px;color:#fff}
-  p{font-size:14px;color:#9ca3af;line-height:1.6;margin-bottom:20px}
-  .badge{display:inline-block;background:#1e3a2f;color:#4ade80;
-         border:1px solid #166534;border-radius:20px;
-         padding:4px 14px;font-size:13px;font-weight:500;margin-bottom:24px}
-  .info{background:#0f0f13;border:1px solid #2a2a35;border-radius:10px;
-        padding:16px;text-align:left;font-size:13px;color:#9ca3af}
-  .info span{color:#fff;font-weight:500}
-</style>
-</head>
-<body>
-<div class="card">
-  <div class="logo">
-    <div class="logo-icon">⚡</div>
-    <span style="font-size:20px;font-weight:700;color:#fff">AidiPanel</span>
-  </div>
-  <div class="badge">✓ Installation Successful</div>
-  <h1>Server siap digunakan</h1>
-  <p>AidiPanel berhasil diinstall. Deploy panel application untuk mulai mengelola server Anda.</p>
-  <div class="info">
-    <div style="margin-bottom:8px">PHP: <span><?php echo PHP_VERSION; ?></span></div>
-    <div style="margin-bottom:8px">Nginx: <span><?php echo shell_exec('nginx -v 2>&1') ?: 'OK'; ?></span></div>
-    <div>Waktu server: <span><?php echo date('Y-m-d H:i:s T'); ?></span></div>
-  </div>
-</div>
-</body>
-</html>
-INDEX
-  ok "Placeholder index page created"
+_install_cli() {
+  log "Installing AidiPanel CLI tool..."
+  [[ "$DRY_RUN" == "true" ]] && { warn "[dry-run] skipping CLI install"; return 0; }
+
+  # The CLI is bundled inside this installer's directory or fetched from GitHub
+  local cli_src
+  # Check if aidipanel CLI exists beside this script
+  local script_dir; script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [[ -f "${script_dir}/aidipanel" ]]; then
+    cli_src="${script_dir}/aidipanel"
+  else
+    # Download from GitHub
+    log "Downloading AidiPanel CLI from GitHub..."
+    cli_src="/tmp/aidipanel-cli-$$"
+    curl -fsSL "https://raw.githubusercontent.com/rezzaid/aidipanel/main/aidipanel" \
+      -o "$cli_src" 2>>"$PANEL_LOG" || { warn "Could not download CLI — install manually"; return 0; }
+  fi
+
+  cp "$cli_src" /usr/local/bin/aidipanel
+  chmod +x /usr/local/bin/aidipanel
+  ok "AidiPanel CLI installed: /usr/local/bin/aidipanel"
 }
 
 # ---------------------------------------------------------------------------
-# 18. FAIL2BAN (basic protection)
+# FIX #5: DEPLOY PANEL APP AUTOMATICALLY (one-command install)
 # ---------------------------------------------------------------------------
+_deploy_panel_app() {
+  log "Deploying AidiPanel web application..."
+  [[ "$DRY_RUN" == "true" ]] && { warn "[dry-run] skipping panel app deploy"; return 0; }
+
+  local script_dir; script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+  # Try local panel-app directory first (when running from extracted ZIP)
+  if [[ -d "${script_dir}/panel-app/public" ]]; then
+    log "Deploying panel app from local directory..."
+    _do_deploy_app "${script_dir}/panel-app"
+    return 0
+  fi
+
+  # Try aidipanel-app directory (legacy name)
+  if [[ -d "${script_dir}/aidipanel-app/public" ]]; then
+    log "Deploying panel app from aidipanel-app directory..."
+    _do_deploy_app "${script_dir}/aidipanel-app"
+    return 0
+  fi
+
+  warn "Panel app directory not found alongside installer."
+  warn "Stack installed successfully. To deploy the panel app later:"
+  warn "  1. Upload the panel-app/ directory to your server"
+  warn "  2. Run: bash panel-app/deploy-panel.sh"
+  return 0
+}
+
+_do_deploy_app() {
+  local app_src="$1"
+
+  # FIX #4: Generate random admin password before seeding DB
+  PANEL_ADMIN_PASS=$(openssl rand -base64 16 | tr -dc 'A-Za-z0-9!@#$%' | head -c 16)
+
+  # Copy app files
+  cp -r "${app_src}/public/"* "${PANEL_DIR}/public/"
+  cp -r "${app_src}/app"       "${PANEL_DIR}/"
+
+  # Storage dirs with correct permissions for www-data write access
+  mkdir -p "${PANEL_DIR}/storage/db" \
+           "${PANEL_DIR}/storage/logs" \
+           "${PANEL_DIR}/storage/cache" \
+           "${PANEL_DIR}/storage/tmp/vhost" \
+           "${PANEL_DIR}/storage/backups"
+
+  # Permissions
+  chown -R "${PANEL_USER}":www-data "${PANEL_DIR}/app"
+  chown -R "${PANEL_USER}":www-data "${PANEL_DIR}/public"
+  chown -R www-data:www-data "${PANEL_DIR}/storage"
+  find "${PANEL_DIR}/app"    -type f -exec chmod 640 {} \;
+  find "${PANEL_DIR}/app"    -type d -exec chmod 750 {} \;
+  find "${PANEL_DIR}/public" -type f -exec chmod 644 {} \;
+  find "${PANEL_DIR}/public" -type d -exec chmod 755 {} \;
+  chmod 750 "${PANEL_DIR}/storage"
+  chmod 770 "${PANEL_DIR}/storage/db"
+  chmod 770 "${PANEL_DIR}/storage/logs"
+  chmod 770 "${PANEL_DIR}/storage/cache"
+  chmod 770 "${PANEL_DIR}/storage/tmp"
+  chmod 770 "${PANEL_DIR}/storage/tmp/vhost"
+  chmod 770 "${PANEL_DIR}/storage/backups"
+
+  ok "Panel app deployed to ${PANEL_DIR}"
+
+  # Initialize SQLite and write the admin hash directly into the database.
+  local php_bin="php${PHP_DEFAULT_VERSION}"
+  command -v "$php_bin" >/dev/null 2>&1 || php_bin="php"
+  command -v "$php_bin" >/dev/null 2>&1 || die "PHP CLI not found; cannot seed panel admin password."
+  command -v sqlite3 >/dev/null 2>&1 || die "sqlite3 not found; cannot seed panel admin password."
+
+  "$php_bin" -r "
+define('PANEL_DIR', '${PANEL_DIR}');
+define('APP_ROOT', '${PANEL_DIR}/app');
+define('PANEL_VERSION', '${PANEL_VERSION}');
+require '${PANEL_DIR}/app/Core/DB.php';
+\Core\DB::instance();
+" >> "$PANEL_LOG" 2>&1 || die "Failed to initialize panel SQLite database."
+
+  local sqlite_db="${PANEL_DIR}/storage/db/aidipanel.sqlite"
+  [[ -f "$sqlite_db" ]] || die "Panel SQLite DB was not created: ${sqlite_db}"
+
+  local hashed_pass
+  hashed_pass=$(AIDIPANEL_PASS="$PANEL_ADMIN_PASS" "$php_bin" -r 'echo password_hash(getenv("AIDIPANEL_PASS"), PASSWORD_BCRYPT, ["cost" => 12]);')
+  sqlite3 "$sqlite_db" <<SQLITE
+INSERT OR IGNORE INTO users (username, password_hash, role, active)
+VALUES ('admin', '${hashed_pass}', 'admin', 1);
+UPDATE users SET password_hash='${hashed_pass}', role='admin', active=1 WHERE username='admin';
+SQLITE
+  chown www-data:www-data "$sqlite_db" "$sqlite_db-shm" "$sqlite_db-wal" 2>/dev/null || true
+  chmod 660 "$sqlite_db" 2>/dev/null || true
+  ok "Admin password hash written to panel SQLite database"
+}
+
+# ---------------------------------------------------------------------------
+# 18. FAIL2BAN
+# ---------------------------------------------------------------------------
+_configure_sudoers() {
+  log "Configuring sudoers for AidiPanel web panel..."
+  [[ "$DRY_RUN" == "true" ]] && return 0
+
+  local sudoers_file="/etc/sudoers.d/aidipanel"
+  cat > "$sudoers_file" << 'SUDOERS'
+# AidiPanel — allow www-data to run aidipanel CLI as root (no password)
+Defaults!/usr/local/bin/aidipanel env_keep += "NO_COLOR"
+www-data ALL=(root) NOPASSWD: /usr/local/bin/aidipanel
+SUDOERS
+  chmod 440 "$sudoers_file"
+
+  # Validate sudoers file
+  visudo -c -f "$sudoers_file" >> "$PANEL_LOG" 2>&1 \
+    || { warn "sudoers validation failed — removing"; rm -f "$sudoers_file"; return 1; }
+
+  ok "Sudoers configured: www-data can run aidipanel CLI as root"
+}
+
 _configure_fail2ban() {
-  log "Configuring Fail2ban for SSH and Nginx..."
+  log "Configuring Fail2ban..."
   [[ "$DRY_RUN" == "true" ]] && return 0
   _pkg_installed fail2ban || { warn "fail2ban not installed; skipping"; return 0; }
 
@@ -1248,14 +1334,13 @@ F2B
 }
 
 # ---------------------------------------------------------------------------
-# 19. SYSTEMD CRON / SERVICES
+# 19. CRON JOBS
 # ---------------------------------------------------------------------------
 _setup_cron() {
   log "Setting up AidiPanel maintenance cron jobs..."
   [[ "$DRY_RUN" == "true" ]] && return 0
 
-  local cron_file="/etc/cron.d/aidipanel"
-  cat > "$cron_file" <<'CRONFILE'
+  cat > /etc/cron.d/aidipanel <<'CRONFILE'
 # AidiPanel maintenance jobs
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
@@ -1263,19 +1348,19 @@ PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 # Renew Let's Encrypt certificates daily at 2:30 AM
 30 2 * * * root certbot renew --quiet --nginx >> /var/log/aidipanel-certbot.log 2>&1
 
-# Purge FastCGI cache older than 1 day (keeps cache fresh)
+# Purge FastCGI cache older than 1 day
 0 4 * * * root find /var/cache/nginx/fastcgi -type f -atime +1 -delete >> /var/log/aidipanel-install.log 2>&1
 
 # Rotate AidiPanel logs weekly
 0 0 * * 0 root find /var/log/nginx -name "*.log" -size +100M -exec gzip {} \; 2>/dev/null
 CRONFILE
 
-  chmod 644 "$cron_file"
-  ok "Cron jobs configured: /etc/cron.d/aidipanel"
+  chmod 644 /etc/cron.d/aidipanel
+  ok "Cron jobs configured"
 }
 
 # ---------------------------------------------------------------------------
-# 20. NGINX CONFIG TEST & RESTART ALL SERVICES
+# 20. TEST & START SERVICES
 # ---------------------------------------------------------------------------
 _test_and_start_services() {
   log "Testing Nginx configuration..."
@@ -1295,14 +1380,14 @@ _test_and_start_services() {
   for svc in "${services[@]}"; do
     log "Enabling and starting: ${svc}..."
     systemctl enable --now "$svc" >> "$PANEL_LOG" 2>&1 \
-      || warn "Could not start ${svc} — it may need manual start"
+      || warn "Could not start ${svc} — check manually"
   done
 
   ok "All services started"
 }
 
 # ---------------------------------------------------------------------------
-# 21. FINAL HEALTH CHECK
+# 21. HEALTH CHECK
 # ---------------------------------------------------------------------------
 _health_check() {
   log "Running post-install health check..."
@@ -1326,15 +1411,13 @@ _health_check() {
   _svc_check "$(_db_service_name)"
   [[ "$INSTALL_REDIS" == "true" ]] && _svc_check redis-server
 
-  # Check cache directory writable by nginx
   if [[ -d "$NGINX_CACHE_DIR" ]] && [[ -w "$NGINX_CACHE_DIR" || "$(stat -c %U "$NGINX_CACHE_DIR")" == "www-data" ]]; then
-    ok "  ✓ FastCGI cache dir is OK: ${NGINX_CACHE_DIR}"
+    ok "  ✓ FastCGI cache dir OK: ${NGINX_CACHE_DIR}"
   else
-    warn "  ✗ FastCGI cache dir may have permission issues: ${NGINX_CACHE_DIR}"
+    warn "  ✗ FastCGI cache dir may have permission issues"
     (( failed++ )) || true
   fi
 
-  # Quick HTTP check on panel port
   if curl -ksfS --max-time 5 "https://127.0.0.1:${PANEL_PORT}/" -o /dev/null; then
     ok "  ✓ AidiPanel responding on port ${PANEL_PORT}"
   else
@@ -1342,35 +1425,26 @@ _health_check() {
   fi
 
   if (( failed > 0 )); then
-    warn "Health check: ${failed} issue(s) detected — review log: ${PANEL_LOG}"
+    warn "Health check: ${failed} issue(s) — review log: ${PANEL_LOG}"
   else
     ok "Health check: ALL PASSED"
   fi
 }
 
 # ---------------------------------------------------------------------------
-# 22. CLEANUP — remove install artifacts, clear history
+# 22. CLEANUP
 # ---------------------------------------------------------------------------
 _cleanup_system() {
-  log "Cleaning up installation artifacts..."
-  [[ "$DRY_RUN" == "true" ]] && { warn "[dry-run] skipping cleanup"; return 0; }
-
-  # Clean apt cache
+  log "Cleaning up..."
+  [[ "$DRY_RUN" == "true" ]] && return 0
   apt-get autoremove -y -qq >> "$PANEL_LOG" 2>&1 || true
   apt-get clean >> "$PANEL_LOG" 2>&1 || true
-
-  # Clear bash history (security — credentials may have been typed)
-  history -c 2>/dev/null || true
-  cat /dev/null > ~/.bash_history 2>/dev/null || true
-
-  # Remove any temp files left in /tmp by this installer
   rm -f /tmp/aidipanel-* 2>/dev/null || true
-
   ok "Cleanup done"
 }
 
 # ---------------------------------------------------------------------------
-# 23. SUMMARY
+# 23. SUMMARY — FIX #4: Show random panel password
 # ---------------------------------------------------------------------------
 _print_summary() {
   local server_ip
@@ -1380,35 +1454,69 @@ _print_summary() {
   [[ "$DRY_RUN" == "true" ]] && return 0
 
   echo -e "\n${BOLD}${GREEN}"
-  echo "  ╔══════════════════════════════════════════════════════╗"
-  echo "  ║       AidiPanel v${PANEL_VERSION} — Installation Complete!        ║"
-  echo "  ╚══════════════════════════════════════════════════════╝"
+  echo "  ╔════════════════════════════════════════════════════════╗"
+  echo "  ║     AidiPanel v${PANEL_VERSION} — Installation Complete!          ║"
+  echo "  ║                        by rezzaid                     ║"
+  echo "  ╚════════════════════════════════════════════════════════╝"
   echo -e "${RESET}"
   echo -e "  ${BOLD}Panel URL       :${RESET} https://${server_ip}:${PANEL_PORT}"
+  echo -e "  ${BOLD}Panel Login     :${RESET} admin"
+  if [[ -n "$PANEL_ADMIN_PASS" ]]; then
+    echo -e "  ${BOLD}${RED}Panel Password  :${RESET} ${BOLD}${PANEL_ADMIN_PASS}${RESET}  ← SAVE THIS NOW"
+  else
+    echo -e "  ${BOLD}Panel Password  :${RESET} (see credentials.conf — panel app not deployed)"
+  fi
   echo -e "  ${BOLD}Database        :${RESET} ${DB_ENGINE_LABELS[$DB_ENGINE]}"
   echo -e "  ${BOLD}Credentials     :${RESET} ${PANEL_DIR}/credentials.conf"
   echo -e "  ${BOLD}Config dir      :${RESET} ${PANEL_DIR}/config/"
   echo -e "  ${BOLD}Sites dir       :${RESET} ${SITES_DIR}/"
-  echo -e "  ${BOLD}Nginx cache dir :${RESET} ${NGINX_CACHE_DIR}"
+  echo -e "  ${BOLD}Cache dir       :${RESET} ${NGINX_CACHE_DIR}"
   echo -e "  ${BOLD}Log             :${RESET} ${PANEL_LOG}"
   echo -e "  ${BOLD}PHP versions    :${RESET} ${PHP_VERSIONS[*]}"
   echo -e "  ${BOLD}Redis           :${RESET} ${INSTALL_REDIS}"
   echo -e "  ${BOLD}Duration        :${RESET} ${SECONDS}s"
   echo ""
-  echo -e "  ${YELLOW}NOTE: The panel uses a self-signed SSL certificate for now.${RESET}"
-  echo -e "  ${YELLOW}      Point your domain to this server and run certbot to get${RESET}"
-  echo -e "  ${YELLOW}      a free Let's Encrypt certificate.${RESET}"
+  echo -e "  ${YELLOW}NOTE: Panel uses a self-signed SSL certificate.${RESET}"
+  echo -e "  ${YELLOW}      Run: aidipanel ssl:install --domain your-domain.com${RESET}"
   echo ""
-  echo -e "  ${CYAN}Next step: Deploy the AidiPanel web application to:${RESET}"
-  echo -e "  ${CYAN}  ${PANEL_DIR}/public/${RESET}"
+  echo -e "  ${CYAN}Quick commands:${RESET}"
+  echo -e "  ${CYAN}  aidipanel site:add --domain example.com --type wordpress --php 8.3${RESET}"
+  echo -e "  ${CYAN}  aidipanel system:info${RESET}"
   echo ""
+  echo -e "  ${BOLD}${RED}⚠ Save the panel password above — it will not be shown again!${RESET}"
+  echo ""
+
+  # Also save admin pass to credentials file
+  if [[ -n "$PANEL_ADMIN_PASS" ]]; then
+    echo "PANEL_ADMIN_USER=admin" >> "${PANEL_DIR}/credentials.conf"
+    echo "PANEL_ADMIN_PASSWORD=${PANEL_ADMIN_PASS}" >> "${PANEL_DIR}/credentials.conf"
+  fi
 }
 
 # ---------------------------------------------------------------------------
-# MAIN
+# 24. AUTO-CLEANUP — hapus direktori installer setelah selesai
 # ---------------------------------------------------------------------------
+_cleanup_installer() {
+  log "Cleaning up installer files..."
+  [[ "$DRY_RUN" == "true" ]] && return 0
+
+  local script_path; script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local script_name; script_name="$(basename "$script_path")"
+
+  # Hanya hapus jika folder bernama aidipanel-* di /root atau /home
+  if [[ "$script_path" =~ ^(/root|/home/[^/]+)/aidipanel-v[0-9] ]]; then
+    # Hapus ZIP juga jika ada di parent dir
+    local parent; parent="$(dirname "$script_path")"
+    rm -f "${parent}/aidipanel-v"*.zip 2>/dev/null || true
+    # Hapus folder installer
+    rm -rf "$script_path"
+    ok "Installer directory removed: ${script_path}"
+  else
+    warn "Installer not in standard location (${script_path}) — skipping auto-delete"
+    warn "To delete manually: rm -rf ${script_path}"
+  fi
+}
 main() {
-  # Init log file
   mkdir -p "$(dirname "$PANEL_LOG")"
   touch "$PANEL_LOG"
   chmod 640 "$PANEL_LOG"
@@ -1424,11 +1532,11 @@ main() {
   _check_port_free
   _check_hostname_resolves
 
-  log "=== Phase 1: Base system packages ==="
+  log "=== Phase 1: Base system ==="
   _apt_update
   _install_base_packages
 
-  log "=== Phase 1b: Swap file ==="
+  log "=== Phase 1b: Swap ==="
   _create_swap
 
   log "=== Phase 2: Nginx + FastCGI Cache ==="
@@ -1454,6 +1562,7 @@ main() {
 
   log "=== Phase 6: Security ==="
   _configure_firewall
+  _configure_sudoers
   _configure_fail2ban
   _install_certbot
 
@@ -1464,17 +1573,23 @@ main() {
   _create_panel_user
   _create_panel_scaffold
   _configure_panel_vhost
-  _create_placeholder_index
 
-  log "=== Phase 9: Cron & Services ==="
+  log "=== Phase 9: CLI Tool ==="
+  _install_cli
+
+  log "=== Phase 10: Deploy Panel App ==="
+  _deploy_panel_app
+
+  log "=== Phase 11: Cron & Services ==="
   _setup_cron
   _test_and_start_services
 
-  log "=== Phase 10: Health Check ==="
+  log "=== Phase 12: Health Check ==="
   _health_check
 
-  log "=== Phase 11: Cleanup ==="
+  log "=== Phase 13: Cleanup ==="
   _cleanup_system
+  _cleanup_installer
 
   _print_summary
 

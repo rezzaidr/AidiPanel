@@ -21,6 +21,7 @@ abstract class BaseController
     protected function view(string $template, array $data = []): void
     {
         $data['_user']       = Auth::user();
+        $data['_is_admin']   = Auth::isAdmin();
         $data['_csrf_token'] = Session::csrfToken();
         $data['_flash_error']   = flash('error');
         $data['_flash_success'] = flash('success');

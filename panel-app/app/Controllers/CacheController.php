@@ -25,7 +25,12 @@ class CacheController extends BaseController
         if ($url) {
             $args = ['--url', $url];
         } elseif ($domain) {
+            if (!is_valid_domain($domain)) {
+                $this->error('Invalid domain name.');
+            }
             $args = ['--domain', $domain];
+        } else {
+            $args = ['--force'];
         }
 
         $result = run_cli('cache:purge', $args);
@@ -50,6 +55,9 @@ class CacheController extends BaseController
 
         if (!in_array($action, ['enable', 'disable'], true)) {
             $this->error('Invalid action.');
+        }
+        if (!is_valid_domain($domain)) {
+            $this->error('Invalid domain name.');
         }
 
         $result = run_cli("cache:{$action}", ['--domain', $domain]);

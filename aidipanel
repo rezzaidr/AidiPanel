@@ -5,7 +5,8 @@
 #
 #  Install : cp aidipanel /usr/local/bin/aidipanel && chmod +x /usr/local/bin/aidipanel
 #  Usage   : aidipanel <command> [options]
-#  Version : 1.0.0
+#  Version : 1.2.8
+#  Author  : AidiPanel Team — by rezzaid
 # =============================================================================
 
 set -Eeuo pipefail
@@ -14,7 +15,7 @@ IFS=$'\n\t'
 # ---------------------------------------------------------------------------
 # CONSTANTS
 # ---------------------------------------------------------------------------
-readonly CLI_VERSION="1.0.0"
+readonly CLI_VERSION="1.2.8"
 readonly PANEL_DIR="/opt/aidipanel"
 readonly SITES_DIR="/var/www"
 readonly NGINX_CONF_DIR="/etc/nginx/sites-available"
@@ -23,13 +24,18 @@ readonly NGINX_SNIPPET_DIR="/etc/nginx/snippets"
 readonly NGINX_CACHE_DIR="/var/cache/nginx/fastcgi"
 readonly NGINX_CACHE_ZONE="aidipanel_fcgi"
 readonly CREDENTIALS_FILE="${PANEL_DIR}/credentials.conf"
-readonly CLI_LOG="/var/log/aidipanel-cli.log"
+readonly CLI_LOG="${PANEL_DIR}/storage/logs/aidipanel-cli.log"
 readonly PHP_VERSIONS_SUPPORTED=("8.1" "8.2" "8.3")
 
 # Colors
-RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
-CYAN='\033[0;36m'; BOLD='\033[1m'; DIM='\033[2m'; RESET='\033[0m'
-BLUE='\033[0;34m'
+# Colors — NO_COLOR support (https://no-color.org)
+RED=''; YELLOW=''; GREEN=''
+CYAN=''; BOLD=''; DIM=''; RESET=''
+BLUE=''
+if [[ -z "${NO_COLOR:-}" ]] && [[ -t 1 ]]; then
+  RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
+  CYAN='\033[0;36m'; BOLD='\033[1m'; DIM='\033[2m'; RESET='\033[0m'; BLUE='\033[0;34m'
+fi
 
 # ---------------------------------------------------------------------------
 # LOGGING
@@ -45,7 +51,13 @@ info()   { echo -e "${DIM}$*${RESET}"; }
 # HELPERS
 # ---------------------------------------------------------------------------
 _require_root() {
-  [[ "$(id -u)" -eq 0 ]] || die "This command must be run as root. Use: sudo aidipanel $*"
+  if [[ "$(id -u)" -ne 0 ]]; then
+    # Auto re-exec dengan sudo jika tersedia
+    if command -v sudo &>/dev/null && sudo -n true 2>/dev/null; then
+      exec sudo "$0" "$@"
+    fi
+    die "This command must be run as root. Use: sudo aidipanel $*"
+  fi
 }
 
 _require_arg() {
@@ -66,6 +78,31 @@ _domain_exists() {
   [[ -f "${NGINX_CONF_DIR}/${1}.conf" ]]
 }
 
+_domain_valid() {
+  [[ "$1" =~ ^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$ ]]
+}
+
+_proxy_url_valid() {
+  local url="$1"
+  [[ "$url" =~ ^https?://[a-zA-Z0-9._:-]+(/[^[:space:];]*)?$ ]] \
+    && [[ "$url" != *$'\n'* ]] \
+    && [[ "$url" != *$'\r'* ]] \
+    && [[ "$url" != *";"* ]]
+}
+
+_sql_escape_literal() {
+  printf "%s" "$1" | sed -e 's/\\/\\\\/g' -e "s/'/''/g"
+}
+
+_sed_inplace() {
+  local file="$1"; shift
+  local expr args=()
+  for expr in "$@"; do
+    args+=(-e "$expr")
+  done
+  sed -i "${args[@]}" "$file"
+}
+
 _php_version_valid() {
   local ver="$1"
   for v in "${PHP_VERSIONS_SUPPORTED[@]}"; do
@@ -80,23 +117,49 @@ _php_sock() {
 
 _load_credentials() {
   [[ -f "$CREDENTIALS_FILE" ]] || die "Credentials file not found: ${CREDENTIALS_FILE}\nIs AidiPanel installed?"
-  # shellcheck source=/dev/null
-  source "$CREDENTIALS_FILE"
+  # Parse safely line by line (tidak pakai source agar special chars di password tidak rusak bash)
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    # Skip comments dan blank lines
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    [[ -z "${line// }" ]] && continue
+    # Hanya export VAR=VALUE yang valid
+    if [[ "$line" =~ ^([A-Z_]+)=(.*)$ ]]; then
+      local var="${BASH_REMATCH[1]}"
+      local val="${BASH_REMATCH[2]}"
+      # Hapus quotes jika ada
+      val="${val%\"}"
+      val="${val#\"}"
+      val="${val%\'}"
+      val="${val#\'}"
+      export "$var"="$val"
+    fi
+  done < "$CREDENTIALS_FILE"
+}
+
+_db_binary() {
+  # Use mariadb binary if available (MariaDB 10.4+), fall back to mysql
+  if command -v mariadb &>/dev/null; then
+    echo "mariadb"
+  else
+    echo "mysql"
+  fi
 }
 
 _mysql_exec() {
-  # Run a MySQL query using panel credentials
+  # Run a MySQL/MariaDB query using root credentials
   _load_credentials
-  mysql --defaults-extra-file=<(printf '[client]\nuser=%s\npassword=%s\n' \
+  local bin; bin=$(_db_binary)
+  $bin --defaults-extra-file=<(printf '[client]\nuser=%s\npassword=%s\n' \
     root "${MYSQL_ROOT_PASSWORD}") \
     -e "$1" 2>/dev/null
 }
 
 _mysql_exec_db() {
-  # Run query against a specific db
+  # Run query against a specific database
   local db="$1"; shift
   _load_credentials
-  mysql --defaults-extra-file=<(printf '[client]\nuser=%s\npassword=%s\n' \
+  local bin; bin=$(_db_binary)
+  $bin --defaults-extra-file=<(printf '[client]\nuser=%s\npassword=%s\n' \
     root "${MYSQL_ROOT_PASSWORD}") \
     "$db" -e "$1" 2>/dev/null
 }
@@ -120,7 +183,7 @@ _table_row() {
 # ---------------------------------------------------------------------------
 _banner() {
   echo -e "${BOLD}${CYAN}"
-  echo "  AidiPanel CLI v${CLI_VERSION}"
+  echo "  AidiPanel CLI v${CLI_VERSION} — by rezzaid"
   echo -e "${RESET}"
 }
 
@@ -133,6 +196,7 @@ _usage() {
   echo "  site:delete     Delete a site and its files"
   echo "  site:list       List all sites"
   echo "  site:info       Show details of a site"
+  echo "  vhost:save      Save, test, and reload an Nginx vhost"
 
   echo -e "\n${BOLD}${BLUE}Cache Management${RESET}"
   echo "  cache:status    Show FastCGI cache status"
@@ -160,6 +224,7 @@ _usage() {
   echo -e "\n${BOLD}${BLUE}Service Management${RESET}"
   echo "  service:status  Show status of all AidiPanel services"
   echo "  service:restart Restart a service (nginx|mysql|redis|php)"
+  echo "  service:reload  Reload a service where supported"
   echo "  service:start   Start a service"
   echo "  service:stop    Stop a service"
 
@@ -235,6 +300,7 @@ _site_add() {
   _require_arg "domain" "$domain" "site:add --domain example.com --type wordpress --php 8.3"
 
   # Validate
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
   _domain_exists "$domain" && die "Site already exists: ${domain}"
   _php_version_valid "$php_ver" || die "Invalid PHP version: ${php_ver}. Supported: ${PHP_VERSIONS_SUPPORTED[*]}"
 
@@ -247,18 +313,11 @@ _site_add() {
   local webroot="${SITES_DIR}/${domain}/htdocs"
   mkdir -p "$webroot"
 
-  # Create site system user (isolated)
-  local site_user="${domain//./_}"
-  site_user="${site_user//-/_}"
-  if ! id "$site_user" &>/dev/null; then
-    useradd --system --no-create-home \
-      --home-dir "${SITES_DIR}/${domain}" \
-      --shell /bin/bash \
-      --groups www-data \
-      "$site_user"
-  fi
-  chown -R "${site_user}":www-data "${SITES_DIR}/${domain}"
-  chmod 750 "${SITES_DIR}/${domain}"
+  # Gunakan www-data langsung — tidak buat user per-site
+  # (useradd per-site menyebabkan /etc/group lock error)
+  chown -R www-data:www-data "${SITES_DIR}/${domain}"
+  chmod 755 "${SITES_DIR}/${domain}"
+  chmod 755 "$webroot"
 
   # Generate Nginx vhost
   _site_write_vhost "$domain" "$php_ver" "$webroot" "$site_type"
@@ -275,7 +334,6 @@ _site_add() {
   _table_row "Type:"     "$site_type"
   _table_row "PHP:"      "$php_ver"
   _table_row "Webroot:"  "$webroot"
-  _table_row "User:"     "$site_user"
   _table_row "Nginx:"    "${NGINX_CONF_DIR}/${domain}.conf"
   echo ""
   info "Next steps:"
@@ -335,6 +393,7 @@ PHPLOC
   local proxy_block=""
   if [[ "$site_type" == "proxy" ]]; then
     local proxy_pass; proxy_pass=$(_opt "proxy-pass" "http://127.0.0.1:3000")
+    _proxy_url_valid "$proxy_pass" || die "Invalid reverse proxy URL: ${proxy_pass}"
     proxy_block=$(cat <<PROXYBLK
 
     location / {
@@ -378,12 +437,15 @@ server {
     listen [::]:80;
     server_name ${domain} www.${domain};
 
-    return 301 https://\$host\$request_uri;
+    # ACME challenge for Let's Encrypt
+    location /.well-known/acme-challenge/ { root /var/www/letsencrypt; }
+    location / { return 301 https://\$host\$request_uri; }
 }
 
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
     server_name ${domain} www.${domain};
 
     root ${webroot};
@@ -449,14 +511,18 @@ _site_delete() {
   _parse_opts "$@"
   local domain; domain=$(_opt "domain")
   _require_arg "domain" "$domain" "site:delete --domain example.com"
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
   _domain_exists "$domain" || die "Site not found: ${domain}"
+  local force; force=$(_opt "force" "false")
 
-  echo -e "${RED}WARNING: This will permanently delete:${RESET}"
-  echo "  • Nginx config: ${NGINX_CONF_DIR}/${domain}.conf"
-  echo "  • Web files: ${SITES_DIR}/${domain}/"
-  echo "  • SSL cert:  /etc/ssl/aidipanel-self/${domain}.{crt,key}"
-  echo ""
-  _confirm "Delete site '${domain}'?" || { log "Cancelled."; return 0; }
+  if [[ "$force" != "true" ]]; then
+    echo -e "${RED}WARNING: This will permanently delete:${RESET}"
+    echo "  • Nginx config: ${NGINX_CONF_DIR}/${domain}.conf"
+    echo "  • Web files: ${SITES_DIR}/${domain}/"
+    echo "  • SSL cert:  /etc/ssl/aidipanel-self/${domain}.{crt,key}"
+    echo ""
+    _confirm "Delete site '${domain}'?" || { log "Cancelled."; return 0; }
+  fi
 
   # Remove nginx vhost
   rm -f "${NGINX_ENABLED_DIR}/${domain}.conf"
@@ -521,6 +587,7 @@ _site_info() {
   _parse_opts "$@"
   local domain; domain=$(_opt "domain")
   _require_arg "domain" "$domain" "site:info --domain example.com"
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
   _domain_exists "$domain" || die "Site not found: ${domain}"
 
   local conf="${NGINX_CONF_DIR}/${domain}.conf"
@@ -557,6 +624,38 @@ _site_info() {
   _table_row "SSL expiry:"      "$ssl_expiry"
   _hr
   echo ""
+}
+
+_vhost_save() {
+  _require_root "vhost:save"
+  _parse_opts "$@"
+  local domain; domain=$(_opt "domain")
+  local src_file; src_file=$(_opt "file")
+  _require_arg "domain" "$domain" "vhost:save --domain example.com --file /path/to/new.conf"
+  _require_arg "file" "$src_file" "vhost:save --domain example.com --file /path/to/new.conf"
+
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
+  _domain_exists "$domain" || die "Site not found: ${domain}"
+  [[ -f "$src_file" && -s "$src_file" && -r "$src_file" ]] || die "Config file is not readable: ${src_file}"
+
+  local conf="${NGINX_CONF_DIR}/${domain}.conf"
+  local backup="${conf}.bak.$(date +%Y%m%d%H%M%S)"
+  cp -p "$conf" "$backup"
+
+  cp "$src_file" "$conf"
+  chmod 644 "$conf"
+
+  if ! nginx -t >> "$CLI_LOG" 2>&1; then
+    cp "$backup" "$conf"
+    nginx -t >> "$CLI_LOG" 2>&1 || true
+    die "Nginx config test failed. Restored backup: ${backup}"
+  fi
+
+  systemctl reload nginx >> "$CLI_LOG" 2>&1 \
+    || { cp "$backup" "$conf"; die "Nginx reload failed. Restored backup: ${backup}"; }
+
+  ok "Vhost saved and Nginx reloaded: ${domain}"
+  _table_row "Backup:" "$backup"
 }
 
 # ===========================================================================
@@ -619,6 +718,7 @@ _cache_purge() {
   _parse_opts "$@"
   local domain; domain=$(_opt "domain" "")
   local url; url=$(_opt "url" "")
+  local force; force=$(_opt "force" "false")
 
   if [[ -n "$url" ]]; then
     # Purge by specific URL — compute cache key hash
@@ -634,10 +734,11 @@ _cache_purge() {
       warn "No cache file found for URL: ${url}"
     fi
   elif [[ -n "$domain" ]]; then
+    _domain_valid "$domain" || die "Invalid domain name: ${domain}"
     _cache_purge_domain "$domain"
   else
     # Purge ALL
-    _confirm "Purge ALL FastCGI cache?" || { log "Cancelled."; return 0; }
+    [[ "$force" == "true" ]] || _confirm "Purge ALL FastCGI cache?" || { log "Cancelled."; return 0; }
     find "$NGINX_CACHE_DIR" -type f -delete 2>/dev/null || true
     ok "All FastCGI cache purged (${NGINX_CACHE_DIR})"
   fi
@@ -650,6 +751,7 @@ _cache_toggle() {
   local action="$1"
   local domain; domain=$(_opt "domain")
   _require_arg "domain" "$domain" "cache:${action} --domain example.com"
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
   _domain_exists "$domain" || die "Site not found: ${domain}"
 
   local conf="${NGINX_CONF_DIR}/${domain}.conf"
@@ -660,12 +762,12 @@ _cache_toggle() {
       return 0
     fi
     # Uncomment cache directives (if they are commented) or add them
-    sed -i \
-      -e 's|#\s*fastcgi_cache\s\+|fastcgi_cache |g' \
-      -e 's|#\s*fastcgi_cache_valid|fastcgi_cache_valid|g' \
-      -e 's|#\s*fastcgi_cache_bypass|fastcgi_cache_bypass|g' \
-      -e 's|#\s*fastcgi_no_cache|fastcgi_no_cache|g' \
-      "$conf"
+    _sed_inplace "$conf" \
+      's|#\s*fastcgi_cache\s\+|fastcgi_cache |g' \
+      's|#\s*fastcgi_cache_valid|fastcgi_cache_valid|g' \
+      's|#\s*fastcgi_cache_bypass|fastcgi_cache_bypass|g' \
+      's|#\s*fastcgi_no_cache|fastcgi_no_cache|g'
+
     ok "FastCGI cache enabled for: ${domain}"
   else
     # Comment out cache directives
@@ -692,6 +794,7 @@ _db_add() {
   local db_name; db_name=$(_opt "name")
   local db_user; db_user=$(_opt "user" "$db_name")
   local db_pass; db_pass=$(_opt "pass" "$(openssl rand -base64 16 | tr -dc 'A-Za-z0-9' | head -c 16)")
+  local db_pass_sql; db_pass_sql=$(_sql_escape_literal "$db_pass")
 
   _require_arg "name" "$db_name" "db:add --name mydb --user myuser"
 
@@ -700,11 +803,13 @@ _db_add() {
     || die "Database name must contain only letters, numbers, underscores"
   [[ "$db_user" =~ ^[a-zA-Z0-9_]+$ ]] \
     || die "Database user must contain only letters, numbers, underscores"
+  [[ "$db_pass" =~ ^[A-Za-z0-9_!@#%+=.,:-]{8,128}$ ]] \
+    || die "Database password must be 8-128 characters and contain only safe symbols"
 
   log "Creating database: ${db_name} (user: ${db_user})..."
 
   _mysql_exec "CREATE DATABASE IF NOT EXISTS \`${db_name}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-  _mysql_exec "CREATE USER IF NOT EXISTS '${db_user}'@'localhost' IDENTIFIED BY '${db_pass}';"
+  _mysql_exec "CREATE USER IF NOT EXISTS '${db_user}'@'localhost' IDENTIFIED BY '${db_pass_sql}';"
   _mysql_exec "GRANT ALL PRIVILEGES ON \`${db_name}\`.* TO '${db_user}'@'localhost';"
   _mysql_exec "FLUSH PRIVILEGES;"
 
@@ -723,8 +828,11 @@ _db_delete() {
   _parse_opts "$@"
   local db_name; db_name=$(_opt "name")
   _require_arg "name" "$db_name" "db:delete --name mydb"
+  [[ "$db_name" =~ ^[a-zA-Z0-9_]+$ ]] \
+    || die "Database name must contain only letters, numbers, underscores"
+  local force; force=$(_opt "force" "false")
 
-  _confirm "Delete database '${db_name}' and its user '${db_name}'?" || { log "Cancelled."; return 0; }
+  [[ "$force" == "true" ]] || _confirm "Delete database '${db_name}' and its user '${db_name}'?" || { log "Cancelled."; return 0; }
 
   _mysql_exec "DROP DATABASE IF EXISTS \`${db_name}\`;"
   _mysql_exec "DROP USER IF EXISTS '${db_name}'@'localhost';"
@@ -753,6 +861,8 @@ _db_backup() {
   local db_name; db_name=$(_opt "name")
   local output_dir; output_dir=$(_opt "output" "/var/backups/aidipanel")
   _require_arg "name" "$db_name" "db:backup --name mydb"
+  [[ "$db_name" =~ ^[a-zA-Z0-9_]+$ ]] \
+    || die "Database name must contain only letters, numbers, underscores"
 
   _load_credentials
   mkdir -p "$output_dir"
@@ -803,6 +913,7 @@ _php_version() {
   local domain; domain=$(_opt "domain")
   local new_ver; new_ver=$(_opt "set" "")
   _require_arg "domain" "$domain" "php:version --domain example.com [--set 8.3]"
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
   _domain_exists "$domain" || die "Site not found: ${domain}"
 
   local conf="${NGINX_CONF_DIR}/${domain}.conf"
@@ -818,13 +929,14 @@ _php_version() {
 
   log "Changing PHP for ${domain}: ${current_ver} → ${new_ver}"
 
-  # Replace socket path in nginx config
+  # Replace socket path in nginx config (menggunakan tmp file agar aman)
   local old_sock; old_sock=$(_php_sock "$current_ver")
   local new_sock; new_sock=$(_php_sock "$new_ver")
+  local site_type; site_type=$(grep -oP '# Type: \K\w+' "$conf" 2>/dev/null | head -1 || echo "php")
 
-  sed -i "s|${old_sock}|${new_sock}|g" "$conf"
-  # Update comment header
-  sed -i "s|# Type: .* | PHP: .*|# Type: $(grep -oP '# Type: \K\w+' "$conf" | head -1) | PHP: ${new_ver}|" "$conf" 2>/dev/null || true
+  local tmp; tmp=$(mktemp)
+  sed "s|${old_sock}|${new_sock}|g" "$conf" > "$tmp" && cp "$tmp" "$conf"
+  rm -f "$tmp"
 
   _nginx_test_reload
   ok "PHP version changed for ${domain}: ${current_ver} → ${new_ver}"
@@ -872,6 +984,7 @@ _ssl_install() {
   local domain; domain=$(_opt "domain")
   local email; email=$(_opt "email" "")
   _require_arg "domain" "$domain" "ssl:install --domain example.com --email admin@example.com"
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
   _domain_exists "$domain" || die "Site not found: ${domain}"
 
   command -v certbot &>/dev/null || die "Certbot is not installed. Run: apt install certbot python3-certbot-nginx"
@@ -886,10 +999,12 @@ _ssl_install() {
 
   # Update nginx vhost to point to Let's Encrypt certs
   local conf="${NGINX_CONF_DIR}/${domain}.conf"
-  sed -i \
+  local tmp; tmp=$(mktemp)
+  sed \
     -e "s|ssl_certificate .*aidipanel-self.*|ssl_certificate /etc/letsencrypt/live/${domain}/fullchain.pem;|" \
     -e "s|ssl_certificate_key .*aidipanel-self.*|ssl_certificate_key /etc/letsencrypt/live/${domain}/privkey.pem;|" \
-    "$conf"
+    "$conf" > "$tmp" && cp "$tmp" "$conf"
+  rm -f "$tmp"
 
   _nginx_test_reload
   ok "SSL certificate installed for: ${domain}"
@@ -903,6 +1018,7 @@ _ssl_renew() {
 
   log "Renewing SSL certificates..."
   if [[ -n "$domain" ]]; then
+    _domain_valid "$domain" || die "Invalid domain name: ${domain}"
     certbot renew --cert-name "$domain" --nginx --non-interactive >> "$CLI_LOG" 2>&1
     ok "Renewed: ${domain}"
   else
@@ -986,11 +1102,17 @@ _service_action() {
   service_name="${service_name// /}"
 
   [[ -n "$service_name" ]] || die "Specify a service: nginx, mysql, redis, php (or php8.3, etc.)"
+  [[ "$action" =~ ^(start|stop|restart|reload)$ ]] || die "Invalid service action: ${action}"
 
   # Aliases
-  [[ "$service_name" == "redis" ]]  && service_name="redis-server"
-  [[ "$service_name" == "php" ]]    && service_name="php${PHP_DEFAULT_VERSION:-8.3}-fpm"
-  [[ "$service_name" =~ ^php[0-9] ]] && service_name="${service_name}-fpm"
+  [[ "$service_name" == "redis" ]] && service_name="redis-server"
+  [[ "$service_name" == "php" ]]   && service_name="php${PHP_DEFAULT_VERSION:-8.3}-fpm"
+  [[ "$service_name" =~ ^php[0-9]+\.[0-9]+$ ]] && service_name="${service_name}-fpm"
+
+  case "$service_name" in
+    nginx|mysql|mariadb|redis-server|php8.1-fpm|php8.2-fpm|php8.3-fpm) ;;
+    *) die "Invalid service: ${service_name}" ;;
+  esac
 
   log "${action^}: ${service_name}"
   systemctl "$action" "$service_name" >> "$CLI_LOG" 2>&1 \
@@ -1011,6 +1133,7 @@ _user_add() {
 
   [[ "$username" =~ ^[a-z_][a-z0-9_-]*$ ]] \
     || die "Username must be lowercase letters, numbers, underscores, hyphens"
+  [[ -z "$domain" ]] || _domain_valid "$domain" || die "Invalid domain name: ${domain}"
 
   id "$username" &>/dev/null && die "User already exists: ${username}"
 
@@ -1124,6 +1247,8 @@ _log_tail() {
   local log_type; log_type=$(_opt "type" "access")
   local lines; lines=$(_opt "lines" "50")
   _require_arg "domain" "$domain" "log:tail --domain example.com --type access"
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
+  [[ "$lines" =~ ^[0-9]+$ ]] || die "Lines must be a number"
 
   local log_file
   case "$log_type" in
@@ -1185,6 +1310,7 @@ main() {
     site:delete)    _site_delete "$@" ;;
     site:list)      _site_list "$@" ;;
     site:info)      _site_info "$@" ;;
+    vhost:save)     _vhost_save "$@" ;;
 
     # Cache
     cache:status)   _cache_status "$@" ;;
@@ -1212,6 +1338,7 @@ main() {
     # Service
     service:status)  _service_status "$@" ;;
     service:restart) _service_action restart "$@" ;;
+    service:reload)  _service_action reload "$@" ;;
     service:start)   _service_action start "$@" ;;
     service:stop)    _service_action stop "$@" ;;
 

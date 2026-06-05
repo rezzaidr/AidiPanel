@@ -1,18 +1,21 @@
 <?php
 /**
- * AidiPanel — Entry Point
+ * AidiPanel — Entry Point v1.2.8
  * All requests go through here (Nginx: try_files $uri $uri/ /index.php?$args)
  */
 
 declare(strict_types=1);
 
-define('PANEL_ROOT',   dirname(__DIR__));
-define('APP_ROOT',     PANEL_ROOT . '/app');
-define('STORAGE_ROOT', PANEL_ROOT . '/storage');
-define('PUBLIC_ROOT',  __DIR__);
-define('PANEL_VERSION', '1.0.0');
+define('PANEL_ROOT',    dirname(__DIR__));
+define('APP_ROOT',      PANEL_ROOT . '/app');
+define('STORAGE_ROOT',  PANEL_ROOT . '/storage');
+define('PUBLIC_ROOT',   __DIR__);
+define('PANEL_VERSION', '1.2.8');
 
-// ── Autoloader (simple PSR-4 style, no Composer needed) ──────────────────────
+// PANEL_DIR = /opt/aidipanel (used by DB.php to read credentials.conf)
+define('PANEL_DIR', '/opt/aidipanel');
+
+// ── Autoloader (simple PSR-4 style, no Composer needed) ─────────────────────
 spl_autoload_register(function (string $class): void {
     $file = APP_ROOT . '/' . str_replace('\\', '/', $class) . '.php';
     if (file_exists($file)) {
@@ -54,43 +57,43 @@ $router->get('/sites/{domain}/nginx','SiteController@nginxEditor');
 $router->post('/sites/{domain}/nginx','SiteController@saveNginx');
 
 // Cache
-$router->get('/cache',                    'CacheController@index');
-$router->post('/cache/purge',             'CacheController@purge');
-$router->post('/cache/toggle',            'CacheController@toggle');
+$router->get('/cache',         'CacheController@index');
+$router->post('/cache/purge',  'CacheController@purge');
+$router->post('/cache/toggle', 'CacheController@toggle');
 
 // Databases
-$router->get('/databases',        'DatabaseController@index');
-$router->post('/databases/add',   'DatabaseController@add');
-$router->post('/databases/delete','DatabaseController@delete');
-$router->post('/databases/backup','DatabaseController@backup');
+$router->get('/databases',         'DatabaseController@index');
+$router->post('/databases/add',    'DatabaseController@add');
+$router->post('/databases/delete', 'DatabaseController@delete');
+$router->post('/databases/backup', 'DatabaseController@backup');
 
 // PHP
-$router->get('/php',  'PhpController@index');
-$router->post('/php/restart', 'PhpController@restart');
+$router->get('/php',           'PhpController@index');
+$router->post('/php/restart',  'PhpController@restart');
 
 // SSL
-$router->get('/ssl',                'SslController@index');
-$router->post('/ssl/install',       'SslController@install');
-$router->post('/ssl/renew',         'SslController@renew');
+$router->get('/ssl',           'SslController@index');
+$router->post('/ssl/install',  'SslController@install');
+$router->post('/ssl/renew',    'SslController@renew');
 
 // Services
-$router->get('/services',           'ServiceController@index');
-$router->post('/services/action',   'ServiceController@action');
+$router->get('/services',          'ServiceController@index');
+$router->post('/services/action',  'ServiceController@action');
 
 // Users
-$router->get('/users',              'UserController@index');
-$router->post('/users/add',         'UserController@add');
-$router->post('/users/delete',      'UserController@delete');
-$router->post('/users/passwd',      'UserController@changePassword');
+$router->get('/users',             'UserController@index');
+$router->post('/users/add',        'UserController@add');
+$router->post('/users/delete',     'UserController@delete');
+$router->post('/users/passwd',     'UserController@changePassword');
 
 // Logs
 $router->get('/logs', 'SystemController@logs');
 
 // API (JSON responses for Alpine.js fetch calls)
-$router->get('/api/metrics',        'DashboardController@apiMetrics');
-$router->get('/api/services',       'ServiceController@apiStatus');
-$router->get('/api/cache/stats',    'CacheController@apiStats');
-$router->post('/api/cli',           'SystemController@apiCli');
+$router->get('/api/metrics',      'DashboardController@apiMetrics');
+$router->get('/api/services',     'ServiceController@apiStatus');
+$router->get('/api/cache/stats',  'CacheController@apiStats');
+$router->post('/api/cli',         'SystemController@apiCli');
 
 // ── Dispatch ─────────────────────────────────────────────────────────────────
 $router->dispatch();

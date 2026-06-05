@@ -50,6 +50,10 @@ class SslController extends BaseController
     public function renew(array $params = []): void
     {
         $domain = (string) $this->request->post('domain', '');
+        if ($domain !== '' && !is_valid_domain($domain)) {
+            $this->error('Invalid domain name.');
+        }
+
         $args   = $domain ? ['--domain', $domain] : [];
         $result = run_cli('ssl:renew', $args);
         if (!$result['success']) $this->error('SSL renewal failed: ' . $result['output']);

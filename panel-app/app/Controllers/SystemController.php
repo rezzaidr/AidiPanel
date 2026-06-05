@@ -41,7 +41,7 @@ class SystemController extends BaseController
     {
         // Restricted CLI API — only whitelisted safe commands
         $allowed = [
-            'cache:status', 'cache:purge', 'site:list',
+            'cache:status', 'site:list',
             'php:list', 'ssl:status', 'service:status',
             'system:info', 'db:list',
         ];
