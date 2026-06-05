@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  AidiPanel Installer v1.2.8
+#  AidiPanel Installer v1.2.0-rc1
 #  Stack: Nginx + FastCGI Cache + PHP-FPM (multi-version) + MySQL/MariaDB + Redis
 #  Supported OS: Debian 11/12, Ubuntu 22.04/24.04 (x86_64 & arm64)
 #
 #  One-command install (installs stack + deploys panel app automatically):
-#    bash <(curl -fsSL https://raw.githubusercontent.com/rezzaid/aidipanel/main/install.sh)
+#    bash <(curl -fsSL https://raw.githubusercontent.com/rezzaidr/aidipanel/master/install.sh)
 #
 #  Options:
 #    --port PORT           Panel HTTPS port (default: 8443)
@@ -26,7 +26,7 @@ IFS=$'\n\t'
 # 0. GLOBAL CONSTANTS & DEFAULTS
 # ---------------------------------------------------------------------------
 readonly PANEL_NAME="AidiPanel"
-readonly PANEL_VERSION="1.2.8"
+readonly PANEL_VERSION="1.2.0-rc1"
 readonly PANEL_USER="aidipanel"
 readonly PANEL_DIR="/opt/aidipanel"
 readonly PANEL_LOG="/var/log/aidipanel-install.log"
@@ -1176,7 +1176,7 @@ _install_cli() {
     # Download from GitHub
     log "Downloading AidiPanel CLI from GitHub..."
     cli_src="/tmp/aidipanel-cli-$$"
-    curl -fsSL "https://raw.githubusercontent.com/rezzaid/aidipanel/main/aidipanel" \
+    curl -fsSL "https://raw.githubusercontent.com/rezzaidr/aidipanel/master/aidipanel" \
       -o "$cli_src" 2>>"$PANEL_LOG" || { warn "Could not download CLI — install manually"; return 0; }
   fi
 

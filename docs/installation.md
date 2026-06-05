@@ -19,7 +19,7 @@
 ## One-Command Install
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/rezzaid/aidipanel/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/rezzaidr/aidipanel/master/install.sh)
 ```
 
 This installs **everything** and deploys the panel app automatically:

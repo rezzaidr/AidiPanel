@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  AidiPanel — Deploy Panel Web App v1.2.8
+#  AidiPanel — Deploy Panel Web App v1.2.0-rc1
 #  Usage: bash deploy-panel.sh [--dir /opt/aidipanel]
 #  Author: AidiPanel Team — by rezzaid
 # =============================================================================
@@ -28,7 +28,7 @@ done
 [[ -d "$SCRIPT_DIR/public" ]] || die "Run from panel-app directory."
 [[ -d "$PANEL_DIR" ]] || die "AidiPanel dir not found: ${PANEL_DIR}. Run install.sh first."
 
-log "Deploying AidiPanel v1.2.8 to ${PANEL_DIR}..."
+log "Deploying AidiPanel v1.2.0-rc1 to ${PANEL_DIR}..."
 
 # --------------------------------------------------------------------------
 # 1. Generate random admin password
@@ -80,7 +80,7 @@ SQLITE_DB="${PANEL_DIR}/storage/db/aidipanel.sqlite"
 sudo -u www-data php8.3 -r "
 define('PANEL_DIR', '${PANEL_DIR}');
 define('APP_ROOT', '${PANEL_DIR}/app');
-define('PANEL_VERSION', '1.2.8');
+define('PANEL_VERSION', '1.2.0-rc1');
 // Trigger DB init
 require '${PANEL_DIR}/app/Core/DB.php';
 \Core\DB::instance();
@@ -158,7 +158,7 @@ PANEL_PORT=$(grep '^PANEL_PORT=' "${PANEL_DIR}/config/panel.conf" 2>/dev/null \
     | cut -d= -f2 || echo "8443")
 
 echo ""
-echo -e "  ${BOLD}${GREEN}AidiPanel v1.2.8 deployed!${RESET}"
+echo -e "  ${BOLD}${GREEN}AidiPanel v1.2.0-rc1 deployed!${RESET}"
 echo ""
 echo -e "  Panel URL  : https://${SERVER_IP}:${PANEL_PORT}"
 echo -e "  Login      : admin"

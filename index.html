@@ -670,7 +670,7 @@
   <div class="container">
     <div class="hero-badge">
       <span class="hero-badge-dot"></span>
-      v1.2.8 — Free & Open Source
+      v1.2.0-rc1 — Free & Open Source
     </div>
 
     <h1>
@@ -695,7 +695,7 @@
 
     <div class="install-box">
       <span class="install-label">$ ssh root@server</span>
-      <span class="install-cmd">curl -fsSL https://raw.githubusercontent.com/rezzaid/aidipanel/main/install.sh | bash</span>
+      <span class="install-cmd">curl -fsSL https://raw.githubusercontent.com/rezzaidr/aidipanel/master/install.sh | bash</span>
       <button class="install-copy" onclick="copyInstall(this)">copy</button>
     </div>
   </div>
@@ -873,7 +873,7 @@
         <div class="step-title">One-command install</div>
         <pre class="step-code">bash &lt;(curl -fsSL \
   https://raw.githubusercontent.com/\
-  rezzaid/aidipanel/main/install.sh)</pre>
+  rezzaidr/aidipanel/master/install.sh)</pre>
         <div class="step-note">Installs full stack <strong>and</strong> deploys panel app automatically. Supports Debian 11/12 &amp; Ubuntu 22.04/24.04 on x86_64 &amp; ARM64.</div>
       </div>
       <div class="step-card">
@@ -983,7 +983,7 @@ https://&lt;your-server-ip&gt;:8443
 <script>
   // Copy install command
   function copyInstall(btn) {
-    const cmd = "curl -fsSL https://raw.githubusercontent.com/rezzaid/aidipanel/main/install.sh | bash";
+    const cmd = "curl -fsSL https://raw.githubusercontent.com/rezzaidr/aidipanel/master/install.sh | bash";
     navigator.clipboard.writeText(cmd).then(() => {
       btn.textContent = 'copied!';
       btn.style.color = 'var(--green)';

@@ -1,4 +1,4 @@
-# AidiPanel v1.2.8
+# AidiPanel v1.2.0-rc1
 
 > **by rezzaid** — Nginx Server Panel with FastCGI Cache
 
@@ -7,7 +7,7 @@ A free, lightweight VPS control panel built on Nginx + FastCGI Cache + PHP-FPM +
 ## Quick Install
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/rezzaidr/aidipanel/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/rezzaidr/aidipanel/master/install.sh)
 ```
 
 One command installs the full stack **and** deploys the panel app automatically. A random admin password is shown at the end.
@@ -34,7 +34,7 @@ Architecture: x86_64 and aarch64
 ## Files in This Release
 
 ```
-aidipanel-v1.2.8/
+aidipanel-v1.2.0-rc1/
 ├── install.sh          ← Main installer (run this)
 ├── aidipanel           ← CLI tool (auto-installed by install.sh)
 ├── panel-app/          ← Web panel application (auto-deployed)
@@ -73,7 +73,7 @@ aidipanel service:status
 
 See [docs/cli.md](docs/cli.md) for full CLI reference.
 
-## Changelog v1.2.8
+## Changelog v1.2.0-rc1
 
 - **Fix**: Auto-detect Ubuntu 24.04 noble + fix Nginx GPG/repo for noble
 - **Fix**: RAM detection 0GB bug (now uses awk for accurate float display)
