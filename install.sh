@@ -927,33 +927,37 @@ _install_certbot() {
 # ---------------------------------------------------------------------------
 _install_proftpd() {
   log "Installing ProFTPD..."
-  if _pkg_installed proftpd-basic; then
-    log "ProFTPD already installed — skipping"
-    return 0
+  if _pkg_installed proftpd-basic && _pkg_installed proftpd-mod-crypto; then
+    log "ProFTPD already installed — reusing package"
+  else
+    _apt_install proftpd-basic proftpd-mod-crypto
   fi
-  _apt_install proftpd-basic
   [[ "$DRY_RUN" == "true" ]] && return 0
 
+  if [[ -f /etc/proftpd/proftpd.conf ]]; then
+    # Prevent the stock FTP listener on port 21; AidiPanel exposes ProFTPD as SFTP on 2022.
+    sed -i -E 's/^[[:space:]]*Port[[:space:]]+[0-9]+[[:space:]]*$/Port 2022/' /etc/proftpd/proftpd.conf
+  fi
+
   cat > /etc/proftpd/conf.d/aidipanel.conf <<'PROFTPD_CONF'
-# AidiPanel ProFTPD — SFTP only
+# AidiPanel ProFTPD - SFTP only
 LoadModule mod_sftp.c
-<VirtualHost 0.0.0.0>
-    SFTPEngine on
-    Port 2022
-    SFTPLog /var/log/proftpd/sftp.log
-    SFTPHostKey /etc/proftpd/ssh_host_rsa_key
-    SFTPCompression delayed
-    AuthOrder mod_auth_pam.c mod_auth_unix.c
-    TransferLog /var/log/proftpd/xferlog
-    SystemLog /var/log/proftpd/proftpd.log
-</VirtualHost>
+Port 2022
+SFTPEngine on
+SFTPLog /var/log/proftpd/sftp.log
+SFTPHostKey /etc/proftpd/ssh_host_rsa_key
+SFTPCompression delayed
+AuthOrder mod_auth_pam.c mod_auth_unix.c
+TransferLog /var/log/proftpd/xferlog
+SystemLog /var/log/proftpd/proftpd.log
 PROFTPD_CONF
 
   if [[ ! -f /etc/proftpd/ssh_host_rsa_key ]]; then
     ssh-keygen -q -t rsa -b 4096 -N '' -f /etc/proftpd/ssh_host_rsa_key
   fi
 
-  run systemctl enable --now proftpd
+  run systemctl enable proftpd
+  run systemctl restart proftpd
   ufw allow 2022/tcp comment 'ProFTPD SFTP' > /dev/null 2>&1 || true
   ok "ProFTPD installed (SFTP on port 2022)"
 }
