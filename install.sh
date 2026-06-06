@@ -315,6 +315,10 @@ _pkg_installed() {
 # ---------------------------------------------------------------------------
 _install_base_packages() {
   log "Installing base system packages..."
+  # Tahan gagal saat apt boot-time masih memegang lock (mis. unattended-upgrades
+  # tepat setelah boot): minta apt menunggu lock hingga 5 menit, bukan langsung gagal.
+  mkdir -p /etc/apt/apt.conf.d
+  echo 'DPkg::Lock::Timeout "300";' > /etc/apt/apt.conf.d/99aidipanel-lock-timeout
   _apt_install \
     curl wget gnupg2 lsb-release ca-certificates apt-transport-https \
     software-properties-common unzip zip tar \
@@ -919,8 +923,8 @@ _configure_firewall() {
 # ---------------------------------------------------------------------------
 _install_certbot() {
   log "Installing Certbot (Let's Encrypt)..."
-  if _pkg_installed certbot; then
-    log "Certbot already installed — skipping"
+  if _pkg_installed certbot && _pkg_installed python3-certbot-nginx; then
+    log "Certbot + nginx plugin already installed — skipping"
     return 0
   fi
   _apt_install certbot python3-certbot-nginx
