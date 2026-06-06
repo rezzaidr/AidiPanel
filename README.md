@@ -1,6 +1,6 @@
 # AidiPanel v1.2.0-rc1
 
-> **by rezzaid** — Nginx Server Panel with FastCGI Cache
+> **by rezzaidr** — Nginx Server Panel with FastCGI Cache
 
 A free, lightweight VPS control panel built on Nginx + FastCGI Cache + PHP-FPM + Redis. No Varnish. No bloat. Installs in minutes.
 
