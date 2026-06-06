@@ -217,7 +217,7 @@ _usage() {
   echo "  php:info        Show PHP info for a version"
 
   echo -e "\n${BOLD}${BLUE}SSL / TLS${RESET}"
-  echo "  ssl:install     Install Let's Encrypt certificate for a domain"
+  echo "  ssl:install     Install Let's Encrypt certificate for a domain (--staging for test certs)"
   echo "  ssl:renew       Renew certificates (all or per domain)"
   echo "  ssl:status      Show SSL certificate status"
 
@@ -244,6 +244,7 @@ _usage() {
   echo "  aidipanel cache:purge --domain example.com"
   echo "  aidipanel db:add --name mydb --user myuser"
   echo "  aidipanel ssl:install --domain example.com"
+  echo "  aidipanel ssl:install --domain test.example.com --staging"
   echo "  aidipanel service:restart nginx"
   echo "  aidipanel log:tail --domain example.com --type access"
   echo ""
@@ -1040,16 +1041,22 @@ _ssl_install() {
   _parse_opts "$@"
   local domain; domain=$(_opt "domain")
   local email; email=$(_opt "email" "")
+  local staging; staging=$(_opt "staging" "")
   _require_arg "domain" "$domain" "ssl:install --domain example.com --email admin@example.com"
   _domain_valid "$domain" || die "Invalid domain name: ${domain}"
   _domain_exists "$domain" || die "Site not found: ${domain}"
 
   command -v certbot &>/dev/null || die "Certbot is not installed. Run: apt install certbot python3-certbot-nginx"
 
-  log "Installing Let's Encrypt SSL for: ${domain}"
+  if [[ -n "$staging" ]]; then
+    log "Installing Let's Encrypt SSL (STAGING) for: ${domain}"
+  else
+    log "Installing Let's Encrypt SSL for: ${domain}"
+  fi
 
   local certbot_args=(certbot --nginx -d "$domain" -d "www.${domain}" --non-interactive --agree-tos)
   [[ -n "$email" ]] && certbot_args+=(--email "$email") || certbot_args+=(--register-unsafely-without-email)
+  [[ -n "$staging" ]] && certbot_args+=(--test-cert)
 
   "${certbot_args[@]}" >> "$CLI_LOG" 2>&1 \
     || die "Certbot failed. Check: ${CLI_LOG}"
