@@ -7,6 +7,10 @@ credentials.conf
 *.key
 *.pem
 
+# Test loop — secrets (config.env berisi DO API token; JANGAN pernah commit)
+tests/config.env
+tests/logs/
+
 # Logs
 *.log
 aidipanel-app/storage/logs/
