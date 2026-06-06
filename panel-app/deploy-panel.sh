@@ -116,18 +116,37 @@ sed -i '/^PANEL_ADMIN_/d' "$CREDS" 2>/dev/null || true
 chmod 600 "$CREDS"
 
 # --------------------------------------------------------------------------
-# 6. Sudoers — www-data dapat jalankan aidipanel CLI sebagai root
+# 6. Sudoers wrapper for web-triggered CLI actions
 # --------------------------------------------------------------------------
+WRAPPER="/usr/local/sbin/aidipanel-web-run"
+cat > "$WRAPPER" << 'WRAPPER_SCRIPT'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+export NO_COLOR=1
+if [[ ! -x /usr/local/bin/aidipanel ]]; then
+  echo "AidiPanel CLI not found: /usr/local/bin/aidipanel" >&2
+  exit 127
+fi
+if [[ -x /usr/bin/systemd-run && -d /run/systemd/system ]]; then
+  exec /usr/bin/systemd-run --quiet --wait --pipe --collect /usr/local/bin/aidipanel "$@"
+fi
+if [[ -x /usr/bin/nsenter && -e /proc/1/ns/mnt ]]; then
+  exec /usr/bin/nsenter --mount=/proc/1/ns/mnt /usr/local/bin/aidipanel "$@"
+fi
+exec /usr/local/bin/aidipanel "$@"
+WRAPPER_SCRIPT
+chown root:root "$WRAPPER"
+chmod 750 "$WRAPPER"
+
 SUDOERS_FILE="/etc/sudoers.d/aidipanel"
 cat > "$SUDOERS_FILE" << 'SUDOERS'
-# AidiPanel — www-data dapat menjalankan aidipanel CLI sebagai root tanpa password
-Defaults!/usr/local/bin/aidipanel env_keep += "NO_COLOR"
-www-data ALL=(root) NOPASSWD: /usr/local/bin/aidipanel
+# AidiPanel - allow the web panel to run the controlled CLI wrapper as root
+www-data ALL=(root) NOPASSWD: /usr/local/sbin/aidipanel-web-run *
 SUDOERS
 chmod 440 "$SUDOERS_FILE"
 visudo -c -f "$SUDOERS_FILE" >> /var/log/aidipanel-install.log 2>&1 \
     && ok "Sudoers configured" \
-    || { warn "Sudoers validation failed — removing"; rm -f "$SUDOERS_FILE"; }
+    || { warn "Sudoers validation failed - removing"; rm -f "$SUDOERS_FILE"; }
 
 # --------------------------------------------------------------------------
 # 7. Nginx test & reload

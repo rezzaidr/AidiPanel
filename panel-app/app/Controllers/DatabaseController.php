@@ -6,8 +6,9 @@ class DatabaseController extends BaseController
 {
     public function index(array $params = []): void
     {
-        $result = run_cli('db:list', []);
-        $this->view('databases/index', ['output' => $result['output']]);
+        $result = run_cli('db:list', ['--plain']);
+        $databases = array_values(array_filter(array_map('trim', explode("\n", $result['output']))));
+        $this->view('databases/index', ['databases' => $databases, 'output' => $result['output']]);
     }
 
     public function add(array $params = []): void

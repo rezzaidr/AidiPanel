@@ -62,44 +62,35 @@
         <span class="text-[10px] text-gray-400">Host: localhost · Port: 3306</span>
       </div>
 
-      <?php if (empty(trim($output ?? ''))): ?>
+      <?php $databases = $databases ?? []; ?>
+      <?php if (empty($databases)): ?>
         <p class="px-5 py-10 text-sm text-gray-400 text-center">No databases found.</p>
       <?php else: ?>
-      <div class="p-5">
-        <pre class="text-xs font-mono text-gray-700 bg-gray-50 rounded-lg p-4 overflow-x-auto leading-relaxed"><?= e($output) ?></pre>
-      </div>
-
-      <!-- Delete & Backup forms - will be improved with real DB list in future -->
-      <div class="border-t border-gray-100 px-5 py-4">
-        <p class="text-xs font-semibold text-gray-600 mb-3">Database Actions</p>
-        <div class="grid grid-cols-2 gap-4">
-          <!-- Backup -->
-          <form method="POST" action="/databases/backup">
-            <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
-            <label class="block text-[10px] text-gray-500 mb-1">Backup Database</label>
-            <div class="flex gap-2">
-              <input type="text" name="name" placeholder="database name"
-                class="flex-1 text-xs px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-brand">
-              <button type="submit" class="bg-blue-50 border border-blue-200 text-blue-700 text-xs px-3 py-2 rounded-lg hover:bg-blue-100 transition-colors">
+      <div class="divide-y divide-gray-100">
+        <?php foreach ($databases as $database): ?>
+        <div class="px-5 py-3 flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <p class="text-sm font-medium text-gray-900 truncate"><?= e($database) ?></p>
+            <p class="text-[10px] text-gray-400">localhost:3306</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <form method="POST" action="/databases/backup">
+              <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+              <input type="hidden" name="name" value="<?= e($database) ?>">
+              <button type="submit" title="Backup database" class="w-9 h-9 bg-blue-50 border border-blue-200 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors">
                 <i class="ti ti-download"></i>
               </button>
-            </div>
-          </form>
-
-          <!-- Delete -->
-          <form method="POST" action="/databases/delete"
-                onsubmit="return confirm('Delete this database? This cannot be undone.')">
-            <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
-            <label class="block text-[10px] text-gray-500 mb-1">Delete Database</label>
-            <div class="flex gap-2">
-              <input type="text" name="name" placeholder="database name"
-                class="flex-1 text-xs px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-brand">
-              <button type="submit" class="bg-red-50 border border-red-200 text-red-500 text-xs px-3 py-2 rounded-lg hover:bg-red-100 transition-colors">
+            </form>
+            <form method="POST" action="/databases/delete" onsubmit="return confirm('Delete database <?= e($database) ?>? This cannot be undone.')">
+              <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+              <input type="hidden" name="name" value="<?= e($database) ?>">
+              <button type="submit" title="Delete database" class="w-9 h-9 bg-red-50 border border-red-200 text-red-500 rounded-lg hover:bg-red-100 transition-colors">
                 <i class="ti ti-trash"></i>
               </button>
-            </div>
-          </form>
+            </form>
+          </div>
         </div>
+        <?php endforeach; ?>
       </div>
       <?php endif; ?>
     </div>

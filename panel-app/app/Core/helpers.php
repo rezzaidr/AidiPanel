@@ -163,11 +163,13 @@ function run_cli(string $command, array $args = []): array
     $cmdParts = [escapeshellcmd($binary), escapeshellarg($command), ...$safeArgs];
     $cmd      = 'NO_COLOR=1 ' . implode(' ', $cmdParts) . ' 2>&1';
 
-    // Gunakan sudo jika berjalan sebagai www-data
-    // NO_COLOR dipass sebagai arg, bukan env (sudo -E tidak diizinkan)
+    // Use sudo from the web panel. The wrapper escapes PHP-FPM's read-only mount namespace.
     $currentUser = trim((string)(shell_exec('whoami 2>/dev/null') ?: ''));
     if ($currentUser !== 'root' && file_exists('/usr/bin/sudo')) {
-        $cmd = '/usr/bin/sudo /usr/local/bin/aidipanel ' . escapeshellarg($command) . ' ' . implode(' ', $safeArgs) . ' 2>&1';
+        $runner = file_exists('/usr/local/sbin/aidipanel-web-run')
+            ? '/usr/local/sbin/aidipanel-web-run'
+            : $binary;
+        $cmd = '/usr/bin/sudo ' . escapeshellcmd($runner) . ' ' . escapeshellarg($command) . ' ' . implode(' ', $safeArgs) . ' 2>&1';
     }
 
     $output   = [];

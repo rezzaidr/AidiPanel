@@ -842,6 +842,14 @@ _db_delete() {
 
 _db_list() {
   _parse_opts "$@"
+  local plain; plain=$(_opt "plain" "false")
+  if [[ "$plain" == "true" ]]; then
+    _mysql_exec "SELECT schema_name FROM information_schema.schemata
+      WHERE schema_name NOT IN ('information_schema','mysql','performance_schema','sys')
+      ORDER BY schema_name;" 2>/dev/null | awk 'NR > 1 && NF { print $1 }'
+    return 0
+  fi
+
   echo ""
   echo -e "  ${BOLD}Databases${RESET}"
   _hr

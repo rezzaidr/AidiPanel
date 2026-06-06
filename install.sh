@@ -1301,19 +1301,38 @@ _configure_sudoers() {
   log "Configuring sudoers for AidiPanel web panel..."
   [[ "$DRY_RUN" == "true" ]] && return 0
 
+  local wrapper="/usr/local/sbin/aidipanel-web-run"
+  cat > "$wrapper" <<'WRAPPER'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+export NO_COLOR=1
+if [[ ! -x /usr/local/bin/aidipanel ]]; then
+  echo "AidiPanel CLI not found: /usr/local/bin/aidipanel" >&2
+  exit 127
+fi
+if [[ -x /usr/bin/systemd-run && -d /run/systemd/system ]]; then
+  exec /usr/bin/systemd-run --quiet --wait --pipe --collect /usr/local/bin/aidipanel "$@"
+fi
+if [[ -x /usr/bin/nsenter && -e /proc/1/ns/mnt ]]; then
+  exec /usr/bin/nsenter --mount=/proc/1/ns/mnt /usr/local/bin/aidipanel "$@"
+fi
+exec /usr/local/bin/aidipanel "$@"
+WRAPPER
+  chown root:root "$wrapper"
+  chmod 750 "$wrapper"
+
   local sudoers_file="/etc/sudoers.d/aidipanel"
-  cat > "$sudoers_file" << 'SUDOERS'
-# AidiPanel — allow www-data to run aidipanel CLI as root (no password)
-Defaults!/usr/local/bin/aidipanel env_keep += "NO_COLOR"
-www-data ALL=(root) NOPASSWD: /usr/local/bin/aidipanel
+  cat > "$sudoers_file" <<'SUDOERS'
+# AidiPanel - allow the web panel to run the controlled CLI wrapper as root
+www-data ALL=(root) NOPASSWD: /usr/local/sbin/aidipanel-web-run *
 SUDOERS
   chmod 440 "$sudoers_file"
 
   # Validate sudoers file
   visudo -c -f "$sudoers_file" >> "$PANEL_LOG" 2>&1 \
-    || { warn "sudoers validation failed — removing"; rm -f "$sudoers_file"; return 1; }
+    || { warn "sudoers validation failed - removing"; rm -f "$sudoers_file"; return 1; }
 
-  ok "Sudoers configured: www-data can run aidipanel CLI as root"
+  ok "Sudoers configured: www-data can run AidiPanel wrapper as root"
 }
 
 _configure_fail2ban() {
