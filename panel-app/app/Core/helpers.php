@@ -142,6 +142,24 @@ function is_valid_proxy_url(string $url): bool
     return !empty($parts['host']);
 }
 
+function web_cli_allowed_commands(): array
+{
+    return [
+        'site:add', 'site:delete', 'site:list',
+        'vhost:save',
+        'cache:status', 'cache:purge', 'cache:enable', 'cache:disable',
+        'db:add', 'db:delete', 'db:list', 'db:backup',
+        'php:list', 'php:version', 'php:restart',
+        'ssl:install', 'ssl:renew', 'ssl:status',
+        'service:status', 'service:start', 'service:stop', 'service:restart',
+        'system:info',
+    ];
+}
+
+function is_web_cli_command_allowed(string $command): bool
+{
+    return in_array($command, web_cli_allowed_commands(), true);
+}
 /**
  * Safe CLI runner — pakai sudo jika dijalankan dari web (www-data)
  */
@@ -150,6 +168,10 @@ function run_cli(string $command, array $args = []): array
     $binary = '/usr/local/bin/aidipanel';
     if (!file_exists($binary)) {
         return ['success' => false, 'output' => 'AidiPanel CLI not found: ' . $binary, 'code' => 1];
+    }
+
+    if (!is_web_cli_command_allowed($command)) {
+        return ['success' => false, 'output' => 'Command not allowed from web panel.', 'code' => 126];
     }
 
     // Pastikan log dir bisa ditulis

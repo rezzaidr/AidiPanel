@@ -1311,6 +1311,21 @@ _configure_sudoers() {
 #!/usr/bin/env bash
 set -Eeuo pipefail
 export NO_COLOR=1
+cmd="${1:-}"
+case "$cmd" in
+  site:add|site:delete|site:list|vhost:save|\
+  cache:status|cache:purge|cache:enable|cache:disable|\
+  db:add|db:delete|db:list|db:backup|\
+  php:list|php:version|php:restart|\
+  ssl:install|ssl:renew|ssl:status|\
+  service:status|service:start|service:stop|service:restart|\
+  system:info)
+    ;;
+  *)
+    echo "AidiPanel web command not allowed: ${cmd:-<empty>}" >&2
+    exit 126
+    ;;
+esac
 if [[ ! -x /usr/local/bin/aidipanel ]]; then
   echo "AidiPanel CLI not found: /usr/local/bin/aidipanel" >&2
   exit 127
