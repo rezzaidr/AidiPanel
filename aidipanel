@@ -201,7 +201,7 @@ _usage() {
   echo -e "\n${BOLD}${BLUE}Cache Management${RESET}"
   echo "  cache:status    Show FastCGI cache status"
   echo "  cache:purge     Purge FastCGI cache (all or per domain)"
-  echo "  cache:enable    Enable FastCGI cache for a domain"
+  echo "  cache:enable    Enable FastCGI cache for a domain (--install-nginx-helper, --install-redis-plugin optional)"
   echo "  cache:disable   Disable FastCGI cache for a domain"
 
   echo -e "\n${BOLD}${BLUE}Database Management${RESET}"
@@ -368,11 +368,11 @@ _site_write_vhost() {
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
         include fastcgi_params;
 
-        fastcgi_cache        ${NGINX_CACHE_ZONE};
-        fastcgi_cache_valid  200 301 302 1h;
-        fastcgi_cache_valid  404 1m;
-        fastcgi_cache_bypass \$skip_cache;
-        fastcgi_no_cache     \$skip_cache;
+        #fastcgi_cache        ${NGINX_CACHE_ZONE};
+        #fastcgi_cache_valid  200 301 302 1h;
+        #fastcgi_cache_valid  404 1m;
+        #fastcgi_cache_bypass \$skip_cache;
+        #fastcgi_no_cache     \$skip_cache;
 
         fastcgi_connect_timeout 60s;
         fastcgi_send_timeout    180s;
@@ -608,7 +608,7 @@ _site_info() {
 
   # FastCGI cache status
   local cache_enabled="disabled"
-  grep -q "fastcgi_cache ${NGINX_CACHE_ZONE}" "$conf" 2>/dev/null && cache_enabled="enabled"
+  grep -Eq "^[[:space:]]*fastcgi_cache[[:space:]]+${NGINX_CACHE_ZONE}" "$conf" 2>/dev/null && cache_enabled="enabled"
 
   echo ""
   echo -e "  ${BOLD}Site info: ${CYAN}${domain}${RESET}"
@@ -694,7 +694,7 @@ _cache_status() {
     [[ "$(basename "$conf")" == "aidipanel-ui.conf" ]] && continue
     local domain; domain=$(basename "$conf" .conf)
     local status
-    grep -q "fastcgi_cache ${NGINX_CACHE_ZONE}" "$conf" 2>/dev/null \
+    grep -Eq "^[[:space:]]*fastcgi_cache[[:space:]]+${NGINX_CACHE_ZONE}" "$conf" 2>/dev/null \
       && status="${GREEN}enabled${RESET}" \
       || status="${DIM}disabled${RESET}"
     printf "  %-30s " "$domain"
@@ -744,6 +744,48 @@ _cache_purge() {
   fi
 }
 
+_cache_install_wp_plugins() {
+  local domain="$1" install_nginx_helper="$2" install_redis_plugin="$3"
+  [[ "$install_nginx_helper" == "true" || "$install_redis_plugin" == "true" ]] || return 0
+
+  local webroot="${SITES_DIR}/${domain}/htdocs"
+  if [[ ! -f "${webroot}/wp-config.php" ]]; then
+    warn "WordPress not detected in ${webroot}; skipping WordPress cache plugin installation."
+    return 0
+  fi
+  if ! command -v wp >/dev/null 2>&1; then
+    warn "WP-CLI is not installed; skipping WordPress cache plugin installation."
+    return 0
+  fi
+
+  mkdir -p /tmp/aidipanel-wp-cli-cache
+  chown www-data:www-data /tmp/aidipanel-wp-cli-cache 2>/dev/null || true
+
+  local wp_base=(env WP_CLI_CACHE_DIR=/tmp/aidipanel-wp-cli-cache wp --path="$webroot")
+  local runner=("${wp_base[@]}")
+  if command -v sudo >/dev/null 2>&1; then
+    runner=(sudo -u www-data "${wp_base[@]}")
+  else
+    runner=("${wp_base[@]}" --allow-root)
+  fi
+
+  if [[ "$install_nginx_helper" == "true" ]]; then
+    log "Installing WordPress plugin: Nginx Helper (${domain})..."
+    "${runner[@]}" plugin install nginx-helper --activate >> "$CLI_LOG" 2>&1 \
+      && ok "Nginx Helper plugin installed for: ${domain}" \
+      || warn "Failed to install Nginx Helper plugin for: ${domain}"
+  fi
+
+  if [[ "$install_redis_plugin" == "true" ]]; then
+    log "Installing WordPress plugin: Redis Object Cache (${domain})..."
+    "${runner[@]}" plugin install redis-cache --activate >> "$CLI_LOG" 2>&1 \
+      && ok "Redis Object Cache plugin installed for: ${domain}" \
+      || warn "Failed to install Redis Object Cache plugin for: ${domain}"
+    "${runner[@]}" redis enable >> "$CLI_LOG" 2>&1 \
+      && ok "Redis Object Cache enabled for: ${domain}" \
+      || warn "Redis Object Cache plugin installed, but object-cache enable did not complete for: ${domain}"
+  fi
+}
 _cache_toggle() {
   # $1 = enable|disable
   _require_root "cache:${1}"
@@ -755,9 +797,15 @@ _cache_toggle() {
   _domain_exists "$domain" || die "Site not found: ${domain}"
 
   local conf="${NGINX_CONF_DIR}/${domain}.conf"
+  local install_nginx_helper; install_nginx_helper=$(_opt "install-nginx-helper" "false")
+  local install_redis_plugin; install_redis_plugin=$(_opt "install-redis-plugin" "false")
+
+  if [[ "$action" != "enable" && ( "$install_nginx_helper" == "true" || "$install_redis_plugin" == "true" ) ]]; then
+    die "Plugin install options are only supported with cache:enable"
+  fi
 
   if [[ "$action" == "enable" ]]; then
-    if grep -q "fastcgi_cache ${NGINX_CACHE_ZONE}" "$conf"; then
+    if grep -Eq "^[[:space:]]*fastcgi_cache[[:space:]]+${NGINX_CACHE_ZONE}" "$conf"; then
       warn "FastCGI cache is already enabled for: ${domain}"
       return 0
     fi
@@ -769,6 +817,7 @@ _cache_toggle() {
       's|#\s*fastcgi_no_cache|fastcgi_no_cache|g'
 
     ok "FastCGI cache enabled for: ${domain}"
+    _cache_install_wp_plugins "$domain" "$install_nginx_helper" "$install_redis_plugin"
   else
     # Comment out cache directives
     sed -i \

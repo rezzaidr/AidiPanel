@@ -71,6 +71,19 @@
       <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
       <input type="hidden" name="domain" value="<?= e($site['domain']) ?>">
       <input type="hidden" name="action" value="<?= $site['cache_enabled'] ? 'disable' : 'enable' ?>">
+      <?php if (!$site['cache_enabled'] && ($site['type'] ?? '') === 'wordpress'): ?>
+      <div class="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 mb-2 text-[11px] text-gray-600 space-y-2">
+        <p class="font-medium text-gray-700">WordPress helpers</p>
+        <label class="flex items-center gap-2">
+          <input type="checkbox" name="install_nginx_helper" value="1" class="rounded border-gray-300 text-brand focus:ring-brand">
+          <span>Nginx Helper</span>
+        </label>
+        <label class="flex items-center gap-2">
+          <input type="checkbox" name="install_redis_plugin" value="1" class="rounded border-gray-300 text-brand focus:ring-brand">
+          <span>Redis Object Cache</span>
+        </label>
+      </div>
+      <?php endif; ?>
       <button type="submit" class="w-full text-xs border <?= $site['cache_enabled'] ? 'border-red-200 text-red-500 hover:bg-red-50' : 'border-brand text-brand hover:bg-brand-pale' ?> rounded-lg px-3 py-2 transition-colors">
         <i class="ti ti-bolt mr-1"></i>
         <?= $site['cache_enabled'] ? 'Disable Cache' : 'Enable Cache' ?>

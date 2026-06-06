@@ -52,6 +52,8 @@ class CacheController extends BaseController
     {
         $domain = (string) $this->request->post('domain', '');
         $action = (string) $this->request->post('action', 'enable'); // enable|disable
+        $installNginxHelper = $this->request->post('install_nginx_helper', '') === '1';
+        $installRedisPlugin = $this->request->post('install_redis_plugin', '') === '1';
 
         if (!in_array($action, ['enable', 'disable'], true)) {
             $this->error('Invalid action.');
@@ -60,7 +62,31 @@ class CacheController extends BaseController
             $this->error('Invalid domain name.');
         }
 
-        $result = run_cli("cache:{$action}", ['--domain', $domain]);
+        $site = $this->db->row('SELECT type FROM sites WHERE domain = ?', [$domain]);
+        if (!$site) {
+            $this->error("Site not found: {$domain}");
+        }
+
+        if ($action === 'disable') {
+            $installNginxHelper = false;
+            $installRedisPlugin = false;
+        }
+
+        if (($installNginxHelper || $installRedisPlugin) && ($site['type'] ?? '') !== 'wordpress') {
+            $this->error('WordPress helper plugins can only be installed for WordPress sites.');
+        }
+
+        $args = ['--domain', $domain];
+        if ($action === 'enable') {
+            if ($installNginxHelper) {
+                $args[] = '--install-nginx-helper';
+            }
+            if ($installRedisPlugin) {
+                $args[] = '--install-redis-plugin';
+            }
+        }
+
+        $result = run_cli("cache:{$action}", $args);
         if (!$result['success']) {
             $this->error("Cache {$action} failed: " . $result['output']);
         }

@@ -244,7 +244,9 @@ class SiteController extends BaseController
             // Deteksi type dari isi config
             $content  = (string) file_get_contents($confFile);
             $type     = 'php';
-            if (str_contains($content, 'wp-admin') || str_contains($content, 'wp-login')) {
+            if (preg_match('/^\s*#\s*Type:\s*(wordpress|laravel|php|static|proxy)\b/m', $content, $typeMatch)) {
+                $type = $typeMatch[1];
+            } elseif (str_contains($content, 'wp-admin') || str_contains($content, 'wp-login')) {
                 $type = 'wordpress';
             } elseif (str_contains($content, '/public;') || str_contains($content, 'laravel')) {
                 $type = 'laravel';
@@ -274,7 +276,9 @@ class SiteController extends BaseController
 
         $hasLe  = file_exists("/etc/letsencrypt/live/{$domain}/fullchain.pem");
         $ssl    = $hasLe ? 'letsencrypt' : 'self-signed';
-        $cache  = $type !== 'static' ? 1 : 0;
+        $confFile = "/etc/nginx/sites-available/{$domain}.conf";
+        $conf     = is_file($confFile) ? (string) file_get_contents($confFile) : '';
+        $cache    = preg_match('/^\s*fastcgi_cache\s+aidipanel_fcgi\b/m', $conf) ? 1 : 0;
 
         $this->db->run(
             'INSERT OR IGNORE INTO sites (domain, type, php_version, webroot, ssl_type, cache_enabled) VALUES (?, ?, ?, ?, ?, ?)',

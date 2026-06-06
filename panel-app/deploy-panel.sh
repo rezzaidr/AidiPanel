@@ -18,6 +18,10 @@ log() { echo -e "${CYAN}[INFO]${RESET}  $*"; }
 ok()  { echo -e "${GREEN}[OK]${RESET}    $*"; }
 warn(){ echo -e "${YELLOW}[WARN]${RESET}  $*"; }
 die() { echo -e "${RED}[ERROR]${RESET} $*" >&2; exit 1; }
+credential_line() {
+  local key="$1" value="$2"
+  printf '%s=%q\n' "$key" "$value"
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in --dir) shift; PANEL_DIR="$1" ;; *) ;; esac
@@ -110,8 +114,8 @@ fi
 CREDS="${PANEL_DIR}/credentials.conf"
 sed -i '/^PANEL_ADMIN_/d' "$CREDS" 2>/dev/null || true
 {
-    echo "PANEL_ADMIN_USER=admin"
-    echo "PANEL_ADMIN_PASSWORD=${PANEL_ADMIN_PASS}"
+    credential_line PANEL_ADMIN_USER "admin"
+    credential_line PANEL_ADMIN_PASSWORD "$PANEL_ADMIN_PASS"
 } >> "$CREDS"
 chmod 600 "$CREDS"
 

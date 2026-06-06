@@ -41,8 +41,8 @@ aidipanel site:add --domain example.com --type wordpress --php 8.3
 
 **What it does:**
 - Creates `/var/www/<domain>/htdocs/`
-- Generates Nginx vhost with FastCGI cache
-- Enables cache by default
+- Generates Nginx vhost with FastCGI cache directives disabled by default
+- Leaves cache off until the user enables it per domain
 - Registers site in the panel database
 
 ---
@@ -108,6 +108,9 @@ Toggle FastCGI cache for a specific domain.
 ```bash
 aidipanel cache:enable  --domain example.com
 aidipanel cache:disable --domain example.com
+
+# Optional WordPress helper plugins when enabling cache
+aidipanel cache:enable --domain example.com --install-nginx-helper --install-redis-plugin
 ```
 
 ---

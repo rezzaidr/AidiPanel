@@ -62,7 +62,7 @@ class DB
                 php_version   TEXT    NOT NULL DEFAULT '8.3',
                 webroot       TEXT    NOT NULL,
                 ssl_type      TEXT    NOT NULL DEFAULT 'self-signed',
-                cache_enabled INTEGER NOT NULL DEFAULT 1,
+                cache_enabled INTEGER NOT NULL DEFAULT 0,
                 created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
             );
 

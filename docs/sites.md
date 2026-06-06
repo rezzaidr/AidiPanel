@@ -25,9 +25,9 @@ aidipanel site:add --domain example.com --type wordpress --php 8.3
 
 | Type | Description | FastCGI Cache |
 |------|-------------|---------------|
-| `wordpress` | WordPress + WooCommerce optimized | ✓ Enabled |
-| `laravel` | Laravel with queue worker support | ✓ Enabled |
-| `php` | Generic PHP application | ✓ Enabled |
+| `wordpress` | WordPress + WooCommerce optimized | Available, off by default |
+| `laravel` | Laravel with queue worker support | Available, off by default |
+| `php` | Generic PHP application | Available, off by default |
 | `static` | Static HTML/CSS/JS only | — Not needed |
 | `proxy` | Reverse proxy to another service | — Not needed |
 

@@ -1,7 +1,6 @@
 <?php $pageTitle = 'FastCGI Cache'; ?>
 
 <div class="grid grid-cols-3 gap-4 mb-5">
-  <!-- Cache stats -->
   <div class="bg-white rounded-xl border border-gray-200 p-5">
     <div class="flex items-center gap-2 mb-3">
       <div class="w-8 h-8 bg-brand-pale rounded-lg flex items-center justify-center">
@@ -29,13 +28,12 @@
     </form>
   </div>
 
-  <!-- Redis stats -->
   <div class="bg-white rounded-xl border border-gray-200 p-5">
     <div class="flex items-center gap-2 mb-3">
       <div class="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center">
         <i class="ti ti-database text-blue-500 text-base"></i>
       </div>
-      <span class="text-sm font-semibold text-gray-800">Redis (Object Cache)</span>
+      <span class="text-sm font-semibold text-gray-800">Redis Object Cache</span>
     </div>
     <?php if (!empty($stats['redis'])): ?>
     <div class="grid grid-cols-3 gap-2 text-xs">
@@ -60,7 +58,6 @@
     <?php endif; ?>
   </div>
 
-  <!-- Purge by URL -->
   <div class="bg-white rounded-xl border border-gray-200 p-5">
     <div class="flex items-center gap-2 mb-3">
       <div class="w-8 h-8 bg-amber-50 rounded-lg flex items-center justify-center">
@@ -80,7 +77,6 @@
   </div>
 </div>
 
-<!-- Per-site cache management -->
 <div class="bg-white rounded-xl border border-gray-200">
   <div class="px-5 py-3.5 border-b border-gray-100">
     <span class="text-sm font-semibold text-gray-800">Cache per Site</span>
@@ -90,34 +86,48 @@
   <?php else: ?>
   <div class="divide-y divide-gray-50">
     <?php foreach ($sites as $site): ?>
-    <div class="flex items-center justify-between px-5 py-3.5">
+    <?php $isWordPress = ($site['type'] ?? '') === 'wordpress'; ?>
+    <div class="flex items-start justify-between gap-4 px-5 py-3.5">
       <div>
         <a href="/sites/<?= e($site['domain']) ?>" class="text-sm font-medium text-gray-900 hover:text-brand">
           <?= e($site['domain']) ?>
         </a>
         <p class="text-[10px] text-gray-400"><?= e(ucfirst($site['type'])) ?></p>
       </div>
-      <div class="flex items-center gap-3">
-        <!-- Per-site purge -->
+      <div class="flex items-start gap-3">
         <form method="POST" action="/cache/purge">
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
           <input type="hidden" name="domain" value="<?= e($site['domain']) ?>">
-          <button type="submit" class="text-[11px] text-amber-600 hover:text-amber-700 flex items-center gap-1">
+          <button type="submit" class="text-[11px] text-amber-600 hover:text-amber-700 flex items-center gap-1 px-2 py-1">
             <i class="ti ti-refresh text-sm"></i> Purge
           </button>
         </form>
 
-        <!-- Toggle -->
-        <form method="POST" action="/cache/toggle">
+        <form method="POST" action="/cache/toggle" class="flex flex-col items-end gap-2">
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
           <input type="hidden" name="domain" value="<?= e($site['domain']) ?>">
           <input type="hidden" name="action" value="<?= $site['cache_enabled'] ? 'disable' : 'enable' ?>">
+
+          <?php if (!$site['cache_enabled'] && $isWordPress): ?>
+          <div class="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-[11px] text-gray-600 space-y-2">
+            <p class="font-medium text-gray-700">WordPress helpers</p>
+            <label class="flex items-center gap-2">
+              <input type="checkbox" name="install_nginx_helper" value="1" class="rounded border-gray-300 text-brand focus:ring-brand">
+              <span>Nginx Helper</span>
+            </label>
+            <label class="flex items-center gap-2">
+              <input type="checkbox" name="install_redis_plugin" value="1" class="rounded border-gray-300 text-brand focus:ring-brand">
+              <span>Redis Object Cache</span>
+            </label>
+          </div>
+          <?php endif; ?>
+
           <button type="submit"
             class="text-[11px] font-medium px-3 py-1 rounded-full border transition-colors
               <?= $site['cache_enabled']
                 ? 'bg-brand-pale text-brand border-brand/20 hover:bg-red-50 hover:text-red-500 hover:border-red-200'
                 : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-brand-pale hover:text-brand hover:border-brand/20' ?>">
-            <?= $site['cache_enabled'] ? '● Enabled' : '○ Disabled' ?>
+            <?= $site['cache_enabled'] ? 'Enabled' : 'Disabled' ?>
           </button>
         </form>
       </div>

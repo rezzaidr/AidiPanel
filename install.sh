@@ -83,6 +83,11 @@ run() {
   "$@" >> "$PANEL_LOG" 2>&1
 }
 
+credential_line() {
+  local key="$1" value="$2"
+  printf '%s=%q\n' "$key" "$value"
+}
+
 # ---------------------------------------------------------------------------
 # 2. TRAP — cleanup lockfile & print failure context on any error
 # ---------------------------------------------------------------------------
@@ -820,17 +825,17 @@ PANEL_DB
 
   mkdir -p "$PANEL_DIR"
   chmod 700 "$PANEL_DIR"
-  cat > "${PANEL_DIR}/credentials.conf" <<CREDS
-# AidiPanel Credentials — KEEP THIS FILE SECURE
-# Generated: $(date)
-DB_ENGINE=${DB_ENGINE}
-DB_ENGINE_LABEL=${DB_ENGINE_LABELS[$DB_ENGINE]}
-DB_ROOT_PASSWORD=${DB_ROOT_PASS}
-PANEL_DB_NAME=${DB_NAME}
-PANEL_DB_USER=${PANEL_USER}
-PANEL_DB_PASSWORD=${PANEL_DB_PASS}
-MYSQL_ROOT_PASSWORD=${DB_ROOT_PASS}
-CREDS
+  {
+    echo "# AidiPanel Credentials — KEEP THIS FILE SECURE"
+    echo "# Generated: $(date)"
+    credential_line DB_ENGINE "$DB_ENGINE"
+    credential_line DB_ENGINE_LABEL "${DB_ENGINE_LABELS[$DB_ENGINE]}"
+    credential_line DB_ROOT_PASSWORD "$DB_ROOT_PASS"
+    credential_line PANEL_DB_NAME "$DB_NAME"
+    credential_line PANEL_DB_USER "$PANEL_USER"
+    credential_line PANEL_DB_PASSWORD "$PANEL_DB_PASS"
+    credential_line MYSQL_ROOT_PASSWORD "$DB_ROOT_PASS"
+  } > "${PANEL_DIR}/credentials.conf"
   chmod 600 "${PANEL_DIR}/credentials.conf"
 
   cat > "${PANEL_DIR}/.my.cnf" <<MYCNF
@@ -1071,11 +1076,11 @@ server {
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         include fastcgi_params;
 
-        fastcgi_cache        aidipanel_fcgi;
-        fastcgi_cache_valid  200 301 302 1h;
-        fastcgi_cache_valid  404 1m;
-        fastcgi_cache_bypass  $skip_cache;
-        fastcgi_no_cache      $skip_cache;
+        #fastcgi_cache        aidipanel_fcgi;
+        #fastcgi_cache_valid  200 301 302 1h;
+        #fastcgi_cache_valid  404 1m;
+        #fastcgi_cache_bypass  $skip_cache;
+        #fastcgi_no_cache      $skip_cache;
 
         fastcgi_connect_timeout 60s;
         fastcgi_send_timeout    180s;
@@ -1522,8 +1527,8 @@ _print_summary() {
 
   # Also save admin pass to credentials file
   if [[ -n "$PANEL_ADMIN_PASS" ]]; then
-    echo "PANEL_ADMIN_USER=admin" >> "${PANEL_DIR}/credentials.conf"
-    echo "PANEL_ADMIN_PASSWORD=${PANEL_ADMIN_PASS}" >> "${PANEL_DIR}/credentials.conf"
+    credential_line PANEL_ADMIN_USER "admin" >> "${PANEL_DIR}/credentials.conf"
+    credential_line PANEL_ADMIN_PASSWORD "$PANEL_ADMIN_PASS" >> "${PANEL_DIR}/credentials.conf"
   fi
 }
 

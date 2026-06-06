@@ -144,7 +144,11 @@ curl -I https://example.com/
 
 ## WordPress-Specific: Nginx Cache Purge Plugin
 
-For WordPress sites, install **Nginx Cache** plugin or **Nginx Helper** so WordPress automatically purges cache when posts are published/updated.
+FastCGI cache is opt-in per site. For WordPress sites, AidiPanel can install **Nginx Helper** and **Redis Object Cache** only when the user enables cache and explicitly selects those helper options.
+
+```bash
+aidipanel cache:enable --domain example.com --install-nginx-helper --install-redis-plugin
+```
 
 In `wp-config.php`:
 
