@@ -14,6 +14,54 @@ function e(mixed $value): string
 }
 
 /**
+ * Active UI locale. Defaults to English; PANEL_LOCALE may be defined in the
+ * bootstrap (later: read from panel settings / user preference).
+ */
+function current_locale(): string
+{
+    return defined('PANEL_LOCALE') ? PANEL_LOCALE : 'en';
+}
+
+/**
+ * Load (and cache) a locale's string table from app/Lang/<locale>.php
+ */
+function lang_load(string $locale): array
+{
+    static $cache = [];
+    if (isset($cache[$locale])) {
+        return $cache[$locale];
+    }
+    $file = APP_ROOT . '/Lang/' . $locale . '.php';
+    $cache[$locale] = file_exists($file) ? (array) require $file : [];
+    return $cache[$locale];
+}
+
+/**
+ * Translate a key for the current locale.
+ * - Falls back to English, then to the key itself, so a missing string is
+ *   visible but never fatal.
+ * - {placeholder} tokens are replaced from $params; param values are HTML-escaped
+ *   (they may carry user data such as a domain), the template itself is trusted.
+ */
+function t(string $key, array $params = []): string
+{
+    $locale  = current_locale();
+    $strings = lang_load($locale);
+    $text    = $strings[$key]
+        ?? ($locale === 'en' ? null : (lang_load('en')[$key] ?? null))
+        ?? $key;
+
+    if ($params) {
+        $repl = [];
+        foreach ($params as $k => $v) {
+            $repl['{' . $k . '}'] = e($v);
+        }
+        $text = strtr($text, $repl);
+    }
+    return $text;
+}
+
+/**
  * Render a view file with data
  */
 function view(string $template, array $data = [], bool $return = false): string

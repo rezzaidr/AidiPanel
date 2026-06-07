@@ -15,6 +15,10 @@ define('PANEL_VERSION', '1.2.0-rc1');
 // PANEL_DIR = /opt/aidipanel (used by DB.php to read credentials.conf)
 define('PANEL_DIR', '/opt/aidipanel');
 
+// Default UI locale (English). Built multilingual from the start; later this can
+// come from panel settings or the signed-in user's preference.
+define('PANEL_LOCALE', 'en');
+
 // ── Autoloader (simple PSR-4 style, no Composer needed) ─────────────────────
 spl_autoload_register(function (string $class): void {
     $file = APP_ROOT . '/' . str_replace('\\', '/', $class) . '.php';
@@ -45,6 +49,9 @@ $router->get('/logout', 'AuthController@logout');
 // Dashboard
 $router->get('/',          'DashboardController@index');
 $router->get('/dashboard', 'DashboardController@index');
+
+// Admin Area (server-wide hub — collects services, PHP, cache, SSL, users, logs)
+$router->get('/admin', 'AdminController@index');
 
 // Sites
 $router->get('/sites',               'SiteController@index');
