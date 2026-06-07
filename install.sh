@@ -171,8 +171,8 @@ _check_lock() {
 }
 
 _check_already_installed() {
-  if [[ -d "$PANEL_DIR" ]] && systemctl is-active --quiet aidipanel 2>/dev/null; then
-    die "${PANEL_NAME} is already installed and running. " \
+  if [[ -d "$PANEL_DIR" ]] && [[ -x /usr/local/bin/aidipanel ]]; then
+    die "${PANEL_NAME} is already installed. " \
         "To reinstall, run the uninstaller first."
   fi
 }
