@@ -1,142 +1,154 @@
-<?php $pageTitle = 'SSL / TLS'; ?>
+<?php $pageTitle = t('admin.ssl.title'); ?>
 
-<div class="grid grid-cols-3 gap-4">
+<!-- page header -->
+<div class="mb-6">
+  <a href="/admin" class="text-xs text-zinc-400 hover:text-ink flex items-center gap-1 mb-2">
+    <i class="ti ti-arrow-left text-sm"></i> <?= e(t('admin.title')) ?>
+  </a>
+  <h1 class="font-head font-bold text-[22px] text-zinc-900 leading-none"><?= e(t('admin.ssl.title')) ?></h1>
+  <p class="text-sm text-zinc-400 mt-1.5"><?= e(t('admin.ssl.desc')) ?></p>
+</div>
 
-  <!-- Install SSL form -->
-  <div class="bg-white rounded-xl border border-gray-200 p-5 h-fit">
-    <div class="flex items-center gap-2 mb-4">
-      <div class="w-8 h-8 bg-green-50 rounded-lg flex items-center justify-center">
-        <i class="ti ti-lock text-green-600"></i>
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+
+  <!-- Install form -->
+  <div class="space-y-4">
+    <div class="card p-5">
+      <div class="flex items-center gap-2.5 mb-4">
+        <div class="w-8 h-8 bg-emerald-50 rounded-lg flex items-center justify-center">
+          <i class="ti ti-lock text-emerald-600 text-base"></i>
+        </div>
+        <h2 class="font-head font-semibold text-sm text-zinc-900"><?= e(t('ssl.install_title')) ?></h2>
       </div>
-      <h3 class="text-sm font-semibold text-gray-900">Install Let's Encrypt</h3>
+
+      <form method="POST" action="/ssl/install" class="space-y-4">
+        <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+
+        <div>
+          <label class="lbl"><?= e(t('ssl.install_domain')) ?></label>
+          <select name="domain" class="inp">
+            <?php foreach ($sites as $site): ?>
+            <option value="<?= e($site['domain']) ?>"><?= e($site['domain']) ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+
+        <div>
+          <label class="lbl">
+            <?= e(t('ssl.install_email')) ?>
+            <span class="text-zinc-400 font-normal">(optional)</span>
+          </label>
+          <input type="email" name="email" placeholder="admin@example.com" class="inp">
+          <p class="hint"><?= e(t('ssl.install_email_hint')) ?></p>
+        </div>
+
+        <div class="bg-speed-pale border border-speed/20 rounded-lg px-3 py-2.5 text-[11px] text-speed flex items-start gap-2">
+          <i class="ti ti-info-circle shrink-0 mt-0.5"></i>
+          <?= e(t('ssl.install_dns_note')) ?>
+        </div>
+
+        <button type="submit" class="btn btn-primary w-full">
+          <i class="ti ti-lock text-sm"></i> <?= e(t('ssl.install_btn')) ?>
+        </button>
+      </form>
     </div>
 
-    <form method="POST" action="/ssl/install">
+    <form method="POST" action="/ssl/renew">
       <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
-
-      <div class="mb-3">
-        <label class="block text-xs font-medium text-gray-700 mb-1.5">Domain</label>
-        <select name="domain" class="w-full text-sm px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand">
-          <?php foreach ($sites as $site): ?>
-          <option value="<?= e($site['domain']) ?>"><?= e($site['domain']) ?></option>
-          <?php endforeach; ?>
-        </select>
-      </div>
-
-      <div class="mb-4">
-        <label class="block text-xs font-medium text-gray-700 mb-1.5">Email <span class="text-gray-400">(optional)</span></label>
-        <input type="email" name="email" placeholder="admin@example.com"
-          class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand">
-        <p class="text-[10px] text-gray-400 mt-1">Used for expiry notifications from Let's Encrypt.</p>
-      </div>
-
-      <div class="bg-blue-50 border border-blue-100 rounded-lg p-3 mb-4">
-        <p class="text-[10px] text-blue-700">
-          <i class="ti ti-info-circle mr-1"></i>
-          Make sure your domain's DNS points to this server before installing SSL.
-          Port 80 must be accessible.
-        </p>
-      </div>
-
-      <button type="submit"
-        class="w-full bg-green-600 hover:bg-green-700 text-white text-sm font-medium py-2.5 rounded-lg transition-colors">
-        <i class="ti ti-lock mr-1"></i> Install SSL Certificate
-      </button>
-    </form>
-
-    <!-- Renew all -->
-    <form method="POST" action="/ssl/renew" class="mt-3">
-      <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
-      <button type="submit"
-        class="w-full border border-gray-200 text-gray-600 text-sm py-2.5 rounded-lg hover:bg-gray-50 transition-colors">
-        <i class="ti ti-refresh mr-1"></i> Renew All Certificates
+      <button type="submit" class="btn btn-secondary w-full">
+        <i class="ti ti-refresh text-sm"></i> <?= e(t('ssl.renew_all')) ?>
       </button>
     </form>
   </div>
 
-  <!-- SSL Status table -->
-  <div class="col-span-2 bg-white rounded-xl border border-gray-200">
-    <div class="px-5 py-3.5 border-b border-gray-100">
-      <span class="text-sm font-semibold text-gray-800">Certificate Status</span>
+  <!-- Certificate status table -->
+  <div class="lg:col-span-2 card overflow-hidden">
+    <div class="card-head">
+      <h2 class="card-title"><i class="ti ti-certificate text-zinc-400"></i> <?= e(t('ssl.cert_status_title')) ?></h2>
     </div>
 
     <?php if (empty($sites)): ?>
-      <p class="px-5 py-10 text-sm text-gray-400 text-center">No sites configured.</p>
+      <div class="px-5 py-10 text-center text-sm text-zinc-400"><?= e(t('sites.empty')) ?></div>
     <?php else: ?>
-    <table class="w-full">
+    <table class="tbl">
       <thead>
-        <tr class="bg-gray-50 border-b border-gray-100">
-          <th class="text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-5 py-2.5">Domain</th>
-          <th class="text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-5 py-2.5">Type</th>
-          <th class="text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-5 py-2.5">Expiry</th>
-          <th class="text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-5 py-2.5">Status</th>
-          <th class="px-5 py-2.5"></th>
+        <tr>
+          <th><?= e(t('col.domain')) ?></th>
+          <th><?= e(t('col.cert_type')) ?></th>
+          <th><?= e(t('col.expiry')) ?></th>
+          <th><?= e(t('col.status')) ?></th>
+          <th class="text-right"><?= e(t('col.action')) ?></th>
         </tr>
       </thead>
-      <tbody class="divide-y divide-gray-50">
+      <tbody>
         <?php foreach ($sites as $site):
-          $cert = $certs[$site['domain']] ?? ['type' => 'none', 'expiry' => null, 'daysLeft' => null];
-          $isLE = $cert['type'] === "Let's Encrypt";
-          $isExpiring = $cert['daysLeft'] !== null && $cert['daysLeft'] < 30;
-          $isExpired  = $cert['daysLeft'] !== null && $cert['daysLeft'] < 0;
+          $cert       = $certs[$site['domain']] ?? ['type' => 'none', 'expiry' => null, 'daysLeft' => null];
+          $isLE       = $cert['type'] === "Let's Encrypt";
+          $daysLeft   = $cert['daysLeft'];
+          $isExpiring = $daysLeft !== null && $daysLeft < 30 && $daysLeft >= 0;
+          $isExpired  = $daysLeft !== null && $daysLeft < 0;
         ?>
-        <tr class="hover:bg-gray-50">
-          <td class="px-5 py-3">
-            <a href="/sites/<?= e($site['domain']) ?>" class="text-sm font-medium text-gray-900 hover:text-brand">
-              <?= e($site['domain']) ?>
-            </a>
+        <tr>
+          <td class="font-medium text-zinc-900">
+            <a href="/sites/<?= e($site['domain']) ?>" class="hover:text-ink"><?= e($site['domain']) ?></a>
           </td>
-          <td class="px-5 py-3">
-            <span class="text-xs <?= $isLE ? 'text-green-700' : 'text-gray-500' ?>">
-              <?= e($cert['type']) ?>
+          <td>
+            <span class="text-xs <?= $isLE ? 'text-emerald-700 font-medium' : 'text-zinc-400' ?>">
+              <?= e($cert['type'] === 'none' ? '—' : $cert['type']) ?>
             </span>
           </td>
-          <td class="px-5 py-3 text-xs text-gray-500">
+          <td class="mono text-xs text-zinc-500">
             <?= $cert['expiry'] ? e($cert['expiry']) : '—' ?>
           </td>
-          <td class="px-5 py-3">
+          <td>
             <?php if ($cert['type'] === 'none'): ?>
-              <span class="text-[11px] bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">No SSL</span>
+              <span class="badge badge-muted"><?= e(t('ssl.no_ssl')) ?></span>
             <?php elseif ($isExpired): ?>
-              <span class="text-[11px] bg-red-100 text-red-600 px-2 py-0.5 rounded-full">Expired</span>
+              <span class="badge badge-danger"><?= e(t('ssl.expired')) ?></span>
             <?php elseif ($isExpiring): ?>
-              <span class="text-[11px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
-                Expiring (<?= e($cert['daysLeft']) ?>d)
+              <span class="badge badge-warn">
+                <?= e(t('ssl.expiring_n', ['n' => $daysLeft])) ?>
               </span>
             <?php else: ?>
-              <span class="text-[11px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full">
-                Valid <?= $cert['daysLeft'] !== null ? '(' . e($cert['daysLeft']) . 'd)' : '' ?>
+              <span class="badge badge-ok">
+                <span class="dot bg-emerald-500"></span>
+                <?= $daysLeft !== null ? e(t('ssl.valid_n', ['n' => $daysLeft])) : e(t('site.ov.ssl_active')) ?>
               </span>
             <?php endif; ?>
           </td>
-          <td class="px-5 py-3 text-right">
+          <td class="text-right">
             <?php if (!$isLE): ?>
-              <form method="POST" action="/ssl/install" class="inline">
-                <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
-                <input type="hidden" name="domain" value="<?= e($site['domain']) ?>">
-                <button type="submit" class="text-xs text-green-600 hover:text-green-700">
-                  Install SSL →
-                </button>
-              </form>
+            <form method="POST" action="/ssl/install" class="inline">
+              <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+              <input type="hidden" name="domain" value="<?= e($site['domain']) ?>">
+              <button type="submit"
+                      class="text-xs font-semibold text-emerald-600 hover:bg-emerald-50 px-2.5 py-1.5 rounded-md">
+                <?= e(t('ssl.install_link')) ?>
+              </button>
+            </form>
             <?php else: ?>
-              <form method="POST" action="/ssl/renew" class="inline">
-                <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
-                <input type="hidden" name="domain" value="<?= e($site['domain']) ?>">
-                <button type="submit" class="text-xs text-gray-400 hover:text-brand">Renew</button>
-              </form>
+            <form method="POST" action="/ssl/renew" class="inline">
+              <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+              <input type="hidden" name="domain" value="<?= e($site['domain']) ?>">
+              <button type="submit"
+                      class="text-xs font-semibold text-ink hover:bg-ink-pale px-2.5 py-1.5 rounded-md">
+                <?= e(t('ssl.renew')) ?>
+              </button>
+            </form>
             <?php endif; ?>
           </td>
         </tr>
         <?php endforeach; ?>
       </tbody>
     </table>
-    <?php endif; ?>
-
-    <div class="px-5 py-3 border-t border-gray-100">
-      <p class="text-[10px] text-gray-400">
-        <i class="ti ti-info-circle mr-1"></i>
-        Auto-renewal is configured via cron: <code class="bg-gray-100 px-1 rounded">0 2 * * * certbot renew --nginx</code>
+    <div class="px-5 py-3 border-t border-zinc-100">
+      <p class="text-[11px] text-zinc-400 flex items-center gap-1.5">
+        <i class="ti ti-info-circle text-sm"></i>
+        <?= e(t('ssl.auto_renew_note')) ?>
+        <span class="mono bg-zinc-100 px-1.5 py-0.5 rounded text-[10px]">0 2 * * * certbot renew --nginx</span>
       </p>
     </div>
+    <?php endif; ?>
   </div>
+
 </div>
