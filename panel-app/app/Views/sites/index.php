@@ -1,75 +1,147 @@
-<?php $pageTitle = 'Sites'; ?>
+<?php
+$pageTitle = t('nav.sites');
+$count     = count($sites);
 
+$appIcon = static function (string $type): string {
+    return match ($type) {
+        'wordpress' => 'ti-brand-wordpress',
+        'laravel'   => 'ti-code',
+        'proxy'     => 'ti-arrow-guide',
+        'static'    => 'ti-file-text',
+        default     => 'ti-code',
+    };
+};
+$appLabel = static function (string $type): string {
+    return match ($type) {
+        'wordpress' => t('app.wordpress'),
+        'laravel'   => t('app.laravel'),
+        'static'    => t('app.static'),
+        'proxy'     => t('app.proxy'),
+        default     => t('app.php'),
+    };
+};
+$usesPhp = static function (string $type): bool {
+    return in_array($type, ['wordpress', 'laravel', 'php'], true);
+};
+?>
+
+<!-- page header -->
 <div class="flex items-center justify-between mb-5">
   <div>
-    <h2 class="text-sm font-semibold text-gray-900">All Sites</h2>
-    <p class="text-xs text-gray-400 mt-0.5"><?= count($sites) ?> site(s) configured</p>
+    <h1 class="font-head font-bold text-[22px] text-zinc-900 leading-none"><?= e(t('nav.sites')) ?></h1>
+    <p class="text-sm text-zinc-400 mt-1.5"><?= e(t('sites.subtitle', ['n' => $count])) ?></p>
   </div>
-  <a href="/sites/add" class="inline-flex items-center gap-1.5 bg-brand hover:bg-brand-light text-white text-xs font-medium px-3.5 py-2 rounded-lg transition-colors">
-    <i class="ti ti-plus text-sm"></i> Add Site
-  </a>
+  <a href="/sites/add" class="btn btn-primary"><i class="ti ti-plus text-sm"></i> <?= e(t('sites.new')) ?></a>
 </div>
 
 <?php if (empty($sites)): ?>
-<div class="bg-white rounded-xl border border-gray-200 px-8 py-16 text-center">
-  <i class="ti ti-world text-5xl text-gray-200 block mb-3"></i>
-  <p class="text-sm font-medium text-gray-700">No sites yet</p>
-  <p class="text-xs text-gray-400 mb-4">Add your first site to get started</p>
-  <a href="/sites/add" class="inline-flex items-center gap-1.5 bg-brand text-white text-xs font-medium px-4 py-2 rounded-lg">
-    <i class="ti ti-plus"></i> Add Site
-  </a>
+
+<div class="card px-8 py-16 text-center">
+  <i class="ti ti-world text-5xl text-zinc-200 block mb-3"></i>
+  <p class="text-sm font-medium text-zinc-700 mb-1"><?= e(t('sites.empty')) ?></p>
+  <p class="text-xs text-zinc-400 mb-5"><?= e(t('sites.add_first')) ?></p>
+  <a href="/sites/add" class="btn btn-primary"><i class="ti ti-plus text-sm"></i> <?= e(t('sites.new')) ?></a>
 </div>
+
 <?php else: ?>
-<div class="bg-white rounded-xl border border-gray-200 overflow-hidden">
-  <table class="w-full">
+
+<!-- toolbar -->
+<div class="flex items-center gap-3 mb-4">
+  <div class="relative flex-1 max-w-xs">
+    <i class="ti ti-search absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 text-sm pointer-events-none"></i>
+    <input type="text"
+           id="siteSearch"
+           placeholder="<?= e(t('sites.search_ph')) ?>"
+           oninput="filterSites()"
+           class="inp pl-9 w-full">
+  </div>
+  <select id="appFilter"
+          onchange="filterSites()"
+          class="bg-white border border-zinc-200 hover:border-zinc-300 focus:border-ink/40 focus:ring-2 focus:ring-ink/10 rounded-lg px-3 py-2 text-xs font-medium text-zinc-600 outline-none cursor-pointer">
+    <option value="all"><?= e(t('sites.filter_all')) ?></option>
+    <option value="wordpress"><?= e(t('app.wordpress')) ?></option>
+    <option value="laravel"><?= e(t('app.laravel')) ?></option>
+    <option value="php"><?= e(t('app.php')) ?></option>
+    <option value="static"><?= e(t('app.static')) ?></option>
+    <option value="proxy"><?= e(t('app.proxy')) ?></option>
+  </select>
+</div>
+
+<!-- sites table -->
+<div class="card overflow-hidden">
+  <table class="tbl" id="sitesTable">
     <thead>
-      <tr class="bg-gray-50 border-b border-gray-200">
-        <th class="text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wider px-4 py-3">Domain</th>
-        <th class="text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wider px-4 py-3">Type</th>
-        <th class="text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wider px-4 py-3">PHP</th>
-        <th class="text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wider px-4 py-3">Cache</th>
-        <th class="text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wider px-4 py-3">SSL</th>
-        <th class="px-4 py-3"></th>
+      <tr>
+        <th><?= e(t('col.domain')) ?></th>
+        <th><?= e(t('col.app')) ?></th>
+        <th class="text-right"><?= e(t('col.action')) ?></th>
       </tr>
     </thead>
-    <tbody class="divide-y divide-gray-100">
-      <?php foreach ($sites as $site): ?>
-      <tr class="hover:bg-gray-50 transition-colors">
-        <td class="px-4 py-3">
-          <a href="/sites/<?= e($site['domain']) ?>" class="text-sm font-medium text-gray-900 hover:text-brand">
-            <?= e($site['domain']) ?>
-          </a>
+    <tbody>
+    <?php foreach ($sites as $site):
+        $type       = $site['type'] ?? 'php';
+        $domain     = $site['domain'];
+        $isStatic   = $type === 'static';
+        $iconBg     = $isStatic ? 'bg-zinc-100' : 'bg-ink-pale';
+        $iconColor  = $isStatic ? 'text-zinc-400' : 'text-ink';
+        $hasLe      = ($site['ssl_type'] ?? '') === 'letsencrypt';
+        $hasCache   = (bool) ($site['cache_enabled'] ?? false);
+        $phpVer     = $site['php_version'] ?? '';
+        $createdAt  = $site['created_at'] ?? '';
+        $createdFmt = $createdAt ? date('M j, Y', strtotime($createdAt)) : '';
+    ?>
+      <tr data-domain="<?= e($domain) ?>" data-type="<?= e($type) ?>" class="cursor-pointer">
+        <td class="px-5 py-3.5">
+          <div class="flex items-center gap-3">
+            <span class="w-8 h-8 rounded-lg <?= $iconBg ?> flex items-center justify-center shrink-0">
+              <i class="ti <?= e($appIcon($type)) ?> <?= $iconColor ?>"></i>
+            </span>
+            <div>
+              <div class="font-medium text-zinc-900 flex items-center gap-1.5">
+                <?= e($domain) ?>
+                <?php if ($hasLe): ?>
+                  <i class="ti ti-lock-check text-emerald-500 text-sm" title="SSL active"></i>
+                <?php endif; ?>
+                <?php if ($hasCache): ?>
+                  <i class="ti ti-bolt text-speed text-sm" title="Cache on"></i>
+                <?php endif; ?>
+              </div>
+              <?php if ($createdFmt): ?>
+                <div class="text-[11px] text-zinc-400"><?= e(t('sites.created_on', ['date' => $createdFmt])) ?></div>
+              <?php endif; ?>
+            </div>
+          </div>
         </td>
-        <td class="px-4 py-3">
-          <span class="text-xs text-gray-600"><?= e(ucfirst($site['type'])) ?></span>
-        </td>
-        <td class="px-4 py-3">
-          <span class="text-[11px] font-medium bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">
-            PHP <?= e($site['php_version']) ?>
-          </span>
-        </td>
-        <td class="px-4 py-3">
-          <?php if ($site['cache_enabled']): ?>
-            <span class="text-[11px] font-medium bg-brand-pale text-brand px-2 py-0.5 rounded-full">FastCGI</span>
-          <?php else: ?>
-            <span class="text-[11px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">Disabled</span>
+        <td class="px-3 py-3.5">
+          <span class="text-xs text-zinc-700"><?= e($appLabel($type)) ?></span>
+          <?php if ($phpVer && $usesPhp($type)): ?>
+            <span class="mono text-[11px] text-zinc-400">· PHP <?= e($phpVer) ?></span>
           <?php endif; ?>
         </td>
-        <td class="px-4 py-3">
-          <?php if ($site['ssl_type'] === 'letsencrypt'): ?>
-            <span class="text-[11px] font-medium bg-green-100 text-green-700 px-2 py-0.5 rounded-full">Let's Encrypt</span>
-          <?php else: ?>
-            <span class="text-[11px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">Self-signed</span>
-          <?php endif; ?>
-        </td>
-        <td class="px-4 py-3 text-right">
-          <a href="/sites/<?= e($site['domain']) ?>" class="inline-flex items-center text-xs text-gray-500 hover:text-brand gap-1 transition-colors">
-            <i class="ti ti-settings text-sm"></i> Manage
-          </a>
+        <td class="px-5 py-3.5">
+          <div class="flex items-center justify-end">
+            <a href="/sites/<?= e($domain) ?>"
+               class="text-xs font-semibold text-ink hover:bg-ink-pale px-2.5 py-1.5 rounded-md transition-colors">
+              <?= e(t('action.manage')) ?>
+            </a>
+          </div>
         </td>
       </tr>
-      <?php endforeach; ?>
+    <?php endforeach; ?>
     </tbody>
   </table>
 </div>
+
+<script>
+function filterSites() {
+  var q    = document.getElementById('siteSearch').value.toLowerCase();
+  var type = document.getElementById('appFilter').value;
+  document.querySelectorAll('#sitesTable tbody tr[data-domain]').forEach(function (tr) {
+    var show = (type === 'all' || tr.dataset.type === type)
+            && (!q || tr.dataset.domain.includes(q));
+    tr.style.display = show ? '' : 'none';
+  });
+}
+</script>
+
 <?php endif; ?>

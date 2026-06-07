@@ -88,7 +88,20 @@ return [
     'services.stopped'      => 'stopped',
     'services.empty'        => 'No services detected',
 
-    // Sites snapshot
+    // Sites list page
+    'sites.subtitle'        => '{n} sites on this server',
+    'sites.new'             => 'New Site',
+    'sites.search_ph'       => 'Search domain…',
+    'sites.filter_all'      => 'All apps',
+    'sites.created_on'      => 'Created {date}',
+    'col.site_user'         => 'Site User',
+    'app.wordpress'         => 'WordPress',
+    'app.laravel'           => 'Laravel',
+    'app.php'               => 'PHP',
+    'app.static'            => 'Static',
+    'app.proxy'             => 'Reverse Proxy',
+
+    // Sites snapshot (dashboard)
     'dash.sites'            => 'Sites',
     'sites.view_all'        => 'View all',
     'sites.empty'           => 'No sites yet',
