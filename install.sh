@@ -75,9 +75,8 @@ die()   {
 }
 
 run() {
-  log "RUN: $*"
   if [[ "$DRY_RUN" == "true" ]]; then
-    warn "[dry-run] skipped: $*"
+    warn "[dry-run] skipped: $1 …"
     return 0
   fi
   "$@" >> "$PANEL_LOG" 2>&1
@@ -280,8 +279,8 @@ _banner() {
   echo -e "\n${BOLD}${CYAN}"
   echo "  ╔══════════════════════════════════════════════════╗"
   echo "  ║                                                  ║"
-  echo "  ║        AidiPanel Installer v${PANEL_VERSION}              ║"
-  echo "  ║   Nginx + FastCGI Cache + PHP-FPM + Redis        ║"
+  echo "  ║        AidiPanel Installer v${PANEL_VERSION}     ║"
+  echo "  ║     Nginx + FastCGI Cache + PHP-FPM + Redis      ║"
   echo "  ║                      by rezzaid                  ║"
   echo "  ║                                                  ║"
   echo "  ╚══════════════════════════════════════════════════╝"
