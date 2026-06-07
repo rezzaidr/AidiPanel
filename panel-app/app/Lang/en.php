@@ -86,6 +86,7 @@ return [
     'vps.cores'             => '{n} vCPU',
 
     // System charts
+    'chart.title'           => 'System metrics',
     'chart.cpu'             => 'CPU Usage',
     'chart.memory'          => 'Memory Usage',
     'chart.disk'            => 'Disk Usage',

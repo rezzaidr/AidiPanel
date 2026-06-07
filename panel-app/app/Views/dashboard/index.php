@@ -31,17 +31,7 @@ $fmtBytes = fn(float $b): string =>
     <h1 class="font-head font-bold text-[22px] text-zinc-900 leading-none"><?= e(t('nav.dashboard')) ?></h1>
     <p class="text-sm text-zinc-400 mt-1.5"><?= e(t('dash.subtitle')) ?></p>
   </div>
-  <!-- time range dropdown -->
-  <div class="flex items-center gap-2">
-    <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-    <select id="rangeSelect"
-            class="text-xs font-medium text-zinc-600 bg-white border border-zinc-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-ink cursor-pointer">
-      <option value="60">Live · 5 min</option>
-      <option value="180">Last 15 min</option>
-      <option value="360">Last 30 min</option>
-      <option value="720">Last 1 hour</option>
-    </select>
-  </div>
+  <span class="badge badge-muted"><span class="dot bg-emerald-500"></span> <?= e(t('dash.live')) ?></span>
 </div>
 
 <!-- VPS status -->
@@ -131,35 +121,48 @@ $fmtBytes = fn(float $b): string =>
   </div>
 </div>
 
-<!-- system charts -->
-<div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5">
-  <div class="card p-4">
-    <div class="flex items-center justify-between mb-1">
-      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-cpu text-ink"></i> <?= e(t('chart.cpu')) ?></span>
-      <span class="mono font-semibold text-lg text-zinc-900"><span id="cpuNow"><?= e($metrics['cpu']) ?></span><span class="text-zinc-300 text-sm">%</span></span>
-    </div>
-    <div id="chartCpu"></div>
+<!-- system charts — single card -->
+<div class="card overflow-hidden mb-5">
+  <div class="card-head">
+    <h2 class="card-title"><i class="ti ti-chart-line text-ink"></i> <?= e(t('chart.title')) ?></h2>
+    <select id="rangeSelect"
+            class="text-xs font-medium text-zinc-600 bg-white border border-zinc-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-ink cursor-pointer">
+      <option value="360">Last 30 min</option>
+      <option value="720" selected>Last 1 hour</option>
+      <option value="2160">Last 3 hours</option>
+      <option value="4320">Last 6 hours</option>
+      <option value="8640">Last 12 hours</option>
+    </select>
   </div>
-  <div class="card p-4">
-    <div class="flex items-center justify-between mb-1">
-      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-cpu-2 text-speed"></i> <?= e(t('chart.memory')) ?></span>
-      <span class="mono font-semibold text-lg text-zinc-900"><span id="memNow"><?= e($metrics['memory']['percent']) ?></span><span class="text-zinc-300 text-sm">%</span></span>
+  <div class="grid grid-cols-1 lg:grid-cols-2">
+    <div class="p-4 border-b border-zinc-100 lg:border-r">
+      <div class="flex items-center justify-between mb-1">
+        <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-cpu text-ink"></i> <?= e(t('chart.cpu')) ?></span>
+        <span class="mono font-semibold text-lg text-zinc-900"><span id="cpuNow"><?= e($metrics['cpu']) ?></span><span class="text-zinc-300 text-sm">%</span></span>
+      </div>
+      <div id="chartCpu"></div>
     </div>
-    <div id="chartMem"></div>
-  </div>
-  <div class="card p-4">
-    <div class="flex items-center justify-between mb-1">
-      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-device-floppy text-amber-500"></i> <?= e(t('chart.disk')) ?></span>
-      <span class="mono font-semibold text-lg text-zinc-900"><span id="diskNow"><?= e($metrics['disk']['percent']) ?></span><span class="text-zinc-300 text-sm">%</span></span>
+    <div class="p-4 border-b border-zinc-100">
+      <div class="flex items-center justify-between mb-1">
+        <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-cpu-2 text-speed"></i> <?= e(t('chart.memory')) ?></span>
+        <span class="mono font-semibold text-lg text-zinc-900"><span id="memNow"><?= e($metrics['memory']['percent']) ?></span><span class="text-zinc-300 text-sm">%</span></span>
+      </div>
+      <div id="chartMem"></div>
     </div>
-    <div id="chartDisk"></div>
-  </div>
-  <div class="card p-4">
-    <div class="flex items-center justify-between mb-1">
-      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-activity text-emerald-500"></i> <?= e(t('chart.load')) ?></span>
-      <span class="mono font-semibold text-lg text-zinc-900"><span id="loadNow"><?= e($metrics['load']['1m']) ?></span><span class="text-zinc-300 text-sm">/ <?= e($vps['cores'] ?? '—') ?></span></span>
+    <div class="p-4 lg:border-r border-zinc-100">
+      <div class="flex items-center justify-between mb-1">
+        <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-device-floppy text-amber-500"></i> <?= e(t('chart.disk')) ?></span>
+        <span class="mono font-semibold text-lg text-zinc-900"><span id="diskNow"><?= e($metrics['disk']['percent']) ?></span><span class="text-zinc-300 text-sm">%</span></span>
+      </div>
+      <div id="chartDisk"></div>
     </div>
-    <div id="chartLoad"></div>
+    <div class="p-4">
+      <div class="flex items-center justify-between mb-1">
+        <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-activity text-emerald-500"></i> <?= e(t('chart.load')) ?></span>
+        <span class="mono font-semibold text-lg text-zinc-900"><span id="loadNow"><?= e($metrics['load']['1m']) ?></span><span class="text-zinc-300 text-sm">/ <?= e($vps['cores'] ?? '—') ?></span></span>
+      </div>
+      <div id="chartLoad"></div>
+    </div>
   </div>
 </div>
 
@@ -265,9 +268,10 @@ $fmtBytes = fn(float $b): string =>
 <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
 <script>
 (function () {
-  const MAX  = 720;    // 1 hour at 5s cadence
-  const POLL = 5000;
-  let   WIN  = 60;     // visible window (controlled by dropdown)
+  const MAX       = 8640;
+  const POLL      = 5000;
+  const STORE_KEY = 'aidipanel_dash_v1';
+  let   WIN       = 720;
 
   const seed = <?= json_encode([
       'cpu'   => (float) $metrics['cpu'],
@@ -281,76 +285,90 @@ $fmtBytes = fn(float $b): string =>
 
   const labels = [];
   const D = { cpu: [], mem: [], disk: [], l1: [], l5: [], l15: [] };
-  const round = v => Math.round((+v || 0) * 10) / 10;
-  const setText = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-  // HH:MM only — short enough so tickAmount:5 never overlaps
-  const now = () => { const d = new Date(), p = n => String(n).padStart(2,'0'); return p(d.getHours())+':'+p(d.getMinutes()); };
-
+  const round    = v => Math.round((+v || 0) * 10) / 10;
+  const setText  = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  const nowLabel = () => { const d = new Date(), p = n => String(n).padStart(2,'0'); return p(d.getHours())+':'+p(d.getMinutes()); };
   const fmtBytes = b => b >= 1048576 ? (b/1048576).toFixed(1)+' MB/s' : b >= 1024 ? (b/1024).toFixed(1)+' KB/s' : Math.round(b)+' B/s';
 
-  function baseOpts(colors, type, max, legend) {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) {
+      const saved = JSON.parse(raw);
+      if (saved && saved.ts && (Date.now() - saved.ts) < 12 * 3600 * 1000 && saved.labels?.length) {
+        labels.push(...saved.labels);
+        Object.keys(D).forEach(k => { if (saved.D?.[k]) D[k].push(...saved.D[k]); });
+      }
+    }
+  } catch (e) {}
+
+  function saveToStorage() {
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify({
+        labels: labels.slice(-MAX),
+        D: Object.fromEntries(Object.entries(D).map(([k, v]) => [k, v.slice(-MAX)])),
+        ts: Date.now(),
+      }));
+    } catch (e) {}
+  }
+  setInterval(saveToStorage, 30000);
+  window.addEventListener('beforeunload', saveToStorage);
+
+  function baseOpts(colors, type, yMax, legend) {
     return {
-      chart: { type, height: 150, toolbar: { show: false }, fontFamily: '"Plus Jakarta Sans"', animations: { enabled: true, easing: 'linear', dynamicAnimation: { speed: 600 } } },
+      chart: { type, height: 150, toolbar: { show: false }, fontFamily: '"Plus Jakarta Sans"', animations: { enabled: true, easing: 'linear', dynamicAnimation: { enabled: false } } },
       stroke: { curve: 'smooth', width: 2 },
       colors, fill: { type: 'solid', opacity: type === 'area' ? 0.10 : 1 },
       dataLabels: { enabled: false },
       legend: { show: legend, position: 'top', horizontalAlign: 'right', fontSize: '11px', markers: { width: 8, height: 8, radius: 4 }, itemMargin: { horizontal: 7 }, offsetY: -4 },
       grid: { borderColor: '#f1f1f4', strokeDashArray: 4, padding: { left: 6, right: 12, top: 0, bottom: -6 } },
-      xaxis: { categories: [], tickAmount: 5, labels: { style: { colors: '#a1a1aa', fontSize: '10px', fontFamily: '"JetBrains Mono"' }, hideOverlappingLabels: true, rotate: 0 }, axisBorder: { show: false }, axisTicks: { show: false }, tooltip: { enabled: false } },
-      yaxis: { max, min: 0, tickAmount: 4, labels: { style: { colors: '#a1a1aa', fontSize: '10px', fontFamily: '"JetBrains Mono"' }, formatter: v => Math.round(v * 10) / 10 } },
+      xaxis: { categories: [], tickAmount: 6, labels: { style: { colors: '#a1a1aa', fontSize: '10px', fontFamily: '"JetBrains Mono"' }, rotate: 0 }, axisBorder: { show: false }, axisTicks: { show: false }, tooltip: { enabled: false } },
+      yaxis: { max: yMax, min: 0, tickAmount: 4, labels: { style: { colors: '#a1a1aa', fontSize: '10px', fontFamily: '"JetBrains Mono"' }, formatter: v => Math.round(v * 10) / 10 } },
       tooltip: { theme: 'light', shared: legend },
     };
   }
 
   const loadMax = Math.max(2, seed.cores || 1);
-  const cpu  = new ApexCharts(document.querySelector('#chartCpu'),  Object.assign(baseOpts(['#322C7A'], 'area', 100, false), { series: [{ name: 'CPU', data: [] }] }));
-  const mem  = new ApexCharts(document.querySelector('#chartMem'),  Object.assign(baseOpts(['#0891B2'], 'area', 100, false), { series: [{ name: 'Memory', data: [] }] }));
-  const disk = new ApexCharts(document.querySelector('#chartDisk'), Object.assign(baseOpts(['#F59E0B'], 'area', 100, false), { series: [{ name: 'Disk', data: [] }] }));
-  const load = new ApexCharts(document.querySelector('#chartLoad'), Object.assign(baseOpts(['#322C7A', '#0891B2', '#F59E0B'], 'line', loadMax, true), { series: [{ name: '1m', data: [] }, { name: '5m', data: [] }, { name: '15m', data: [] }] }));
+  const cpu  = new ApexCharts(document.querySelector('#chartCpu'),  { ...baseOpts(['#322C7A'], 'area', 100, false),       series: [{ name: 'CPU',    data: [] }] });
+  const mem  = new ApexCharts(document.querySelector('#chartMem'),  { ...baseOpts(['#0891B2'], 'area', 100, false),       series: [{ name: 'Memory', data: [] }] });
+  const disk = new ApexCharts(document.querySelector('#chartDisk'), { ...baseOpts(['#F59E0B'], 'area', 100, false),       series: [{ name: 'Disk',   data: [] }] });
+  const load = new ApexCharts(document.querySelector('#chartLoad'), { ...baseOpts(['#322C7A','#0891B2','#F59E0B'], 'line', loadMax, true), series: [{ name: '1m', data: [] }, { name: '5m', data: [] }, { name: '15m', data: [] }] });
   cpu.render(); mem.render(); disk.render(); load.render();
 
   function sl(arr) { return arr.slice(-WIN); }
 
   function redraw() {
-    const lbl = sl(labels);
-    cpu.updateOptions({ xaxis: { categories: lbl } }, false, false);  cpu.updateSeries([{ name: 'CPU', data: sl(D.cpu) }]);
-    mem.updateOptions({ xaxis: { categories: lbl } }, false, false);  mem.updateSeries([{ name: 'Memory', data: sl(D.mem) }]);
-    disk.updateOptions({ xaxis: { categories: lbl } }, false, false); disk.updateSeries([{ name: 'Disk', data: sl(D.disk) }]);
-    load.updateOptions({ xaxis: { categories: lbl } }, false, false); load.updateSeries([{ name: '1m', data: sl(D.l1) }, { name: '5m', data: sl(D.l5) }, { name: '15m', data: sl(D.l15) }]);
+    // tickAmount must be included here every time — omitting it resets to default (all ticks)
+    const axis = { xaxis: { categories: sl(labels), tickAmount: 6 } };
+    cpu.updateOptions(axis, false, false);  cpu.updateSeries([{ name: 'CPU',    data: sl(D.cpu) }]);
+    mem.updateOptions(axis, false, false);  mem.updateSeries([{ name: 'Memory', data: sl(D.mem) }]);
+    disk.updateOptions(axis, false, false); disk.updateSeries([{ name: 'Disk',  data: sl(D.disk) }]);
+    load.updateOptions(axis, false, false); load.updateSeries([{ name: '1m', data: sl(D.l1) }, { name: '5m', data: sl(D.l5) }, { name: '15m', data: sl(D.l15) }]);
   }
 
   function push(m) {
-    labels.push(now());
+    labels.push(nowLabel());
     D.cpu.push(round(m.cpu)); D.mem.push(round(m.memory.percent)); D.disk.push(round(m.disk.percent));
     D.l1.push(round(m.load['1m'])); D.l5.push(round(m.load['5m'])); D.l15.push(round(m.load['15m']));
     if (labels.length > MAX) { labels.shift(); for (const k in D) D[k].shift(); }
 
-    setText('cpuNow', round(m.cpu));
-    setText('memNow', round(m.memory.percent));
+    setText('cpuNow',  round(m.cpu));
+    setText('memNow',  round(m.memory.percent));
     setText('diskNow', round(m.disk.percent));
     setText('loadNow', round(m.load['1m']));
-
-    // Update live net KPI cards
-    if (m.net) {
-      setText('kpiNetRx', fmtBytes(m.net.rx_rate || 0));
-      setText('kpiNetTx', fmtBytes(m.net.tx_rate || 0));
-    }
+    if (m.net) { setText('kpiNetRx', fmtBytes(m.net.rx_rate || 0)); setText('kpiNetTx', fmtBytes(m.net.tx_rate || 0)); }
 
     redraw();
   }
 
-  // Seed with initial server-rendered values
   push({ cpu: seed.cpu, memory: { percent: seed.mem }, disk: { percent: seed.disk }, load: { '1m': seed.l1, '5m': seed.l5, '15m': seed.l15 }, net: null });
 
-  // Time range dropdown
   document.getElementById('rangeSelect').addEventListener('change', function () {
     WIN = parseInt(this.value, 10);
     redraw();
   });
 
-  // Live polling
   setInterval(async () => {
-    try { const m = await window.api('/api/metrics'); if (m && m.cpu !== undefined) push(m); } catch (e) {}
+    try { const m = await window.api('/api/metrics'); if (m?.cpu !== undefined) push(m); } catch (e) {}
   }, POLL);
 })();
 </script>
