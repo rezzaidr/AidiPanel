@@ -54,4 +54,52 @@ return [
     'admin.tuning.desc'     => 'Auto-tune PHP-FPM, Nginx, MariaDB, delivery defaults',
     'admin.backups.title'   => 'Backups',
     'admin.backups.desc'    => 'Scheduled and on-demand server backups',
+
+    // Dashboard
+    'dash.subtitle'         => 'Monitoring & server status',
+    'dash.live'             => 'Live · every 5s',
+    'dash.attention'        => 'Needs Attention',
+    'dash.allclear'         => 'All clear — nothing needs your attention right now.',
+    'dash.alert.service_down' => '{svc} is stopped',
+    'dash.alert.disk_high'  => 'Disk is {pct}% full',
+    'dash.alert.mem_high'   => 'Memory is {pct}% used',
+
+    // VPS status panel
+    'vps.title'             => 'Server status',
+    'vps.os'                => 'OS',
+    'vps.hostname'          => 'Hostname',
+    'vps.cpu'               => 'CPU',
+    'vps.memory'            => 'Memory',
+    'vps.cloud'             => 'Cloud',
+    'vps.droplet'           => 'Droplet ID',
+    'vps.region'            => 'Region',
+    'vps.ipv4'              => 'IPv4 Public',
+    'vps.cores'             => '{n} vCPU',
+
+    // System charts
+    'chart.cpu'             => 'CPU Usage',
+    'chart.memory'          => 'Memory Usage',
+    'chart.disk'            => 'Disk Usage',
+    'chart.load'            => 'Load Average',
+
+    // Services panel
+    'services.title'        => 'Services',
+    'services.running'      => 'running',
+    'services.stopped'      => 'stopped',
+    'services.empty'        => 'No services detected',
+
+    // Sites snapshot
+    'dash.sites'            => 'Sites',
+    'sites.view_all'        => 'View all',
+    'sites.empty'           => 'No sites yet',
+    'sites.add_first'       => 'Add your first site',
+    'col.domain'            => 'Domain',
+    'col.app'               => 'App',
+    'col.cache'             => 'Cache',
+    'col.ssl'               => 'SSL',
+    'col.action'            => 'Action',
+    'cache.on'              => 'Cached',
+    'cache.off'             => 'No cache',
+    'ssl.le'                => "Let's Encrypt",
+    'ssl.self'              => 'Self-signed',
 ];
