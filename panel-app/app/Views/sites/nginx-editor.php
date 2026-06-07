@@ -1,35 +1,46 @@
-<?php $pageTitle = 'Nginx Config — ' . e($site['domain']); ?>
+<?php $pageTitle = t('nginx.editor.title') . ' — ' . $site['domain']; ?>
 
-<div class="mb-4">
-  <a href="/sites/<?= e($site['domain']) ?>" class="text-xs text-gray-400 hover:text-gray-700 flex items-center gap-1">
-    <i class="ti ti-arrow-left text-sm"></i> Back to <?= e($site['domain']) ?>
+<!-- page header -->
+<div class="mb-5">
+  <a href="/sites/<?= e($site['domain']) ?>"
+     class="text-xs text-zinc-400 hover:text-ink flex items-center gap-1 mb-2">
+    <i class="ti ti-arrow-left text-sm"></i> <?= e($site['domain']) ?>
   </a>
+  <h1 class="font-head font-bold text-[22px] text-zinc-900 leading-none"><?= e(t('nginx.editor.title')) ?></h1>
 </div>
 
-<div class="bg-white rounded-xl border border-gray-200">
-  <div class="flex items-center justify-between px-5 py-3.5 border-b border-gray-200">
+<div class="card overflow-hidden">
+
+  <!-- header -->
+  <div class="card-head">
     <div>
-      <span class="text-sm font-semibold text-gray-900">Nginx Config Editor</span>
-      <span class="ml-2 text-xs font-mono text-gray-400">/etc/nginx/sites-available/<?= e($site['domain']) ?>.conf</span>
+      <h2 class="card-title">
+        <i class="ti ti-code text-zinc-400"></i>
+        /etc/nginx/sites-available/<span class="text-ink"><?= e($site['domain']) ?></span>.conf
+      </h2>
     </div>
-    <span class="text-[10px] bg-amber-50 border border-amber-200 text-amber-700 px-2.5 py-1 rounded-full">
-      <i class="ti ti-alert-triangle mr-0.5"></i> Edit with caution
+    <span class="badge badge-warn">
+      <i class="ti ti-alert-triangle text-xs"></i>
+      <?= e(t('nginx.editor.caution')) ?>
     </span>
   </div>
 
+  <!-- editor -->
   <form method="POST" action="/sites/<?= e($site['domain']) ?>/nginx">
     <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
-    <textarea name="nginx_conf" spellcheck="false"
-      class="w-full font-mono text-xs text-gray-700 bg-gray-950 text-green-300 p-5 resize-y focus:outline-none rounded-b-xl"
-      style="min-height: 520px; tab-size: 4;"><?= e($nginxConf) ?></textarea>
 
-    <div class="flex items-center gap-3 px-5 py-3.5 border-t border-gray-100">
-      <button type="submit"
-        class="bg-brand hover:bg-brand-light text-white text-sm font-medium px-5 py-2 rounded-lg transition-colors">
-        <i class="ti ti-device-floppy mr-1"></i> Save & Reload Nginx
+    <textarea name="nginx_conf"
+              spellcheck="false"
+              class="w-full mono text-xs text-emerald-300 bg-zinc-950 p-5 resize-y focus:outline-none focus:ring-0 border-0"
+              style="min-height:520px; tab-size:4; line-height:1.65;"><?= e($nginxConf) ?></textarea>
+
+    <div class="flex items-center gap-3 px-5 py-3.5 border-t border-zinc-100">
+      <button type="submit" class="btn btn-primary">
+        <i class="ti ti-device-floppy text-sm"></i> <?= e(t('nginx.editor.save')) ?>
       </button>
-      <a href="/sites/<?= e($site['domain']) ?>" class="text-sm text-gray-500 hover:text-gray-700">Cancel</a>
-      <span class="ml-auto text-[10px] text-gray-400">Nginx config is tested before saving. Backup is created automatically.</span>
+      <a href="/sites/<?= e($site['domain']) ?>" class="btn btn-ghost"><?= e(t('common.cancel')) ?></a>
+      <span class="ml-auto text-[11px] text-zinc-400"><?= e(t('nginx.editor.note')) ?></span>
     </div>
   </form>
+
 </div>

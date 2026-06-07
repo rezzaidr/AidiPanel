@@ -1,48 +1,47 @@
-<?php $pageTitle = 'Add Site'; ?>
+<?php
+$pageTitle = t('site.add.title');
+$typeIcons = [
+    'wordpress' => 'ti-brand-wordpress',
+    'laravel'   => 'ti-code',
+    'php'       => 'ti-brand-php',
+    'static'    => 'ti-file-code',
+    'proxy'     => 'ti-arrow-guide',
+];
+?>
+
+<!-- page header -->
+<div class="mb-6">
+  <a href="/sites" class="text-xs text-zinc-400 hover:text-ink flex items-center gap-1 mb-2">
+    <i class="ti ti-arrow-left text-sm"></i> <?= e(t('nav.sites')) ?>
+  </a>
+  <h1 class="font-head font-bold text-[22px] text-zinc-900 leading-none"><?= e(t('site.add.title')) ?></h1>
+</div>
 
 <div class="max-w-xl">
-
-  <div class="mb-5">
-    <a href="/sites" class="text-xs text-gray-400 hover:text-gray-700 flex items-center gap-1">
-      <i class="ti ti-arrow-left text-sm"></i> Back to Sites
-    </a>
-  </div>
-
-  <div class="bg-white rounded-xl border border-gray-200 p-6" x-data="addSite()">
-
-    <h2 class="text-sm font-semibold text-gray-900 mb-5">Add New Site</h2>
-
-    <form method="POST" action="/sites/add">
+  <div class="card p-6" x-data="{ siteType: 'wordpress' }">
+    <form method="POST" action="/sites/add" class="space-y-5">
       <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
 
       <!-- Domain -->
-      <div class="mb-4">
-        <label class="block text-xs font-medium text-gray-700 mb-1.5">Domain Name</label>
-        <input type="text" name="domain" required placeholder="example.com"
-          class="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent">
-        <p class="text-[10px] text-gray-400 mt-1">Without www — both www and non-www will be configured.</p>
+      <div>
+        <label class="lbl"><?= e(t('site.add.domain_label')) ?></label>
+        <input type="text" name="domain" required placeholder="example.com" class="inp">
+        <p class="hint"><?= e(t('site.add.domain_hint')) ?></p>
       </div>
 
-      <!-- Site Type -->
-      <div class="mb-4">
-        <label class="block text-xs font-medium text-gray-700 mb-1.5">Application Type</label>
+      <!-- App type tiles -->
+      <div>
+        <label class="lbl"><?= e(t('site.add.type_label')) ?></label>
         <div class="grid grid-cols-3 gap-2">
           <?php foreach ($siteTypes as $value => $label): ?>
-          <label class="relative cursor-pointer">
+          <label class="cursor-pointer">
             <input type="radio" name="type" value="<?= e($value) ?>" class="sr-only peer"
-              <?= $value === 'wordpress' ? 'checked' : '' ?>
-              @change="siteType = '<?= e($value) ?>'">
-            <div class="border border-gray-200 rounded-lg px-3 py-2.5 text-center text-xs text-gray-600
-                        peer-checked:border-brand peer-checked:bg-brand-pale peer-checked:text-brand
-                        hover:border-gray-300 transition-all">
-              <i class="ti ti-<?= match($value) {
-                'wordpress' => 'brand-wordpress',
-                'laravel'   => 'brand-laravel',
-                'php'       => 'brand-php',
-                'static'    => 'file-code',
-                'proxy'     => 'network',
-                default     => 'world'
-              } ?> block text-xl mb-1"></i>
+                   <?= $value === 'wordpress' ? 'checked' : '' ?>
+                   @change="siteType = '<?= e($value) ?>'">
+            <div class="border border-zinc-200 rounded-xl px-2 py-3 text-center text-xs text-zinc-500
+                        peer-checked:border-ink peer-checked:bg-ink-pale peer-checked:text-ink
+                        hover:border-zinc-300 hover:bg-zinc-50 transition-all">
+              <i class="ti <?= e($typeIcons[$value] ?? 'ti-world') ?> block text-2xl mb-1.5"></i>
               <?= e($label) ?>
             </div>
           </label>
@@ -50,17 +49,17 @@
         </div>
       </div>
 
-      <!-- PHP Version (hidden for static) -->
-      <div class="mb-4" x-show="siteType !== 'static'" x-cloak>
-        <label class="block text-xs font-medium text-gray-700 mb-1.5">PHP Version</label>
+      <!-- PHP version (hidden for static + proxy) -->
+      <div x-show="siteType !== 'static' && siteType !== 'proxy'" x-cloak>
+        <label class="lbl"><?= e(t('site.add.php_label')) ?></label>
         <div class="flex gap-2">
           <?php foreach ($phpVersions as $v): ?>
-          <label class="relative cursor-pointer flex-1">
+          <label class="flex-1 cursor-pointer">
             <input type="radio" name="php_version" value="<?= e($v) ?>" class="sr-only peer"
-              <?= $v === '8.3' ? 'checked' : '' ?>>
-            <div class="border border-gray-200 rounded-lg py-2 text-center text-sm font-medium text-gray-600
-                        peer-checked:border-brand peer-checked:bg-brand-pale peer-checked:text-brand
-                        hover:border-gray-300 transition-all">
+                   <?= $v === '8.3' ? 'checked' : '' ?>>
+            <div class="border border-zinc-200 rounded-lg py-2 text-center text-sm font-medium text-zinc-600 mono
+                        peer-checked:border-ink peer-checked:bg-ink-pale peer-checked:text-ink
+                        hover:border-zinc-300 transition-all">
               PHP <?= e($v) ?>
             </div>
           </label>
@@ -68,27 +67,22 @@
         </div>
       </div>
 
-      <!-- Proxy pass (only for proxy type) -->
-      <div class="mb-4" x-show="siteType === 'proxy'" x-cloak>
-        <label class="block text-xs font-medium text-gray-700 mb-1.5">Proxy Pass URL</label>
-        <input type="text" name="proxy_pass" value="http://127.0.0.1:3000" placeholder="http://127.0.0.1:3000"
-          class="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand">
-        <p class="text-[10px] text-gray-400 mt-1">The upstream server URL (e.g. Node.js, Python app).</p>
+      <!-- Proxy pass (proxy only) -->
+      <div x-show="siteType === 'proxy'" x-cloak>
+        <label class="lbl"><?= e(t('site.add.proxy_label')) ?></label>
+        <input type="text" name="proxy_pass" value="http://127.0.0.1:3000"
+               placeholder="http://127.0.0.1:3000" class="inp mono">
+        <p class="hint"><?= e(t('site.add.proxy_hint')) ?></p>
       </div>
 
-      <div class="flex items-center gap-3 pt-2">
-        <button type="submit"
-          class="bg-brand hover:bg-brand-light text-white text-sm font-medium px-5 py-2.5 rounded-lg transition-colors">
-          Create Site
+      <!-- Submit -->
+      <div class="flex items-center gap-3 pt-1">
+        <button type="submit" class="btn btn-primary">
+          <i class="ti ti-plus text-sm"></i> <?= e(t('site.add.submit')) ?>
         </button>
-        <a href="/sites" class="text-sm text-gray-500 hover:text-gray-700">Cancel</a>
+        <a href="/sites" class="btn btn-ghost"><?= e(t('common.cancel')) ?></a>
       </div>
+
     </form>
   </div>
 </div>
-
-<script>
-function addSite() {
-  return { siteType: 'wordpress' }
-}
-</script>

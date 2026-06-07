@@ -264,6 +264,23 @@ return [
     'logs.activity_title'   => 'Panel activity log',
     'logs.activity_empty'   => 'No activity yet.',
 
+    // Add Site form
+    'site.add.title'        => 'Add New Site',
+    'site.add.domain_label' => 'Domain',
+    'site.add.domain_hint'  => 'Without www — both www and non-www will be configured.',
+    'site.add.type_label'   => 'Application type',
+    'site.add.php_label'    => 'PHP version',
+    'site.add.proxy_label'  => 'Proxy pass URL',
+    'site.add.proxy_hint'   => 'Upstream URL for your Node.js / Python app (e.g. http://127.0.0.1:3000).',
+    'site.add.submit'       => 'Create site',
+    'common.cancel'         => 'Cancel',
+
+    // Nginx editor
+    'nginx.editor.title'    => 'Nginx Config Editor',
+    'nginx.editor.caution'  => 'Edit with caution',
+    'nginx.editor.save'     => 'Save & Reload Nginx',
+    'nginx.editor.note'     => 'Config is tested before saving. A backup is created automatically.',
+
     // Manage Site — Settings tab
     'site.set.php_title'    => 'PHP Version',
     'site.set.php_hint'     => 'Restart PHP-FPM after changing version.',
