@@ -45,7 +45,7 @@ class CacheController extends BaseController
 
         $label = $domain ?: ($url ?: 'all');
         \Core\DB::log('cache:purge', "Purged cache: {$label}");
-        $this->success('Cache purged successfully.', '/cache');
+        $this->success('Cache purged successfully.');
     }
 
     public function toggle(array $params = []): void
@@ -94,7 +94,7 @@ class CacheController extends BaseController
         $enabled = $action === 'enable' ? 1 : 0;
         $this->db->run('UPDATE sites SET cache_enabled = ? WHERE domain = ?', [$enabled, $domain]);
         \Core\DB::log("cache:{$action}", "Cache {$action}d for: {$domain}");
-        $this->success("FastCGI cache {$action}d for {$domain}.", '/cache');
+        $this->success("FastCGI cache {$action}d for {$domain}.");
     }
 
     private function getCacheStats(): array

@@ -89,26 +89,39 @@ class SiteController extends BaseController
             abort(404, "Site not found: {$domain}");
         }
 
+        $activeTab = $this->sanitizeTab($_GET['tab'] ?? 'overview');
+
         $nginxConf = '';
         $confFile  = "/etc/nginx/sites-available/{$domain}.conf";
         if (file_exists($confFile) && is_readable($confFile)) {
             $nginxConf = file_get_contents($confFile);
         }
 
-        $sslExpiry = null;
-        $lePath    = "/etc/letsencrypt/live/{$domain}/fullchain.pem";
+        $sslExpiry  = null;
+        $sslDaysLeft = null;
+        $lePath      = "/etc/letsencrypt/live/{$domain}/fullchain.pem";
         if (file_exists($lePath)) {
-            $certInfo  = openssl_x509_parse((string) file_get_contents($lePath));
-            $sslExpiry = $certInfo ? date('Y-m-d', $certInfo['validTo_time_t']) : null;
-            $site['ssl_type'] = "Let's Encrypt";
+            $certInfo = openssl_x509_parse((string) file_get_contents($lePath));
+            if ($certInfo) {
+                $sslExpiry   = date('Y-m-d', $certInfo['validTo_time_t']);
+                $sslDaysLeft = (int) ceil(($certInfo['validTo_time_t'] - time()) / 86400);
+            }
+            $site['ssl_type'] = 'letsencrypt';
         }
 
         $logs = $this->db->rows(
-            'SELECT * FROM activity_log WHERE detail LIKE ? ORDER BY created_at DESC LIMIT 20',
+            'SELECT * FROM activity_log WHERE detail LIKE ? ORDER BY created_at DESC LIMIT 15',
             ["%{$domain}%"]
         );
 
-        $this->view('sites/detail', compact('site', 'nginxConf', 'sslExpiry', 'logs'));
+        $diskSize  = $this->getSiteDiskUsage($domain);
+        $opcache   = $activeTab === 'performance' ? $this->getOpcacheStatus() : [];
+        $redisInfo = $activeTab === 'performance' ? $this->getRedisInfo()    : [];
+
+        $this->view('sites/detail', compact(
+            'site', 'nginxConf', 'sslExpiry', 'sslDaysLeft',
+            'logs', 'activeTab', 'diskSize', 'opcache', 'redisInfo'
+        ) + ['_full_bleed' => true]);
     }
 
     public function delete(array $params = []): void
@@ -215,6 +228,46 @@ class SiteController extends BaseController
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    private function sanitizeTab(string $raw): string
+    {
+        $valid = ['overview', 'performance', 'ssl', 'database', 'security', 'cron', 'files', 'settings'];
+        return in_array($raw, $valid, true) ? $raw : 'overview';
+    }
+
+    private function getSiteDiskUsage(string $domain): string
+    {
+        $path = "/var/www/{$domain}";
+        if (!is_dir($path)) return '—';
+        $raw = trim((string) @shell_exec('du -sh ' . escapeshellarg($path) . ' 2>/dev/null'));
+        return $raw !== '' ? (explode("\t", $raw)[0] ?? '—') : '—';
+    }
+
+    private function getOpcacheStatus(): array
+    {
+        if (!function_exists('opcache_get_status')) return [];
+        $s = @opcache_get_status(false);
+        return is_array($s) ? $s : [];
+    }
+
+    private function getRedisInfo(): array
+    {
+        $pong = trim((string) @shell_exec('redis-cli ping 2>/dev/null'));
+        if ($pong !== 'PONG') return ['ok' => false];
+
+        $info = (string) @shell_exec('redis-cli info 2>/dev/null');
+        $mem  = '—';
+        if (preg_match('/used_memory_human:(\S+)/', $info, $m)) {
+            $mem = rtrim($m[1]);
+        }
+        $keys = 0;
+        preg_match_all('/keys=(\d+)/', $info, $km);
+        foreach (($km[1] ?? []) as $n) {
+            $keys += (int) $n;
+        }
+
+        return ['ok' => true, 'keys' => $keys, 'memory' => $mem];
+    }
 
     /**
      * Sync semua site dari Nginx filesystem ke SQLite panel DB
