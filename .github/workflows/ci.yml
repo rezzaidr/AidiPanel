@@ -40,7 +40,7 @@ jobs:
           php-version: '8.3'
 
       - name: PHP syntax check (all files)
-        run: find aidipanel-app -name "*.php" -exec php -l {} \; | grep -v "No syntax errors" || true
+        run: find panel-app -name "*.php" -exec php -l {} \; | grep -v "No syntax errors" || true
 
   release:
     name: Create Release Archive
@@ -53,7 +53,7 @@ jobs:
       - name: Package install script
         run: |
           cp install.sh install-aidipanel.sh
-          tar -czf aidipanel-panel-app.tar.gz aidipanel-app/
+          tar -czf aidipanel-panel-app.tar.gz panel-app/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
