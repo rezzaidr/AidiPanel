@@ -261,24 +261,77 @@ function run_cli(string $command, array $args = []): array
  */
 function sys_cpu_percent(): float
 {
-    static $prev = null;
-    $stat = file('/proc/stat');
-    $line = explode(' ', preg_replace('/\s+/', ' ', trim($stat[0])));
-    [, $user, $nice, $system, $idle, $iowait] = $line;
-    $total   = $user + $nice + $system + $idle + $iowait;
-    $busyNow = $user + $nice + $system;
+    $f    = sys_get_temp_dir() . '/aidipanel_cpu.json';
+    $stat = @file('/proc/stat');
+    if (!$stat) return 0.0;
+    $parts = explode(' ', preg_replace('/\s+/', ' ', trim($stat[0])));
+    $vals  = array_map('intval', array_slice($parts, 1));
+    $idle  = ($vals[3] ?? 0) + ($vals[4] ?? 0);
+    $total = array_sum($vals);
+    $busy  = $total - $idle;
+    $curr  = ['total' => $total, 'busy' => $busy];
+
+    $prev = null;
+    if (is_readable($f)) {
+        $d = @json_decode((string) file_get_contents($f), true);
+        if (is_array($d) && isset($d['total'])) $prev = $d;
+    }
+    @file_put_contents($f, json_encode($curr), LOCK_EX);
 
     if ($prev === null) {
-        $prev = ['total' => $total, 'busy' => $busyNow];
-        usleep(100000); // 100ms sample
-        return sys_cpu_percent();
+        // No prior inter-request sample — measure over 200ms right now
+        usleep(200000);
+        $stat2  = @file('/proc/stat');
+        if (!$stat2) return 0.0;
+        $parts2 = explode(' ', preg_replace('/\s+/', ' ', trim($stat2[0])));
+        $vals2  = array_map('intval', array_slice($parts2, 1));
+        $idle2  = ($vals2[3] ?? 0) + ($vals2[4] ?? 0);
+        $total2 = array_sum($vals2);
+        $busy2  = $total2 - $idle2;
+        @file_put_contents($f, json_encode(['total' => $total2, 'busy' => $busy2]), LOCK_EX);
+        $dt = $total2 - $total;
+        $db = $busy2  - $busy;
+        return $dt > 0 ? round($db / $dt * 100, 1) : 0.0;
     }
 
-    $diffTotal = $total - $prev['total'];
-    $diffBusy  = $busyNow - $prev['busy'];
-    $prev = ['total' => $total, 'busy' => $busyNow];
+    $dt = $curr['total'] - $prev['total'];
+    $db = $curr['busy']  - $prev['busy'];
+    return $dt > 0 ? round($db / $dt * 100, 1) : 0.0;
+}
 
-    return $diffTotal > 0 ? round(($diffBusy / $diffTotal) * 100, 1) : 0.0;
+function sys_net_rate(): array
+{
+    $f     = sys_get_temp_dir() . '/aidipanel_net.json';
+    $lines = @file('/proc/net/dev') ?: [];
+    $rx = 0; $tx = 0; $iface = '';
+    foreach ($lines as $line) {
+        $line = trim($line);
+        if (!str_contains($line, ':')) continue;
+        [$name, $data] = explode(':', $line, 2);
+        $name = trim($name);
+        if ($name === 'lo') continue;
+        $cols = preg_split('/\s+/', trim($data));
+        $rxB  = (int) ($cols[0] ?? 0);
+        $txB  = (int) ($cols[8] ?? 0);
+        if ($rxB + $txB > $rx + $tx) { $iface = $name; $rx = $rxB; $tx = $txB; }
+    }
+    $now  = microtime(true);
+    $curr = ['rx' => $rx, 'tx' => $tx, 'ts' => $now];
+    $prev = null;
+    if (is_readable($f)) {
+        $d = @json_decode((string) file_get_contents($f), true);
+        if (is_array($d) && isset($d['ts'])) $prev = $d;
+    }
+    @file_put_contents($f, json_encode($curr), LOCK_EX);
+    if ($prev === null || $now <= $prev['ts']) {
+        return ['rx_rate' => 0, 'tx_rate' => 0, 'iface' => $iface];
+    }
+    $elapsed = $now - $prev['ts'];
+    return [
+        'rx_rate' => max(0, ($rx - $prev['rx']) / $elapsed),
+        'tx_rate' => max(0, ($tx - $prev['tx']) / $elapsed),
+        'iface'   => $iface,
+    ];
 }
 
 function sys_memory(): array

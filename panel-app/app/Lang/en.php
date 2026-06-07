@@ -63,6 +63,15 @@ return [
     'dash.alert.service_down' => '{svc} is stopped',
     'dash.alert.disk_high'  => 'Disk is {pct}% full',
     'dash.alert.mem_high'   => 'Memory is {pct}% used',
+    'dash.top_sites'        => 'Top Sites',
+    'dash.kpi.req_today'    => 'Requests today',
+    'dash.kpi.req_today_hint'=> 'From Nginx access log',
+    'dash.kpi.req_today_unit'=> 'requests',
+    'dash.kpi.cache_size'   => 'Cache size',
+    'dash.kpi.cache_hint'   => 'FastCGI cache on disk',
+    'dash.kpi.net_down'     => 'Net ↓ (in)',
+    'dash.kpi.net_up'       => 'Net ↑ (out)',
+    'dash.kpi.net_iface'    => '{iface}',
 
     // VPS status panel
     'vps.title'             => 'Server status',
@@ -111,6 +120,7 @@ return [
     'col.cache'             => 'Cache',
     'col.ssl'               => 'SSL',
     'col.action'            => 'Action',
+    'col.requests'          => 'Requests today',
     'cache.on'              => 'Cached',
     'cache.off'             => 'No cache',
     'ssl.le'                => "Let's Encrypt",

@@ -9,10 +9,11 @@ class DashboardController extends BaseController
         $metrics  = $this->getMetrics();
         $vps      = $this->getVpsStatus($metrics);
         $services = $this->getServicesStatus();
-        $sites    = $this->db->rows('SELECT * FROM sites ORDER BY created_at DESC LIMIT 6');
+        $kpi      = $this->getDashKpi();
+        $sites    = $this->getTopSites();
         $alerts   = $this->getAlerts($metrics, $services);
 
-        $this->view('dashboard/index', compact('metrics', 'vps', 'services', 'sites', 'alerts'));
+        $this->view('dashboard/index', compact('metrics', 'vps', 'services', 'kpi', 'sites', 'alerts'));
     }
 
     public function apiMetrics(array $params = []): void
@@ -28,6 +29,7 @@ class DashboardController extends BaseController
             'disk'   => sys_disk('/'),
             'load'   => sys_load(),
             'uptime' => sys_uptime(),
+            'net'    => sys_net_rate(),
         ];
     }
 
@@ -35,19 +37,49 @@ class DashboardController extends BaseController
     {
         $services = ['nginx', 'mysql', 'mariadb', 'redis-server', 'php8.1-fpm', 'php8.2-fpm', 'php8.3-fpm'];
         $result   = [];
-
         foreach ($services as $svc) {
             $status = trim((string) shell_exec("systemctl is-active " . escapeshellarg($svc) . " 2>/dev/null"));
-            if ($status === '') continue; // service not installed
+            if ($status === '') continue;
             $result[$svc] = $status === 'active';
         }
         return $result;
     }
 
-    /**
-     * Server facts for the VPS status panel. Everything is best-effort with safe
-     * fallbacks so the dashboard renders even when a source is unavailable.
-     */
+    private function getDashKpi(): array
+    {
+        $reqToday = 0;
+        $mainLog  = '/var/log/nginx/access.log';
+        if (is_readable($mainLog)) {
+            $out      = @shell_exec('wc -l < ' . escapeshellarg($mainLog) . ' 2>/dev/null');
+            $reqToday = (int) trim((string) $out);
+        }
+
+        $cacheSize = '—';
+        $cacheDir  = '/var/cache/nginx/fastcgi';
+        if (is_dir($cacheDir)) {
+            $out = @shell_exec('du -sh ' . escapeshellarg($cacheDir) . ' 2>/dev/null');
+            if ($out) $cacheSize = trim(explode("\t", trim($out))[0] ?? '—');
+        }
+
+        return ['req_today' => $reqToday, 'cache_size' => $cacheSize];
+    }
+
+    private function getTopSites(): array
+    {
+        $sites = $this->db->rows('SELECT * FROM sites ORDER BY created_at DESC LIMIT 6');
+        foreach ($sites as &$site) {
+            $logFile = '/var/log/nginx/' . $site['domain'] . '-access.log';
+            $site['req_today'] = 0;
+            if (is_readable($logFile)) {
+                $out = @shell_exec('wc -l < ' . escapeshellarg($logFile) . ' 2>/dev/null');
+                $site['req_today'] = (int) trim((string) $out);
+            }
+        }
+        unset($site);
+        usort($sites, fn($a, $b) => $b['req_today'] <=> $a['req_today']);
+        return $sites;
+    }
+
     private function getVpsStatus(array $metrics): array
     {
         $os = PHP_OS;
@@ -78,10 +110,6 @@ class DashboardController extends BaseController
         ];
     }
 
-    /**
-     * DigitalOcean metadata service (link-local, only reachable from the droplet).
-     * Returns [] when not on DO or the request times out, so callers degrade safely.
-     */
     private function cloudMetadata(): array
     {
         if (!filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN)) {
@@ -89,13 +117,9 @@ class DashboardController extends BaseController
         }
         $ctx = stream_context_create(['http' => ['timeout' => 0.4, 'ignore_errors' => true]]);
         $raw = @file_get_contents('http://169.254.169.254/metadata/v1.json', false, $ctx);
-        if ($raw === false) {
-            return [];
-        }
+        if ($raw === false) return [];
         $d = json_decode($raw, true);
-        if (!is_array($d)) {
-            return [];
-        }
+        if (!is_array($d)) return [];
         return [
             'provider'   => 'DigitalOcean',
             'droplet_id' => isset($d['droplet_id']) ? (string) $d['droplet_id'] : null,
@@ -104,31 +128,22 @@ class DashboardController extends BaseController
         ];
     }
 
-    /**
-     * "Needs Attention" advisor — computed only from data we actually have, so
-     * every item is real. SSL-expiry / OS-updates / disk-full forecast land in a
-     * later slice once their data sources exist.
-     */
     private function getAlerts(array $metrics, array $services): array
     {
         $alerts = [];
-
         foreach ($services as $name => $active) {
             if (!$active) {
                 $alerts[] = ['level' => 'danger', 'icon' => 'ti-player-stop', 'text' => t('dash.alert.service_down', ['svc' => $name])];
             }
         }
-
         $disk = (float) ($metrics['disk']['percent'] ?? 0);
         if ($disk >= 80) {
             $alerts[] = ['level' => 'warn', 'icon' => 'ti-device-floppy', 'text' => t('dash.alert.disk_high', ['pct' => $disk])];
         }
-
         $mem = (float) ($metrics['memory']['percent'] ?? 0);
         if ($mem >= 90) {
             $alerts[] = ['level' => 'warn', 'icon' => 'ti-cpu-2', 'text' => t('dash.alert.mem_high', ['pct' => $mem])];
         }
-
         return $alerts;
     }
 }
