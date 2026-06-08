@@ -327,7 +327,15 @@ _site_add() {
   ln -sf "${NGINX_CONF_DIR}/${domain}.conf" \
          "${NGINX_ENABLED_DIR}/${domain}.conf"
 
-  _nginx_test_reload
+  # Test before reload. nginx -t validates ALL enabled vhosts, so if this test
+  # fails we roll back THIS site's files — otherwise one broken vhost would make
+  # every future site:add fail too (the cascade behind "creating any site fails").
+  if ! nginx -t >> "$CLI_LOG" 2>&1; then
+    rm -f "${NGINX_ENABLED_DIR}/${domain}.conf" "${NGINX_CONF_DIR}/${domain}.conf"
+    die "Nginx config test failed — rolled back ${domain}. Inspect other vhosts: nginx -t"
+  fi
+  systemctl reload nginx >> "$CLI_LOG" 2>&1
+  ok "Nginx reloaded"
 
   ok "Site created: ${domain}"
   echo ""
@@ -347,6 +355,21 @@ _site_write_vhost() {
   local domain="$1" php_ver="$2" webroot="$3" site_type="$4"
   local sock; sock=$(_php_sock "$php_ver")
   local conf_file="${NGINX_CONF_DIR}/${domain}.conf"
+
+  # Self-signed cert FIRST — the HTTPS vhost below references it, so if cert
+  # generation fails we bail before writing a vhost that nginx -t can't load.
+  # (-s checks non-empty: also recovers from a half-written cert left by a
+  # previously failed attempt.)
+  local self_ssl_dir="/etc/ssl/aidipanel-self"
+  mkdir -p "$self_ssl_dir"
+  if [[ ! -s "${self_ssl_dir}/${domain}.crt" || ! -s "${self_ssl_dir}/${domain}.key" ]]; then
+    if ! openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+      -keyout "${self_ssl_dir}/${domain}.key" \
+      -out    "${self_ssl_dir}/${domain}.crt" \
+      -subj   "/CN=${domain}" >> "$CLI_LOG" 2>&1; then
+      die "Failed to generate self-signed certificate for ${domain}"
+    fi
+  fi
 
   # Choose index based on type
   local index="index.php index.html"
@@ -416,6 +439,21 @@ PROXYBLK
   local try_files="try_files \$uri \$uri/ =404;"
   [[ "$site_type" == "wordpress" ]] && try_files="try_files \$uri \$uri/ /index.php?\$args;"
 
+  # Main `location /` block. Proxy supplies its OWN `location /` (proxy_pass)
+  # via $proxy_block, so skip this one for proxy — otherwise the vhost ends up
+  # with two `location /` and nginx -t fails: duplicate location "/".
+  local main_location=""
+  if [[ "$site_type" != "proxy" ]]; then
+    main_location=$(cat <<MAINLOC
+
+    # Main location
+    location / {
+        ${try_files}
+    }
+MAINLOC
+)
+  fi
+
   # WordPress-specific deny block (pre-computed, used inside heredoc)
   local wp_deny_block=""
   if [[ "$site_type" == "wordpress" ]]; then
@@ -482,11 +520,7 @@ server {
         log_not_found off;
     }
 ${wp_deny_block}
-
-    # Main location
-    location / {
-        ${try_files}
-    }
+${main_location}
 ${php_location}
 ${proxy_block}
 
@@ -495,16 +529,6 @@ ${proxy_block}
     error_log  /var/log/nginx/${domain}-error.log warn;
 }
 VHOST
-
-  # Generate self-signed cert (placeholder until Let's Encrypt is installed)
-  local self_ssl_dir="/etc/ssl/aidipanel-self"
-  mkdir -p "$self_ssl_dir"
-  if [[ ! -f "${self_ssl_dir}/${domain}.crt" ]]; then
-    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-      -keyout "${self_ssl_dir}/${domain}.key" \
-      -out    "${self_ssl_dir}/${domain}.crt" \
-      -subj   "/CN=${domain}" >> "$CLI_LOG" 2>&1
-  fi
 }
 
 _site_delete() {
