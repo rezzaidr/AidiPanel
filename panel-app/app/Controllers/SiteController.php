@@ -15,16 +15,18 @@ class SiteController extends BaseController
 
     public function showAdd(array $params = []): void
     {
-        $this->view('sites/add', [
-            'phpVersions' => ['8.1', '8.2', '8.3'],
-            'siteTypes'   => [
-                'wordpress' => 'WordPress',
-                'php'       => 'PHP / Generic',
-                'laravel'   => 'Laravel',
-                'static'    => 'Static HTML',
-                'proxy'     => 'Reverse Proxy',
-            ],
-        ]);
+        $this->view('sites/add', ['cards' => $this->addTypeCards()]);
+    }
+
+    public function showAddForm(array $params = []): void
+    {
+        $slug = (string) ($params['type'] ?? '');
+        $form = $this->addFormConfig($slug);
+        if ($form === null) {
+            $this->redirect('/sites/add');
+        }
+        $form['slug'] = $slug;
+        $this->view('sites/add-form', ['form' => $form]);
     }
 
     public function add(array $params = []): void
@@ -233,6 +235,107 @@ class SiteController extends BaseController
     {
         $valid = ['overview', 'performance', 'ssl', 'database', 'security', 'cron', 'files', 'settings'];
         return in_array($raw, $valid, true) ? $raw : 'overview';
+    }
+
+    /** Step-1 picker cards. `soon` = backend not wired (still navigable to a preview form). */
+    private function addTypeCards(): array
+    {
+        return [
+            ['slug' => 'wordpress',     'icon' => 'ti-brand-wordpress', 'title' => 'site.add.card.wp.title',     'desc' => 'site.add.card.wp.desc',     'soon' => false],
+            ['slug' => 'php',           'icon' => 'ti-brand-php',       'title' => 'site.add.card.php.title',    'desc' => 'site.add.card.php.desc',    'soon' => false],
+            ['slug' => 'nodejs',        'icon' => 'ti-brand-nodejs',    'title' => 'site.add.card.node.title',   'desc' => 'site.add.card.node.desc',   'soon' => true],
+            ['slug' => 'static',        'icon' => 'ti-file-text',       'title' => 'site.add.card.static.title', 'desc' => 'site.add.card.static.desc', 'soon' => false],
+            ['slug' => 'python',        'icon' => 'ti-brand-python',    'title' => 'site.add.card.python.title', 'desc' => 'site.add.card.python.desc', 'soon' => true],
+            ['slug' => 'reverse-proxy', 'icon' => 'ti-arrow-guide',     'title' => 'site.add.card.proxy.title',  'desc' => 'site.add.card.proxy.desc',  'soon' => false],
+        ];
+    }
+
+    /**
+     * Per-type Add Site form definition ("honest version").
+     * Each field carries `enabled`: true = backend ready, false = render disabled + "Soon".
+     * `creatable` = whether this type can be provisioned today (node/python = false → preview).
+     * `type` = the CLI --type submitted (null for non-creatable; for the PHP form the
+     * Application <select name="type"> carries the type itself, so `type` here is unused).
+     */
+    private function addFormConfig(string $slug): ?array
+    {
+        // Shared "Soon" Site User block (no per-site Linux users yet).
+        $userBlock = [
+            ['key' => 'site_user',      'label' => 'site.add.f.site_user',      'input' => 'text',     'required' => true, 'enabled' => false, 'value' => 'aidi-example'],
+            ['key' => 'site_user_pass', 'label' => 'site.add.f.site_user_pass', 'input' => 'password', 'required' => true, 'enabled' => false, 'value' => 'K7x@2pLm9!qF', 'generate' => true],
+        ];
+        $phpField = ['key' => 'php_version', 'label' => 'site.add.f.php', 'input' => 'select', 'required' => false, 'enabled' => true, 'options' => ['8.3', '8.2', '8.1']];
+
+        $forms = [
+            'wordpress' => [
+                'type' => 'wordpress', 'icon' => 'ti-brand-wordpress',
+                'title' => 'site.add.wp.title', 'desc' => 'site.add.wp.desc', 'creatable' => true,
+                'fields' => [
+                    ['key' => 'domain',      'label' => 'site.add.f.domain',      'input' => 'text',     'required' => true,  'enabled' => true,  'placeholder' => 'example.com'],
+                    ['key' => 'site_title',  'label' => 'site.add.f.site_title',  'input' => 'text',     'required' => true,  'enabled' => false, 'placeholder' => 'My WordPress Site'],
+                    $userBlock[0], $userBlock[1],
+                    ['key' => 'admin_user',  'label' => 'site.add.f.admin_user',  'input' => 'text',     'required' => true,  'enabled' => false, 'placeholder' => 'admin'],
+                    ['key' => 'admin_pass',  'label' => 'site.add.f.admin_pass',  'input' => 'password', 'required' => true,  'enabled' => false, 'value' => 'W3b#8nRt5!yH'],
+                    ['key' => 'admin_email', 'label' => 'site.add.f.admin_email', 'input' => 'text',     'required' => true,  'enabled' => false, 'placeholder' => 'you@example.com'],
+                    ['key' => 'multisite',   'label' => 'site.add.f.multisite',   'input' => 'select',   'required' => false, 'enabled' => false, 'options' => ['Disabled', 'Subdomain', 'Subdirectory']],
+                    $phpField,
+                ],
+            ],
+            'php' => [
+                'type' => 'php', 'icon' => 'ti-brand-php',
+                'title' => 'site.add.php.title', 'desc' => 'site.add.php.desc', 'creatable' => true,
+                'fields' => [
+                    ['key' => 'type', 'label' => 'site.add.f.application', 'input' => 'application', 'required' => true, 'enabled' => true,
+                     'active' => [['php', 'Generic'], ['laravel', 'Laravel 12'], ['laravel', 'Laravel 11']],
+                     'soon'   => ['WordPress', 'WooCommerce', 'Symfony 8', 'Drupal 11', 'Joomla 6', 'Magento 2', 'CakePHP 5', 'CodeIgniter 4', 'Moodle 5', 'Nextcloud 32', 'PrestaShop 1.7', 'Yii 2', '…and 13 more'],
+                     'note'   => 'site.add.php.appnote'],
+                    ['key' => 'domain', 'label' => 'site.add.f.domain', 'input' => 'text', 'required' => true, 'enabled' => true, 'placeholder' => 'example.com'],
+                    $phpField,
+                    $userBlock[0], $userBlock[1],
+                ],
+            ],
+            'static' => [
+                'type' => 'static', 'icon' => 'ti-file-text',
+                'title' => 'site.add.static.title', 'desc' => 'site.add.static.desc', 'creatable' => true,
+                'fields' => [
+                    ['key' => 'domain', 'label' => 'site.add.f.domain', 'input' => 'text', 'required' => true, 'enabled' => true, 'placeholder' => 'example.com'],
+                    $userBlock[0], $userBlock[1],
+                ],
+            ],
+            'reverse-proxy' => [
+                'type' => 'proxy', 'icon' => 'ti-arrow-guide',
+                'title' => 'site.add.proxy.title', 'desc' => 'site.add.proxy.desc', 'creatable' => true,
+                'fields' => [
+                    ['key' => 'domain',     'label' => 'site.add.f.domain',    'input' => 'text', 'required' => true, 'enabled' => true, 'placeholder' => 'example.com'],
+                    ['key' => 'proxy_pass', 'label' => 'site.add.f.proxy_url', 'input' => 'text', 'required' => true, 'enabled' => true, 'mono' => true, 'placeholder' => 'http://127.0.0.1:3000'],
+                    $userBlock[0], $userBlock[1],
+                ],
+            ],
+            'nodejs' => [
+                'type' => null, 'icon' => 'ti-brand-nodejs',
+                'title' => 'site.add.node.title', 'desc' => 'site.add.node.desc', 'creatable' => false,
+                'banner' => 'site.add.node.banner',
+                'fields' => [
+                    ['key' => 'domain',       'label' => 'site.add.f.domain',       'input' => 'text',   'required' => true,  'enabled' => false, 'placeholder' => 'example.com'],
+                    ['key' => 'node_version', 'label' => 'site.add.f.node_version', 'input' => 'select', 'required' => false, 'enabled' => false, 'options' => ['Node 22 LTS', 'Node 20 LTS', 'Node 18 LTS', 'Node 16 LTS']],
+                    ['key' => 'app_port',     'label' => 'site.add.f.app_port',     'input' => 'text',   'required' => true,  'enabled' => false, 'placeholder' => '3000'],
+                    $userBlock[0], $userBlock[1],
+                ],
+            ],
+            'python' => [
+                'type' => null, 'icon' => 'ti-brand-python',
+                'title' => 'site.add.python.title', 'desc' => 'site.add.python.desc', 'creatable' => false,
+                'banner' => 'site.add.python.banner',
+                'fields' => [
+                    ['key' => 'domain',         'label' => 'site.add.f.domain',         'input' => 'text',   'required' => true,  'enabled' => false, 'placeholder' => 'example.com'],
+                    ['key' => 'python_version', 'label' => 'site.add.f.python_version', 'input' => 'select', 'required' => false, 'enabled' => false, 'options' => ['Python 3.12'], 'note' => 'site.add.python.docs'],
+                    ['key' => 'app_port',       'label' => 'site.add.f.app_port',       'input' => 'text',   'required' => true,  'enabled' => false, 'value' => '8090'],
+                    $userBlock[0], $userBlock[1],
+                ],
+            ],
+        ];
+
+        return $forms[$slug] ?? null;
     }
 
     private function getSiteDiskUsage(string $domain): string

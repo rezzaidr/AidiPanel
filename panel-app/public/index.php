@@ -56,6 +56,7 @@ $router->get('/admin', 'AdminController@index');
 // Sites
 $router->get('/sites',               'SiteController@index');
 $router->get('/sites/add',           'SiteController@showAdd');
+$router->get('/sites/add/{type}',    'SiteController@showAddForm');
 $router->post('/sites/add',          'SiteController@add');
 $router->get('/sites/{domain}',      'SiteController@detail');
 $router->post('/sites/{domain}/delete', 'SiteController@delete');

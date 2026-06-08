@@ -107,6 +107,7 @@ body {
 .tag-info  { color: var(--speed); background: var(--speed-pale); }
 .tag-ok    { color: #047857; background: #ecfdf5; }
 .tag-muted { color: #71717a; background: #f4f4f5; }
+.tag-soon  { color: #b45309; background: #fffbeb; }
 
 /* --- Form controls ------------------------------------------------------- */
 .inp {
@@ -116,6 +117,7 @@ body {
 }
 .inp:focus       { border-color: rgba(50,44,122,.4); box-shadow: 0 0 0 2px rgba(50,44,122,.1); }
 .inp::placeholder{ color: #a1a1aa; }
+.inp-soon        { background: #fafafa; border-style: dashed; color: #a1a1aa; cursor: not-allowed; }
 select.inp {
   appearance: none; -webkit-appearance: none; padding-right: 2rem;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
