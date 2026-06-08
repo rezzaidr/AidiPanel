@@ -79,6 +79,20 @@ class DB
                 key   TEXT PRIMARY KEY,
                 value TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS metrics (
+                ts     INTEGER PRIMARY KEY,   -- unix epoch (one sample per minute via cron)
+                cpu    REAL NOT NULL DEFAULT 0,
+                mem    REAL NOT NULL DEFAULT 0,
+                disk   REAL NOT NULL DEFAULT 0,
+                l1     REAL NOT NULL DEFAULT 0,
+                l5     REAL NOT NULL DEFAULT 0,
+                l15    REAL NOT NULL DEFAULT 0,
+                net_rx REAL NOT NULL DEFAULT 0,  -- bytes/sec
+                net_tx REAL NOT NULL DEFAULT 0,
+                dio_r  REAL NOT NULL DEFAULT 0,  -- bytes/sec
+                dio_w  REAL NOT NULL DEFAULT 0
+            );
         ");
 
         // Seed admin HANYA jika belum ada user sama sekali

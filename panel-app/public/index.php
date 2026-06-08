@@ -97,7 +97,8 @@ $router->post('/users/passwd',     'UserController@changePassword');
 $router->get('/logs', 'SystemController@logs');
 
 // API (JSON responses for Alpine.js fetch calls)
-$router->get('/api/metrics',      'DashboardController@apiMetrics');
+$router->get('/api/metrics',         'DashboardController@apiMetrics');
+$router->get('/api/metrics/history', 'DashboardController@apiHistory');
 $router->get('/api/services',     'ServiceController@apiStatus');
 $router->get('/api/cache/stats',  'CacheController@apiStats');
 $router->post('/api/cli',         'SystemController@apiCli');

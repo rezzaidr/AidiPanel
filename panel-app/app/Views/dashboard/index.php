@@ -1,9 +1,22 @@
 <?php
+/**
+ * Dashboard (Fase 2 v2) — CloudPanel/Cloudflare-grade monitoring.
+ *
+ * Data sources:
+ *   Monitoring charts  REAL history from the `metrics` table (bin/collect-metrics.php,
+ *                      one sample/minute) — fetched per selected time range via
+ *                      /api/metrics/history. /proc keeps no history, so we record it.
+ *   $analytics         real traffic & cache stats parsed from the Nginx access log
+ *                      (hit ratio, cached vs origin, bandwidth saved, per-minute series).
+ *   $metrics           live snapshot, used here only for capacity (disk total).
+ *   $alerts            "Needs Attention" advisor. $vps server identity. $sites top sites.
+ */
 $pageTitle = t('nav.dashboard');
 
-$appIcon = function (string $type): string {
+$appIcon = static function (string $type): string {
     return [
         'wordpress' => 'ti-brand-wordpress',
+        'laravel'   => 'ti-brand-laravel',
         'php'       => 'ti-brand-php',
         'node'      => 'ti-brand-nodejs',
         'nodejs'    => 'ti-brand-nodejs',
@@ -13,16 +26,33 @@ $appIcon = function (string $type): string {
     ][strtolower($type)] ?? 'ti-world';
 };
 
-// OS icon
 $osLower = strtolower($vps['os'] ?? '');
 $osIcon  = str_contains($osLower, 'ubuntu') ? 'ti-brand-ubuntu'
          : (str_contains($osLower, 'debian') ? 'ti-hexagon-letter-d' : 'ti-device-laptop');
 
-// Net rate formatter
-$fmtBytes = fn(float $b): string =>
-    $b >= 1_048_576 ? round($b / 1_048_576, 1) . ' MB/s'
-  : ($b >= 1024    ? round($b / 1024, 1)       . ' KB/s'
-                   : round($b, 0)               . ' B/s');
+// Compact number formatter (1240000 → 1.24M, 11700 → 11.7k)
+$compact = static function ($n): string {
+    $n = (float) $n;
+    if ($n >= 1e6) return rtrim(rtrim(number_format($n / 1e6, 2), '0'), '.') . 'M';
+    if ($n >= 1e3) return rtrim(rtrim(number_format($n / 1e3, 1), '0'), '.') . 'k';
+    return number_format($n);
+};
+
+$cacheable  = (int) ($analytics['cached'] ?? 0) + (int) ($analytics['origin'] ?? 0);
+$hasSeries  = !empty($analytics['series']['labels']);   // cacheable traffic to plot
+$memTotal   = format_bytes((int) ($vps['mem_total'] ?? 0));
+$diskTotal  = format_bytes((int) ($metrics['disk']['total'] ?? 0));
+$coreLabel  = $vps['cores'] ? ($vps['cores'] . ' CPU') : '—';
+
+// Monitoring time ranges (value = key understood by /api/metrics/history)
+$ranges = [
+    '30m' => 'dash.range.30m',
+    '1h'  => 'dash.range.1h',
+    '3h'  => 'dash.range.3h',
+    '6h'  => 'dash.range.6h',
+    '12h' => 'dash.range.12h',
+];
+$range = $history['range'] ?? '1h';
 ?>
 
 <!-- page header -->
@@ -31,22 +61,23 @@ $fmtBytes = fn(float $b): string =>
     <h1 class="font-head font-bold text-[22px] text-zinc-900 leading-none"><?= e(t('nav.dashboard')) ?></h1>
     <p class="text-sm text-zinc-400 mt-1.5"><?= e(t('dash.subtitle')) ?></p>
   </div>
-  <span class="badge badge-muted"><span class="dot bg-emerald-500"></span> <?= e(t('dash.live')) ?></span>
 </div>
 
 <!-- VPS status -->
 <div class="card p-5 mb-5">
   <div class="flex items-center justify-between mb-4">
     <h2 class="card-title"><i class="ti ti-server-2 text-ink"></i> <?= e(t('vps.title')) ?></h2>
-    <span class="badge badge-ok"><span class="dot bg-emerald-500"></span> <?= e(t('common.online')) ?></span>
+    <div class="flex items-center gap-3">
+      <?php if (!empty($vps['uptime'])): ?>
+        <span class="text-[11px] text-zinc-400"><?= e(t('vps.uptime')) ?> <span class="mono text-zinc-600"><?= e($vps['uptime']) ?></span></span>
+      <?php endif; ?>
+      <span class="badge badge-ok"><span class="dot bg-emerald-500"></span> <?= e(t('common.online')) ?></span>
+    </div>
   </div>
   <div class="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-4">
     <div>
       <p class="eyebrow mb-1"><?= e(t('vps.os')) ?></p>
-      <p class="text-sm font-medium text-zinc-800 flex items-center gap-1.5">
-        <i class="ti <?= e($osIcon) ?> text-zinc-400 text-base shrink-0"></i>
-        <?= e($vps['os']) ?>
-      </p>
+      <p class="text-sm font-medium text-zinc-800 flex items-center gap-1.5"><i class="ti <?= e($osIcon) ?> text-zinc-400 text-base shrink-0"></i> <?= e($vps['os']) ?></p>
     </div>
     <div>
       <p class="eyebrow mb-1"><?= e(t('vps.hostname')) ?></p>
@@ -58,13 +89,11 @@ $fmtBytes = fn(float $b): string =>
     </div>
     <div>
       <p class="eyebrow mb-1"><?= e(t('vps.memory')) ?></p>
-      <p class="text-sm font-medium text-zinc-800"><?= e(format_bytes((int) $vps['mem_total'])) ?></p>
+      <p class="text-sm font-medium text-zinc-800"><?= e($memTotal) ?></p>
     </div>
     <div>
       <p class="eyebrow mb-1"><?= e(t('vps.cloud')) ?></p>
-      <p class="text-sm font-medium text-zinc-800">
-        <?= $vps['provider'] ? '<i class="ti ti-cloud text-sky-500"></i> ' . e($vps['provider']) : '<span class="text-zinc-300">—</span>' ?>
-      </p>
+      <p class="text-sm font-medium text-zinc-800"><?= $vps['provider'] ? '<i class="ti ti-cloud text-sky-500"></i> ' . e($vps['provider']) : '<span class="text-zinc-300">—</span>' ?></p>
     </div>
     <div>
       <p class="eyebrow mb-1"><?= e(t('vps.droplet')) ?></p>
@@ -80,9 +109,7 @@ $fmtBytes = fn(float $b): string =>
       <div class="flex items-center gap-1.5">
         <p class="text-sm font-medium text-zinc-800 mono"><?= e($vps['ipv4']) ?></p>
         <button onclick="navigator.clipboard.writeText('<?= e($vps['ipv4']) ?>');this.innerHTML='<i class=\'ti ti-check text-emerald-500 text-sm\'></i>';setTimeout(()=>this.innerHTML='<i class=\'ti ti-copy text-sm\'></i>',1500)"
-                title="Copy IP" class="text-zinc-300 hover:text-zinc-500 transition-colors p-0.5 rounded">
-          <i class="ti ti-copy text-sm"></i>
-        </button>
+                title="Copy IP" class="text-zinc-300 hover:text-zinc-500 transition-colors p-0.5 rounded"><i class="ti ti-copy text-sm"></i></button>
       </div>
       <?php else: ?>
       <span class="text-zinc-300">—</span>
@@ -91,153 +118,170 @@ $fmtBytes = fn(float $b): string =>
   </div>
 </div>
 
-<!-- KPI cards -->
-<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
+<!-- KPI row — performance-led -->
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
+  <!-- Requests -->
   <div class="card p-4">
-    <p class="eyebrow mb-1.5"><?= e(t('dash.kpi.req_today')) ?></p>
-    <p class="font-head font-bold text-2xl text-zinc-900 leading-none" id="kpiReq">
-      <?= number_format($kpi['req_today']) ?>
-    </p>
-    <p class="text-[11px] text-zinc-400 mt-1"><?= e(t('dash.kpi.req_today_hint')) ?></p>
+    <div class="flex items-center justify-between">
+      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-arrow-bounce text-ink"></i> <?= e(t('dash.kpi.requests')) ?> <span class="text-zinc-300 font-normal">· <?= e(t('dash.kpi.requests_hint')) ?></span></span>
+    </div>
+    <div class="mono font-bold text-[26px] text-zinc-900 leading-none mt-2"><?= e($compact($analytics['req_today'] ?? 0)) ?></div>
+    <div id="spkReq" class="mt-1 -mb-1"></div>
   </div>
+  <!-- Cache hit ratio -->
   <div class="card p-4">
-    <p class="eyebrow mb-1.5"><?= e(t('dash.kpi.cache_size')) ?></p>
-    <p class="font-head font-bold text-2xl text-zinc-900 leading-none mono"><?= e($kpi['cache_size']) ?></p>
-    <p class="text-[11px] text-zinc-400 mt-1"><?= e(t('dash.kpi.cache_hint')) ?></p>
-  </div>
-  <div class="card p-4">
-    <p class="eyebrow mb-1.5"><?= e(t('dash.kpi.net_down')) ?></p>
-    <p class="font-head font-bold text-2xl text-zinc-900 leading-none mono" id="kpiNetRx">
-      <?= e($fmtBytes((float) ($metrics['net']['rx_rate'] ?? 0))) ?>
+    <div class="flex items-center justify-between">
+      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-bolt text-speed"></i> <?= e(t('dash.kpi.hit_ratio')) ?></span>
+      <span class="badge badge-info text-[10px] px-1.5 py-0.5">FastCGI</span>
+    </div>
+    <div class="mono font-bold text-[26px] text-speed leading-none mt-2">
+      <?php if ($cacheable > 0): ?><?= e(number_format((float) $analytics['hit_ratio'], 1)) ?><span class="text-zinc-300 text-lg">%</span><?php else: ?><span class="text-zinc-300">—</span><?php endif; ?>
+    </div>
+    <p class="text-[11px] text-zinc-400 mt-2">
+      <?= $cacheable > 0
+        ? e(t('dash.kpi.hit_ratio_hint', ['cached' => $compact($analytics['cached']), 'total' => $compact($cacheable)]))
+        : e(t('dash.kpi.hit_ratio_empty')) ?>
     </p>
-    <p class="text-[11px] text-zinc-400 mt-1"><?= e(t('dash.kpi.net_iface', ['iface' => $metrics['net']['iface'] ?? '—'])) ?></p>
   </div>
+  <!-- Bandwidth saved -->
   <div class="card p-4">
-    <p class="eyebrow mb-1.5"><?= e(t('dash.kpi.net_up')) ?></p>
-    <p class="font-head font-bold text-2xl text-zinc-900 leading-none mono" id="kpiNetTx">
-      <?= e($fmtBytes((float) ($metrics['net']['tx_rate'] ?? 0))) ?>
-    </p>
-    <p class="text-[11px] text-zinc-400 mt-1"><?= e(t('dash.kpi.net_iface', ['iface' => $metrics['net']['iface'] ?? '—'])) ?></p>
+    <div class="flex items-center justify-between">
+      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-arrow-down-circle text-emerald-500"></i> <?= e(t('dash.kpi.bw_saved')) ?></span>
+    </div>
+    <div class="mono font-bold text-[26px] text-zinc-900 leading-none mt-2"><?= e(format_bytes((int) ($analytics['bw_saved'] ?? 0))) ?></div>
+    <p class="text-[11px] text-zinc-400 mt-2"><?= e(t('dash.kpi.bw_saved_hint')) ?></p>
+  </div>
+  <!-- Data cached -->
+  <div class="card p-4">
+    <div class="flex items-center justify-between">
+      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-database text-ink"></i> <?= e(t('dash.kpi.data_cached')) ?></span>
+    </div>
+    <div class="mono font-bold text-[26px] text-zinc-900 leading-none mt-2"><?= e($analytics['cache_size'] ?? '—') ?></div>
+    <p class="text-[11px] text-zinc-400 mt-2"><?= e(t('dash.kpi.data_cached_hint')) ?></p>
   </div>
 </div>
 
-<!-- system charts — single card -->
-<div class="card overflow-hidden mb-5">
-  <div class="card-head">
-    <h2 class="card-title"><i class="ti ti-chart-line text-ink"></i> <?= e(t('chart.title')) ?></h2>
-    <select id="rangeSelect"
-            class="text-xs font-medium text-zinc-600 bg-white border border-zinc-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-ink cursor-pointer">
-      <option value="360">Last 30 min</option>
-      <option value="720" selected>Last 1 hour</option>
-      <option value="2160">Last 3 hours</option>
-      <option value="4320">Last 6 hours</option>
-      <option value="8640">Last 12 hours</option>
-    </select>
-  </div>
-  <div class="grid grid-cols-1 lg:grid-cols-2">
-    <div class="p-4 border-b border-zinc-100 lg:border-r">
-      <div class="flex items-center justify-between mb-1">
-        <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-cpu text-ink"></i> <?= e(t('chart.cpu')) ?></span>
-        <span class="mono font-semibold text-lg text-zinc-900"><span id="cpuNow"><?= e($metrics['cpu']) ?></span><span class="text-zinc-300 text-sm">%</span></span>
-      </div>
-      <div id="chartCpu"></div>
-    </div>
-    <div class="p-4 border-b border-zinc-100">
-      <div class="flex items-center justify-between mb-1">
-        <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-cpu-2 text-speed"></i> <?= e(t('chart.memory')) ?></span>
-        <span class="mono font-semibold text-lg text-zinc-900"><span id="memNow"><?= e($metrics['memory']['percent']) ?></span><span class="text-zinc-300 text-sm">%</span></span>
-      </div>
-      <div id="chartMem"></div>
-    </div>
-    <div class="p-4 lg:border-r border-zinc-100">
-      <div class="flex items-center justify-between mb-1">
-        <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-device-floppy text-amber-500"></i> <?= e(t('chart.disk')) ?></span>
-        <span class="mono font-semibold text-lg text-zinc-900"><span id="diskNow"><?= e($metrics['disk']['percent']) ?></span><span class="text-zinc-300 text-sm">%</span></span>
-      </div>
-      <div id="chartDisk"></div>
-    </div>
-    <div class="p-4">
-      <div class="flex items-center justify-between mb-1">
-        <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-activity text-emerald-500"></i> <?= e(t('chart.load')) ?></span>
-        <span class="mono font-semibold text-lg text-zinc-900"><span id="loadNow"><?= e($metrics['load']['1m']) ?></span><span class="text-zinc-300 text-sm">/ <?= e($vps['cores'] ?? '—') ?></span></span>
-      </div>
-      <div id="chartLoad"></div>
-    </div>
-  </div>
-</div>
-
-<!-- services + needs attention -->
+<!-- traffic analytics (cache effectiveness) -->
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">
-  <div class="card overflow-hidden">
-    <div class="card-head"><h2 class="card-title"><i class="ti ti-stack-2 text-ink"></i> <?= e(t('services.title')) ?></h2></div>
-    <?php if (empty($services)): ?>
-      <p class="px-4 py-8 text-sm text-zinc-400 text-center"><?= e(t('services.empty')) ?></p>
-    <?php else: ?>
-      <div class="divide-y divide-zinc-50">
-        <?php foreach ($services as $name => $active): ?>
-          <div class="flex items-center justify-between px-4 py-2.5">
-            <span class="text-xs text-zinc-700 mono"><?= e($name) ?></span>
-            <span class="badge <?= $active ? 'badge-ok' : 'badge-danger' ?>">
-              <span class="dot <?= $active ? 'bg-emerald-500' : 'bg-red-500' ?>"></span>
-              <?= $active ? e(t('services.running')) : e(t('services.stopped')) ?>
-            </span>
-          </div>
-        <?php endforeach; ?>
-      </div>
-    <?php endif; ?>
-  </div>
-
-  <div class="card overflow-hidden lg:col-span-2 flex flex-col">
+  <div class="card lg:col-span-2 overflow-hidden">
     <div class="card-head">
-      <h2 class="card-title"><i class="ti ti-bell text-amber-500"></i> <?= e(t('dash.attention')) ?></h2>
-      <?php if (!empty($alerts)): ?>
-        <span class="badge badge-warn"><?= count($alerts) ?></span>
+      <h2 class="card-title"><i class="ti ti-chart-area-line text-ink"></i> <?= e(t('dash.traffic.title')) ?> <span class="text-zinc-300 font-sans font-normal text-xs">· <?= e(t('dash.traffic.window')) ?></span></h2>
+      <?php if ($hasSeries): ?>
+      <div class="flex items-center gap-4">
+        <span class="flex items-center gap-1.5 text-[11px] text-zinc-500"><span class="w-2.5 h-2.5 rounded-sm bg-speed"></span> <?= e(t('dash.traffic.cached')) ?></span>
+        <span class="flex items-center gap-1.5 text-[11px] text-zinc-500"><span class="w-2.5 h-2.5 rounded-sm bg-ink"></span> <?= e(t('dash.traffic.origin')) ?></span>
+      </div>
       <?php endif; ?>
     </div>
-    <?php if (empty($alerts)): ?>
-      <div class="flex-1 flex flex-col items-center justify-center text-center px-4 py-10">
-        <span class="w-10 h-10 rounded-full bg-emerald-50 flex items-center justify-center mb-2"><i class="ti ti-circle-check text-emerald-500 text-xl"></i></span>
-        <p class="text-sm text-zinc-500"><?= e(t('dash.allclear')) ?></p>
+    <?php if ($hasSeries): ?>
+      <div class="px-3 pt-3"><div id="chartTraffic"></div></div>
+    <?php else: ?>
+      <div class="flex flex-col items-center justify-center text-center px-4 py-16">
+        <i class="ti ti-chart-area-line text-4xl text-zinc-200 mb-2"></i>
+        <p class="text-sm text-zinc-400"><?= e(t('dash.traffic.empty')) ?></p>
+      </div>
+    <?php endif; ?>
+  </div>
+
+  <div class="card overflow-hidden flex flex-col">
+    <div class="card-head"><h2 class="card-title"><i class="ti ti-rocket text-speed"></i> <?= e(t('dash.cacheperf.title')) ?></h2></div>
+    <?php if ($cacheable > 0): ?>
+      <div class="px-4 pt-2"><div id="chartHit"></div></div>
+      <div class="px-4 pb-4 mt-1 space-y-2 text-xs">
+        <div class="flex items-center justify-between"><span class="flex items-center gap-2 text-zinc-500"><span class="w-2 h-2 rounded-full bg-speed"></span> <?= e(t('dash.cacheperf.served')) ?></span><span class="mono font-semibold text-zinc-800"><?= e($compact($analytics['cached'])) ?></span></div>
+        <div class="flex items-center justify-between"><span class="flex items-center gap-2 text-zinc-500"><span class="w-2 h-2 rounded-full bg-ink"></span> <?= e(t('dash.cacheperf.origin')) ?></span><span class="mono font-semibold text-zinc-800"><?= e($compact($analytics['origin'])) ?></span></div>
+        <div class="flex items-center justify-between pt-2 border-t border-zinc-100"><span class="flex items-center gap-2 text-zinc-500"><i class="ti ti-arrow-down-circle text-emerald-500"></i> <?= e(t('dash.cacheperf.saved')) ?></span><span class="mono font-semibold text-emerald-600"><?= e(format_bytes((int) $analytics['bw_saved'])) ?></span></div>
       </div>
     <?php else: ?>
-      <?php $alertStyle = ['danger' => 'bg-red-50 text-red-500', 'warn' => 'bg-amber-50 text-amber-500', 'info' => 'bg-sky-50 text-sky-500']; ?>
-      <div class="divide-y divide-zinc-50">
-        <?php foreach ($alerts as $a): ?>
-          <div class="flex items-start gap-2.5 px-4 py-3">
-            <span class="w-6 h-6 rounded-md flex items-center justify-center shrink-0 mt-0.5 <?= $alertStyle[$a['level']] ?? $alertStyle['info'] ?>"><i class="ti <?= e($a['icon']) ?> text-sm"></i></span>
-            <p class="text-sm text-zinc-700 leading-snug flex-1"><?= e($a['text']) ?></p>
-          </div>
-        <?php endforeach; ?>
+      <div class="flex-1 flex flex-col items-center justify-center text-center px-4 py-12">
+        <span class="w-10 h-10 rounded-full bg-speed-pale flex items-center justify-center mb-2"><i class="ti ti-rocket text-speed text-xl"></i></span>
+        <p class="text-sm text-zinc-400"><?= e(t('dash.cacheperf.empty')) ?></p>
       </div>
     <?php endif; ?>
   </div>
 </div>
 
-<!-- top sites -->
-<div class="card overflow-hidden">
-  <div class="card-head">
-    <h2 class="card-title"><i class="ti ti-world text-ink"></i> <?= e(t('dash.top_sites')) ?></h2>
-    <a href="/sites" class="btn btn-sm btn-ghost"><?= e(t('sites.view_all')) ?> →</a>
-  </div>
-  <?php if (empty($sites)): ?>
-    <div class="px-6 py-12 text-center">
-      <i class="ti ti-world text-4xl text-zinc-200 block mb-2"></i>
-      <p class="text-sm font-medium text-zinc-600"><?= e(t('sites.empty')) ?></p>
-      <a href="/sites/add" class="btn btn-primary btn-sm mt-3 inline-flex"><i class="ti ti-plus text-sm"></i> <?= e(t('sites.add_first')) ?></a>
+<!-- monitoring (real history per selected range) -->
+<div class="flex items-center justify-between mb-2.5 mt-1">
+  <h2 class="font-head font-semibold text-sm text-zinc-700 flex items-center gap-2"><i class="ti ti-chart-line text-ink"></i> <?= e(t('dash.system.title')) ?></h2>
+  <select id="rangeSelect" onchange="location.href='/dashboard?range=' + encodeURIComponent(this.value)"
+          class="text-xs font-medium text-zinc-700 bg-white border border-zinc-200 hover:border-zinc-300 rounded-lg pl-3 pr-2.5 py-2 cursor-pointer focus:outline-none focus:border-ink">
+    <?php foreach ($ranges as $val => $key): ?>
+      <option value="<?= e($val) ?>" <?= $val === $range ? 'selected' : '' ?>><?= e(t($key)) ?></option>
+    <?php endforeach; ?>
+  </select>
+</div>
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-5">
+  <div class="card p-4">
+    <div class="flex items-center justify-between mb-1">
+      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-cpu text-ink"></i> <?= e(t('chart.cpu')) ?></span>
+      <span class="mono text-sm font-semibold text-zinc-500"><?= $vps['cores'] ? e(t('vps.cores', ['n' => $vps['cores']])) : '—' ?></span>
     </div>
-  <?php else: ?>
-    <table class="tbl">
-      <thead>
-        <tr>
-          <th><?= e(t('col.domain')) ?></th>
-          <th><?= e(t('col.app')) ?></th>
-          <th><?= e(t('col.ssl')) ?></th>
-          <th><?= e(t('col.requests')) ?></th>
-          <th class="text-right"><?= e(t('col.action')) ?></th>
-        </tr>
-      </thead>
-      <tbody>
-        <?php foreach ($sites as $site): ?>
+    <div id="chartCpu"></div>
+  </div>
+  <div class="card p-4">
+    <div class="flex items-center justify-between mb-1">
+      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-cpu-2 text-speed"></i> <?= e(t('chart.memory')) ?></span>
+      <span class="mono text-sm font-semibold text-zinc-500"><?= e($memTotal) ?></span>
+    </div>
+    <div id="chartMem"></div>
+  </div>
+  <div class="card p-4">
+    <div class="flex items-center justify-between mb-1">
+      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-activity text-amber-500"></i> <?= e(t('chart.load')) ?></span>
+      <span class="mono text-sm font-semibold text-zinc-500"><?= e($coreLabel) ?></span>
+    </div>
+    <div id="chartLoad"></div>
+  </div>
+  <div class="card p-4">
+    <div class="flex items-center justify-between mb-1">
+      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-device-floppy text-amber-500"></i> <?= e(t('chart.disk')) ?></span>
+      <span class="mono text-sm font-semibold text-zinc-500"><?= e($diskTotal) ?></span>
+    </div>
+    <div id="chartDisk"></div>
+  </div>
+  <div class="card p-4">
+    <div class="flex items-center justify-between mb-1">
+      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-arrows-up-down text-emerald-500"></i> <?= e(t('chart.network')) ?></span>
+      <span class="mono font-semibold text-xs text-zinc-700"><span class="text-emerald-600">↓<span id="vNetIn">0</span></span> <span class="text-ink">↑<span id="vNetOut">0</span></span> <span class="text-zinc-300">Mbps</span></span>
+    </div>
+    <div id="chartNet"></div>
+  </div>
+  <div class="card p-4">
+    <div class="flex items-center justify-between mb-1">
+      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-database-cog text-speed"></i> <?= e(t('chart.diskio')) ?></span>
+      <span class="mono font-semibold text-xs text-zinc-700"><span class="text-speed">R <span id="vDioR">0</span></span> <span class="text-violet-600">W <span id="vDioW">0</span></span> <span class="text-zinc-300">MB/s</span></span>
+    </div>
+    <div id="chartDio"></div>
+  </div>
+</div>
+
+<!-- top sites + needs attention -->
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+  <div class="card lg:col-span-2 overflow-hidden">
+    <div class="card-head">
+      <h2 class="card-title"><i class="ti ti-flame text-amber-500"></i> <?= e(t('dash.top_sites')) ?> <span class="text-zinc-300 font-sans font-normal text-xs">· <?= e(t('dash.top_sites.hint')) ?></span></h2>
+      <a href="/sites" class="btn btn-sm btn-ghost"><?= e(t('sites.view_all')) ?> →</a>
+    </div>
+    <?php if (empty($sites)): ?>
+      <div class="px-6 py-12 text-center">
+        <i class="ti ti-world text-4xl text-zinc-200 block mb-2"></i>
+        <p class="text-sm font-medium text-zinc-600"><?= e(t('sites.empty')) ?></p>
+        <a href="/sites/add" class="btn btn-primary btn-sm mt-3 inline-flex"><i class="ti ti-plus text-sm"></i> <?= e(t('sites.add_first')) ?></a>
+      </div>
+    <?php else: ?>
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th><?= e(t('col.domain')) ?></th>
+            <th><?= e(t('col.app')) ?></th>
+            <th><?= e(t('col.ssl')) ?></th>
+            <th><?= e(t('col.requests')) ?></th>
+            <th class="text-right"><?= e(t('col.action')) ?></th>
+          </tr>
+        </thead>
+        <tbody>
+          <?php foreach ($sites as $site): ?>
           <tr>
             <td>
               <a href="/sites/<?= e($site['domain']) ?>" class="flex items-center gap-2.5 font-medium text-zinc-900 hover:text-ink">
@@ -253,122 +297,115 @@ $fmtBytes = fn(float $b): string =>
                 <span class="badge badge-muted"><?= e(t('ssl.self')) ?></span>
               <?php endif; ?>
             </td>
-            <td>
-              <span class="mono text-sm font-medium text-zinc-700"><?= number_format($site['req_today']) ?></span>
-              <span class="text-[11px] text-zinc-400 ml-1"><?= e(t('dash.kpi.req_today_unit')) ?></span>
-            </td>
+            <td><span class="mono text-sm font-medium text-zinc-700"><?= e($compact($site['req_today'])) ?></span></td>
             <td class="text-right"><a href="/sites/<?= e($site['domain']) ?>" class="btn btn-sm btn-ghost"><?= e(t('action.manage')) ?></a></td>
           </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+    <?php endif; ?>
+  </div>
+
+  <div class="card overflow-hidden flex flex-col">
+    <div class="card-head">
+      <h2 class="card-title"><i class="ti ti-bell text-amber-500"></i> <?= e(t('dash.attention')) ?></h2>
+      <?php if (!empty($alerts)): ?><span class="badge badge-warn"><?= count($alerts) ?></span><?php endif; ?>
+    </div>
+    <?php if (empty($alerts)): ?>
+      <div class="flex-1 flex flex-col items-center justify-center text-center px-4 py-12">
+        <span class="w-10 h-10 rounded-full bg-emerald-50 flex items-center justify-center mb-2"><i class="ti ti-circle-check text-emerald-500 text-xl"></i></span>
+        <p class="text-sm text-zinc-500"><?= e(t('dash.allclear')) ?></p>
+      </div>
+    <?php else: ?>
+      <?php $alertStyle = ['danger' => 'bg-red-50 text-red-500', 'warn' => 'bg-amber-50 text-amber-500', 'info' => 'bg-sky-50 text-sky-500']; ?>
+      <div class="divide-y divide-zinc-50 flex-1">
+        <?php foreach ($alerts as $a): ?>
+          <div class="flex items-start gap-2.5 px-4 py-3">
+            <span class="w-6 h-6 rounded-md flex items-center justify-center shrink-0 mt-0.5 <?= $alertStyle[$a['level']] ?? $alertStyle['info'] ?>"><i class="ti <?= e($a['icon']) ?> text-sm"></i></span>
+            <p class="text-xs text-zinc-700 leading-snug flex-1"><?= e($a['text']) ?></p>
+          </div>
         <?php endforeach; ?>
-      </tbody>
-    </table>
-  <?php endif; ?>
+      </div>
+    <?php endif; ?>
+  </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
 <script>
 (function () {
-  const MAX       = 8640;
-  const POLL      = 5000;
-  const STORE_KEY = 'aidipanel_dash_v1';
-  let   WIN       = 720;
+  const $ = s => document.querySelector(s);
 
-  const seed = <?= json_encode([
-      'cpu'   => (float) $metrics['cpu'],
-      'mem'   => (float) $metrics['memory']['percent'],
-      'disk'  => (float) $metrics['disk']['percent'],
-      'l1'    => (float) $metrics['load']['1m'],
-      'l5'    => (float) $metrics['load']['5m'],
-      'l15'   => (float) $metrics['load']['15m'],
-      'cores' => (int) ($vps['cores'] ?? 1),
-  ], JSON_UNESCAPED_SLASHES) ?>;
-
-  const labels = [];
-  const D = { cpu: [], mem: [], disk: [], l1: [], l5: [], l15: [] };
-  const round    = v => Math.round((+v || 0) * 10) / 10;
-  const setText  = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-  const nowLabel = () => { const d = new Date(), p = n => String(n).padStart(2,'0'); return p(d.getHours())+':'+p(d.getMinutes()); };
-  const fmtBytes = b => b >= 1048576 ? (b/1048576).toFixed(1)+' MB/s' : b >= 1024 ? (b/1024).toFixed(1)+' KB/s' : Math.round(b)+' B/s';
-
-  try {
-    const raw = localStorage.getItem(STORE_KEY);
-    if (raw) {
-      const saved = JSON.parse(raw);
-      if (saved && saved.ts && (Date.now() - saved.ts) < 12 * 3600 * 1000 && saved.labels?.length) {
-        labels.push(...saved.labels);
-        Object.keys(D).forEach(k => { if (saved.D?.[k]) D[k].push(...saved.D[k]); });
-      }
-    }
-  } catch (e) {}
-
-  function saveToStorage() {
-    try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({
-        labels: labels.slice(-MAX),
-        D: Object.fromEntries(Object.entries(D).map(([k, v]) => [k, v.slice(-MAX)])),
-        ts: Date.now(),
-      }));
-    } catch (e) {}
-  }
-  setInterval(saveToStorage, 30000);
-  window.addEventListener('beforeunload', saveToStorage);
-
-  function baseOpts(colors, type, yMax, legend) {
+  // ── shared chart options (crisp, flat, crosshair tooltips) ────────────────
+  function opts(colors, type, yMax, legend, suffix) {
+    suffix = suffix || '';
     return {
-      chart: { type, height: 150, toolbar: { show: false }, fontFamily: '"Plus Jakarta Sans"', animations: { enabled: true, easing: 'linear', dynamicAnimation: { enabled: false } } },
-      stroke: { curve: 'smooth', width: 2 },
-      colors, fill: { type: 'solid', opacity: type === 'area' ? 0.10 : 1 },
+      chart: { type, height: 130, toolbar: { show: false }, parentHeightOffset: 0, fontFamily: '"Plus Jakarta Sans"', animations: { enabled: false } },
+      stroke: { curve: 'smooth', width: type === 'line' ? 2.5 : 2 },
+      colors, fill: { type: 'solid', opacity: type === 'line' ? 1 : 0.12 },
       dataLabels: { enabled: false },
-      legend: { show: legend, position: 'top', horizontalAlign: 'right', fontSize: '11px', markers: { width: 8, height: 8, radius: 4 }, itemMargin: { horizontal: 7 }, offsetY: -4 },
-      grid: { borderColor: '#f1f1f4', strokeDashArray: 4, padding: { left: 6, right: 12, top: 0, bottom: -6 } },
-      xaxis: { categories: [], tickAmount: 6, labels: { style: { colors: '#a1a1aa', fontSize: '10px', fontFamily: '"JetBrains Mono"' }, rotate: 0 }, axisBorder: { show: false }, axisTicks: { show: false }, tooltip: { enabled: false } },
-      yaxis: { max: yMax, min: 0, tickAmount: 4, labels: { style: { colors: '#a1a1aa', fontSize: '10px', fontFamily: '"JetBrains Mono"' }, formatter: v => Math.round(v * 10) / 10 } },
-      tooltip: { theme: 'light', shared: legend },
+      markers: { size: 3, strokeWidth: 0, hover: { size: 5 } },
+      legend: { show: legend, position: 'top', horizontalAlign: 'right', fontSize: '11px', fontWeight: 500, labels: { colors: '#71717a' }, markers: { width: 8, height: 8, radius: 4 }, itemMargin: { horizontal: 8 }, offsetY: -2 },
+      grid: { borderColor: '#f1f1f4', strokeDashArray: 4, padding: { left: 8, right: 14, top: 4, bottom: -4 }, xaxis: { lines: { show: false } } },
+      xaxis: { categories: [], tickAmount: 7, crosshairs: { show: true, stroke: { color: '#d4d4d8', width: 1, dashArray: 3 } }, axisBorder: { show: false }, axisTicks: { show: false }, tooltip: { enabled: false }, labels: { rotate: 0, hideOverlappingLabels: true, style: { colors: '#a1a1aa', fontSize: '10px', fontFamily: '"JetBrains Mono"' } } },
+      yaxis: { max: yMax, min: 0, tickAmount: 4, labels: { style: { colors: '#a1a1aa', fontSize: '10px', fontFamily: '"JetBrains Mono"' }, formatter: v => (Math.round(v * 10) / 10) + suffix } },
+      tooltip: { theme: 'light', shared: true, intersect: false, x: { show: true }, y: { formatter: v => (Math.round(v * 10) / 10) + suffix } },
     };
   }
 
-  const loadMax = Math.max(2, seed.cores || 1);
-  const cpu  = new ApexCharts(document.querySelector('#chartCpu'),  { ...baseOpts(['#322C7A'], 'area', 100, false),       series: [{ name: 'CPU',    data: [] }] });
-  const mem  = new ApexCharts(document.querySelector('#chartMem'),  { ...baseOpts(['#0891B2'], 'area', 100, false),       series: [{ name: 'Memory', data: [] }] });
-  const disk = new ApexCharts(document.querySelector('#chartDisk'), { ...baseOpts(['#F59E0B'], 'area', 100, false),       series: [{ name: 'Disk',   data: [] }] });
-  const load = new ApexCharts(document.querySelector('#chartLoad'), { ...baseOpts(['#322C7A','#0891B2','#F59E0B'], 'line', loadMax, true), series: [{ name: '1m', data: [] }, { name: '5m', data: [] }, { name: '15m', data: [] }] });
-  cpu.render(); mem.render(); disk.render(); load.render();
+  // History is embedded server-side for the selected range (CloudPanel-style):
+  // the dropdown reloads /dashboard?range=… and PHP renders the matching window,
+  // so the x-axis labels and hover tooltips always have real data to show.
+  const H = <?= json_encode($history, JSON_UNESCAPED_SLASHES) ?>;
+  const setT = (id, v) => { const el = $('#' + id); if (el) el.textContent = v; };
+  const last = a => (a && a.length) ? a[a.length - 1] : 0;
 
-  function sl(arr) { return arr.slice(-WIN); }
-
-  function redraw() {
-    // tickAmount must be included here every time — omitting it resets to default (all ticks)
-    const axis = { xaxis: { categories: sl(labels), tickAmount: 6 } };
-    cpu.updateOptions(axis, false, false);  cpu.updateSeries([{ name: 'CPU',    data: sl(D.cpu) }]);
-    mem.updateOptions(axis, false, false);  mem.updateSeries([{ name: 'Memory', data: sl(D.mem) }]);
-    disk.updateOptions(axis, false, false); disk.updateSeries([{ name: 'Disk',  data: sl(D.disk) }]);
-    load.updateOptions(axis, false, false); load.updateSeries([{ name: '1m', data: sl(D.l1) }, { name: '5m', data: sl(D.l5) }, { name: '15m', data: sl(D.l15) }]);
+  function build(sel, colors, type, yMax, legend, suffix, series) {
+    const o = opts(colors, type, yMax, legend, suffix);
+    o.xaxis.categories = H.labels;
+    o.series = series;
+    new ApexCharts($(sel), o).render();
   }
+  build('#chartCpu',  ['#322C7A'], 'area', 100, false, '%', [{ name: 'CPU', data: H.cpu }]);
+  build('#chartMem',  ['#0891B2'], 'area', 100, false, '%', [{ name: 'Memory', data: H.mem }]);
+  build('#chartLoad', ['#322C7A', '#0891B2', '#F59E0B'], 'line', undefined, true, '', [{ name: '1m', data: H.l1 }, { name: '5m', data: H.l5 }, { name: '15m', data: H.l15 }]);
+  build('#chartDisk', ['#F59E0B'], 'area', 100, false, '%', [{ name: 'Disk', data: H.disk }]);
+  build('#chartNet',  ['#10B981', '#322C7A'], 'area', undefined, true, ' Mb', [{ name: 'In', data: H.nin }, { name: 'Out', data: H.nout }]);
+  build('#chartDio',  ['#0891B2', '#7C3AED'], 'area', undefined, true, ' MB', [{ name: 'Read', data: H.dr }, { name: 'Write', data: H.dw }]);
+  setT('vNetIn', last(H.nin)); setT('vNetOut', last(H.nout));
+  setT('vDioR', last(H.dr));   setT('vDioW', last(H.dw));
 
-  function push(m) {
-    labels.push(nowLabel());
-    D.cpu.push(round(m.cpu)); D.mem.push(round(m.memory.percent)); D.disk.push(round(m.disk.percent));
-    D.l1.push(round(m.load['1m'])); D.l5.push(round(m.load['5m'])); D.l15.push(round(m.load['15m']));
-    if (labels.length > MAX) { labels.shift(); for (const k in D) D[k].shift(); }
+  // ── traffic & cache analytics (real, from the Nginx access log) ────────────
+  <?php if ($hasSeries): ?>
+  (function () {
+    const tl = <?= json_encode($analytics['series']['labels'], JSON_UNESCAPED_SLASHES) ?>;
+    const tc = <?= json_encode(array_map('intval', $analytics['series']['cached']), JSON_UNESCAPED_SLASHES) ?>;
+    const to = <?= json_encode(array_map('intval', $analytics['series']['origin']), JSON_UNESCAPED_SLASHES) ?>;
+    new ApexCharts($('#chartTraffic'), {
+      chart: { type: 'area', height: 212, stacked: true, toolbar: { show: false }, parentHeightOffset: 0, fontFamily: '"Plus Jakarta Sans"', animations: { enabled: true, speed: 500 } },
+      stroke: { curve: 'smooth', width: 2 }, colors: ['#0891B2', '#322C7A'],
+      fill: { type: 'solid', opacity: 0.85 }, dataLabels: { enabled: false }, markers: { size: 0, hover: { size: 4 } },
+      legend: { show: false },
+      grid: { borderColor: '#f1f1f4', strokeDashArray: 4, padding: { left: 8, right: 14, top: 4, bottom: -4 }, xaxis: { lines: { show: false } } },
+      xaxis: { categories: tl, tickAmount: 8, crosshairs: { show: true, stroke: { color: '#d4d4d8', width: 1, dashArray: 3 } }, axisBorder: { show: false }, axisTicks: { show: false }, tooltip: { enabled: false }, labels: { rotate: 0, hideOverlappingLabels: true, style: { colors: '#a1a1aa', fontSize: '10px', fontFamily: '"JetBrains Mono"' } } },
+      yaxis: { min: 0, tickAmount: 4, labels: { style: { colors: '#a1a1aa', fontSize: '10px', fontFamily: '"JetBrains Mono"' }, formatter: v => Math.round(v) } },
+      tooltip: { theme: 'light', shared: true, intersect: false, x: { show: true }, y: { formatter: v => Math.round(v) + ' req' } },
+      series: [{ name: <?= json_encode(t('dash.traffic.cached')) ?>, data: tc }, { name: <?= json_encode(t('dash.traffic.origin')) ?>, data: to }],
+    }).render();
 
-    setText('cpuNow',  round(m.cpu));
-    setText('memNow',  round(m.memory.percent));
-    setText('diskNow', round(m.disk.percent));
-    setText('loadNow', round(m.load['1m']));
-    if (m.net) { setText('kpiNetRx', fmtBytes(m.net.rx_rate || 0)); setText('kpiNetTx', fmtBytes(m.net.tx_rate || 0)); }
+    const totals = tl.map((_, i) => (tc[i] || 0) + (to[i] || 0));
+    const spk = $('#spkReq');
+    if (spk) new ApexCharts(spk, { chart: { type: 'area', height: 38, sparkline: { enabled: true } }, series: [{ name: 'Req', data: totals }], stroke: { curve: 'smooth', width: 2 }, colors: ['#322C7A'], fill: { type: 'solid', opacity: 0.12 }, tooltip: { enabled: false } }).render();
+  })();
+  <?php endif; ?>
 
-    redraw();
-  }
-
-  push({ cpu: seed.cpu, memory: { percent: seed.mem }, disk: { percent: seed.disk }, load: { '1m': seed.l1, '5m': seed.l5, '15m': seed.l15 }, net: null });
-
-  document.getElementById('rangeSelect').addEventListener('change', function () {
-    WIN = parseInt(this.value, 10);
-    redraw();
-  });
-
-  setInterval(async () => {
-    try { const m = await window.api('/api/metrics'); if (m?.cpu !== undefined) push(m); } catch (e) {}
-  }, POLL);
+  <?php if ($cacheable > 0): ?>
+  new ApexCharts($('#chartHit'), {
+    chart: { type: 'radialBar', height: 212, sparkline: { enabled: true }, fontFamily: '"Plus Jakarta Sans"' },
+    series: [<?= (float) $analytics['hit_ratio'] ?>], colors: ['#0891B2'], labels: [<?= json_encode(t('dash.cacheperf.hit')) ?>], stroke: { lineCap: 'round' },
+    plotOptions: { radialBar: { hollow: { size: '60%' }, track: { background: '#E0F7FB', strokeWidth: '100%' },
+      dataLabels: { name: { show: true, offsetY: 20, color: '#a1a1aa', fontSize: '11px', fontWeight: 600 },
+        value: { show: true, offsetY: -10, color: '#18181b', fontSize: '32px', fontWeight: 700, fontFamily: '"JetBrains Mono"', formatter: v => (Math.round(v * 10) / 10) + '%' } } } },
+  }).render();
+  <?php endif; ?>
 })();
 </script>

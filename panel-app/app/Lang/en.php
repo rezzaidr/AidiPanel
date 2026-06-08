@@ -56,22 +56,52 @@ return [
     'admin.backups.desc'    => 'Scheduled and on-demand server backups',
 
     // Dashboard
-    'dash.subtitle'         => 'Monitoring & server status',
-    'dash.live'             => 'Live · every 5s',
-    'dash.attention'        => 'Needs Attention',
-    'dash.allclear'         => 'All clear — nothing needs your attention right now.',
+    'dash.subtitle'           => 'Real-time monitoring & performance',
+    'dash.live'               => 'Live',
+    'dash.attention'          => 'Needs Attention',
+    'dash.allclear'           => 'All clear — nothing needs your attention right now.',
     'dash.alert.service_down' => '{svc} is stopped',
-    'dash.alert.disk_high'  => 'Disk is {pct}% full',
-    'dash.alert.mem_high'   => 'Memory is {pct}% used',
-    'dash.top_sites'        => 'Top Sites',
-    'dash.kpi.req_today'    => 'Requests today',
-    'dash.kpi.req_today_hint'=> 'From Nginx access log',
-    'dash.kpi.req_today_unit'=> 'requests',
-    'dash.kpi.cache_size'   => 'Cache size',
-    'dash.kpi.cache_hint'   => 'FastCGI cache on disk',
-    'dash.kpi.net_down'     => 'Net ↓ (in)',
-    'dash.kpi.net_up'       => 'Net ↑ (out)',
-    'dash.kpi.net_iface'    => '{iface}',
+    'dash.alert.disk_high'    => 'Disk is {pct}% full',
+    'dash.alert.mem_high'     => 'Memory is {pct}% used',
+
+    // Dashboard — time range
+    'dash.range.30m'          => 'Last 30 minutes',
+    'dash.range.1h'           => 'Last 1 hour',
+    'dash.range.3h'           => 'Last 3 hours',
+    'dash.range.6h'           => 'Last 6 hours',
+    'dash.range.12h'          => 'Last 12 hours',
+
+    // Dashboard — KPI tiles
+    'dash.kpi.requests'        => 'Requests',
+    'dash.kpi.requests_hint'   => 'today',
+    'dash.kpi.hit_ratio'       => 'Cache Hit Ratio',
+    'dash.kpi.hit_ratio_hint'  => '{cached} of {total} cacheable from cache',
+    'dash.kpi.hit_ratio_empty' => 'No cacheable requests yet',
+    'dash.kpi.bw_saved'        => 'Bandwidth Saved',
+    'dash.kpi.bw_saved_hint'   => 'served from cache today',
+    'dash.kpi.data_cached'     => 'Data Cached',
+    'dash.kpi.data_cached_hint'=> 'FastCGI cache on disk',
+
+    // Dashboard — traffic analytics (cache effectiveness)
+    'dash.traffic.title'      => 'Traffic',
+    'dash.traffic.window'     => 'today · per minute',
+    'dash.traffic.cached'     => 'Cached',
+    'dash.traffic.origin'     => 'Origin / PHP',
+    'dash.traffic.empty'      => 'No requests recorded yet today.',
+    'dash.cacheperf.title'    => 'Cache Performance',
+    'dash.cacheperf.hit'      => 'Cache hit',
+    'dash.cacheperf.served'   => 'Served from cache',
+    'dash.cacheperf.origin'   => 'Origin / PHP',
+    'dash.cacheperf.saved'    => 'Bandwidth saved',
+    'dash.cacheperf.empty'    => 'Cache metrics appear once your sites receive traffic.',
+
+    // Dashboard — monitoring (historical charts)
+    'dash.system.title'       => 'Monitoring',
+    'dash.system.refresh'     => 'auto-refresh · 5s',
+
+    // Dashboard — top sites
+    'dash.top_sites'          => 'Top Sites',
+    'dash.top_sites.hint'     => 'by requests today',
 
     // VPS status panel
     'vps.title'             => 'Server status',
@@ -84,6 +114,7 @@ return [
     'vps.region'            => 'Region',
     'vps.ipv4'              => 'IPv4 Public',
     'vps.cores'             => '{n} vCPU',
+    'vps.uptime'            => 'Uptime',
 
     // System charts
     'chart.title'           => 'System metrics',
@@ -91,6 +122,8 @@ return [
     'chart.memory'          => 'Memory Usage',
     'chart.disk'            => 'Disk Usage',
     'chart.load'            => 'Load Average',
+    'chart.network'         => 'Network I/O',
+    'chart.diskio'          => 'Disk I/O',
 
     // Services panel
     'services.title'        => 'Services',

@@ -379,3 +379,44 @@ function sys_uptime(): string
     $mins   = intdiv($uptime % 3600, 60);
     return "{$days}d {$hours}h {$mins}m";
 }
+
+/**
+ * Disk I/O throughput (bytes/sec) across physical block devices.
+ * Reads /proc/diskstats and computes the delta against the previous sample,
+ * mirroring sys_net_rate() so a single request yields a real rate.
+ */
+function sys_disk_io(): array
+{
+    $f     = sys_get_temp_dir() . '/aidipanel_diskio.json';
+    $lines = @file('/proc/diskstats') ?: [];
+    $readSectors = 0; $writeSectors = 0;
+    foreach ($lines as $line) {
+        $c    = preg_split('/\s+/', trim($line));
+        $name = $c[2] ?? '';
+        // physical disks only — skip partitions, loop, ram, dm-*
+        if (!preg_match('/^(sd[a-z]+|vd[a-z]+|xvd[a-z]+|nvme\d+n\d+|mmcblk\d+)$/', $name)) continue;
+        $readSectors  += (int) ($c[5] ?? 0);   // sectors read
+        $writeSectors += (int) ($c[9] ?? 0);   // sectors written
+    }
+    $read  = $readSectors  * 512;
+    $write = $writeSectors * 512;
+    $now   = microtime(true);
+    $curr  = ['r' => $read, 'w' => $write, 'ts' => $now];
+
+    $prev = null;
+    if (is_readable($f)) {
+        $d = @json_decode((string) file_get_contents($f), true);
+        if (is_array($d) && isset($d['ts'])) $prev = $d;
+    }
+    @file_put_contents($f, json_encode($curr), LOCK_EX);
+
+    // first sample, clock skew, or counter reset (reboot) → no rate yet
+    if ($prev === null || $now <= $prev['ts'] || $read < $prev['r']) {
+        return ['read_rate' => 0, 'write_rate' => 0];
+    }
+    $elapsed = $now - $prev['ts'];
+    return [
+        'read_rate'  => max(0, ($read  - $prev['r']) / $elapsed),
+        'write_rate' => max(0, ($write - $prev['w']) / $elapsed),
+    ];
+}

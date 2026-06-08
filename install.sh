@@ -1247,6 +1247,7 @@ _do_deploy_app() {
   # Copy app files
   cp -r "${app_src}/public/"* "${PANEL_DIR}/public/"
   cp -r "${app_src}/app"       "${PANEL_DIR}/"
+  [[ -d "${app_src}/bin" ]] && cp -r "${app_src}/bin" "${PANEL_DIR}/"   # CLI helpers (metrics collector)
 
   # Storage dirs with correct permissions for www-data write access
   mkdir -p "${PANEL_DIR}/storage/db" \
@@ -1258,6 +1259,11 @@ _do_deploy_app() {
   # Permissions
   chown -R "${PANEL_USER}":www-data "${PANEL_DIR}/app"
   chown -R "${PANEL_USER}":www-data "${PANEL_DIR}/public"
+  if [[ -d "${PANEL_DIR}/bin" ]]; then
+    chown -R "${PANEL_USER}":www-data "${PANEL_DIR}/bin"
+    chmod 750 "${PANEL_DIR}/bin"
+    find "${PANEL_DIR}/bin" -type f -exec chmod 640 {} \;
+  fi
   chown -R www-data:www-data "${PANEL_DIR}/storage"
   find "${PANEL_DIR}/app"    -type f -exec chmod 640 {} \;
   find "${PANEL_DIR}/app"    -type d -exec chmod 750 {} \;
@@ -1410,6 +1416,9 @@ PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
 # Rotate AidiPanel logs weekly
 0 0 * * 0 root find /var/log/nginx -name "*.log" -size +100M -exec gzip {} \; 2>/dev/null
+
+# Collect system metrics every minute (dashboard Monitoring history charts)
+* * * * * www-data /usr/bin/php /opt/aidipanel/bin/collect-metrics.php >/dev/null 2>&1
 CRONFILE
 
   chmod 644 /etc/cron.d/aidipanel
