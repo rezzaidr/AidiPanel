@@ -163,7 +163,7 @@ return [
     // Manage Site — common
     'site.back'             => 'Back to Sites',
     'site.visit'            => 'Visit site',
-    'site.online'           => 'Online',
+    'site.active'           => 'Active',
 
     // Manage Site — tabs
     'site.tab.overview'     => 'Overview',

@@ -8,6 +8,7 @@ $hasCache  = (bool) ($site['cache_enabled'] ?? false);
 $isStatic  = $type === 'static';
 $iconBg    = $isStatic ? 'bg-zinc-100' : 'bg-ink-pale';
 $iconColor = $isStatic ? 'text-zinc-400' : 'text-ink';
+$visitUrl  = ($hasLe ? 'https' : 'http') . '://' . $domain;   // self-signed sites have no trusted https → use http
 
 $appIcon = static function (string $type): string {
     return match ($type) {
@@ -73,7 +74,7 @@ if ($opcacheEnabled && isset($opcache['opcache_statistics'])) {
             <h1 class="font-head font-bold text-[19px] text-zinc-900 leading-none"><?= e($domain) ?></h1>
             <span class="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
               <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-              <?= e(t('site.online')) ?>
+              <?= e(t('site.active')) ?>
             </span>
           </div>
           <p class="text-xs text-zinc-400 mt-1.5">
@@ -86,14 +87,10 @@ if ($opcacheEnabled && isset($opcache['opcache_statistics'])) {
       </div>
 
       <div class="flex items-center gap-2">
-        <a href="https://<?= e($domain) ?>" target="_blank" rel="noopener"
+        <a href="<?= e($visitUrl) ?>" target="_blank" rel="noopener"
            class="btn btn-secondary text-xs flex items-center gap-1.5">
           <i class="ti ti-external-link text-sm"></i> <?= e(t('site.visit')) ?>
         </a>
-        <button type="button"
-                class="w-8 h-8 rounded-lg border border-zinc-200 hover:border-zinc-300 flex items-center justify-center text-zinc-500">
-          <i class="ti ti-dots-vertical"></i>
-        </button>
       </div>
     </div>
 
@@ -244,7 +241,7 @@ if ($opcacheEnabled && isset($opcache['opcache_statistics'])) {
       <div class="card p-3">
         <p class="eyebrow px-2 pt-1 pb-2"><?= e(t('site.qa.title')) ?></p>
 
-        <a href="https://<?= e($domain) ?>" target="_blank" rel="noopener"
+        <a href="<?= e($visitUrl) ?>" target="_blank" rel="noopener"
            class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-zinc-50 text-sm text-zinc-700 transition-colors">
           <i class="ti ti-external-link text-[18px] text-zinc-400"></i>
           <?= e(t('site.qa.visit')) ?>
@@ -443,6 +440,7 @@ if ($opcacheEnabled && isset($opcache['opcache_statistics'])) {
 
   <div class="space-y-5 max-w-2xl">
 
+    <?php if ($type !== 'static' && $type !== 'proxy'): ?>
     <!-- PHP version -->
     <div class="card p-5">
       <h2 class="font-head font-semibold text-sm text-zinc-900 mb-1"><?= e(t('site.set.php_title')) ?></h2>
@@ -460,6 +458,7 @@ if ($opcacheEnabled && isset($opcache['opcache_statistics'])) {
         <button type="submit" class="btn btn-primary"><?= e(t('site.set.php_apply')) ?></button>
       </form>
     </div>
+    <?php endif; ?>
 
     <!-- Nginx config -->
     <div class="card overflow-hidden">

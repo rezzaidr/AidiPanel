@@ -90,15 +90,15 @@ $usesPhp = static function (string $type): bool {
         $createdAt  = $site['created_at'] ?? '';
         $createdFmt = $createdAt ? date('M j, Y', strtotime($createdAt)) : '';
     ?>
-      <tr data-domain="<?= e($domain) ?>" data-type="<?= e($type) ?>" class="cursor-pointer">
+      <tr data-domain="<?= e($domain) ?>" data-type="<?= e($type) ?>">
         <td class="px-5 py-3.5">
           <div class="flex items-center gap-3">
             <span class="w-8 h-8 rounded-lg <?= $iconBg ?> flex items-center justify-center shrink-0">
               <i class="ti <?= e($appIcon($type)) ?> <?= $iconColor ?>"></i>
             </span>
             <div>
-              <div class="font-medium text-zinc-900 flex items-center gap-1.5">
-                <?= e($domain) ?>
+              <div class="font-medium flex items-center gap-1.5">
+                <a href="/sites/<?= e($domain) ?>" class="text-zinc-900 hover:text-ink hover:underline"><?= e($domain) ?></a>
                 <?php if ($hasLe): ?>
                   <i class="ti ti-lock-check text-emerald-500 text-sm" title="SSL active"></i>
                 <?php endif; ?>
