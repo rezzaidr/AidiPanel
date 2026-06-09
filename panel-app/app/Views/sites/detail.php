@@ -3,12 +3,31 @@ $pageTitle = $site['domain'];
 $domain    = $site['domain'];
 $type      = $site['type'] ?? 'php';
 $phpVer    = $site['php_version'] ?? '';
-$hasLe     = ($site['ssl_type'] ?? '') === 'letsencrypt';
+$sslState  = $ssl['state'] ?? 'none';
+$hasLe     = $sslState === 'letsencrypt';
+$hasTrustedSsl = $ssl['trusted'] ?? false;   // CA-signed + valid for this domain + not expired
+$sslTypeLabel  = match ($sslState) {
+    'letsencrypt' => t('site.ssl.le'),
+    'custom'      => t('site.ssl.custom'),
+    'self-signed' => t('site.ssl.self'),
+    default       => t('site.ssl.none'),
+};
+// Why a present-but-untrusted cert is still flagged — guides the user to a fix.
+$sslReason = null;
+if (!$hasTrustedSsl && $sslState !== 'none') {
+    if (!empty($ssl['expiry']) && (int) ($ssl['daysLeft'] ?? 1) <= 0) {
+        $sslReason = t('site.ssl.reason_expired');
+    } elseif (!empty($ssl['selfSigned'])) {
+        $sslReason = t('site.ssl.reason_selfsigned');
+    } elseif (empty($ssl['covers'])) {
+        $sslReason = t('site.ssl.reason_mismatch', ['names' => implode(', ', $ssl['domains'] ?? []) ?: '—']);
+    }
+}
 $hasCache  = (bool) ($site['cache_enabled'] ?? false);
 $isStatic  = $type === 'static';
 $iconBg    = $isStatic ? 'bg-zinc-100' : 'bg-ink-pale';
 $iconColor = $isStatic ? 'text-zinc-400' : 'text-ink';
-$visitUrl  = ($hasLe ? 'https' : 'http') . '://' . $domain;   // self-signed sites have no trusted https → use http
+$visitUrl  = ($hasTrustedSsl ? 'https' : 'http') . '://' . $domain;   // only browser-trusted certs get https
 
 $appIcon = static function (string $type): string {
     return match ($type) {
@@ -121,17 +140,17 @@ if ($opcacheEnabled && isset($opcache['opcache_statistics'])) {
     <div class="card p-4">
       <div class="flex items-center justify-between mb-2">
         <span class="eyebrow"><?= e(t('site.ov.ssl_label')) ?></span>
-        <i class="ti <?= $hasLe ? 'ti-lock-check text-emerald-500' : 'ti-lock text-zinc-400' ?>"></i>
+        <i class="ti <?= $hasTrustedSsl ? 'ti-lock-check text-emerald-500' : 'ti-lock text-zinc-400' ?>"></i>
       </div>
       <p class="text-sm font-semibold text-zinc-900">
-        <?= e($hasLe ? t('site.ov.ssl_active') : t('site.ov.ssl_self')) ?>
+        <?= e($hasTrustedSsl ? t('site.ov.ssl_active') : t('site.ov.ssl_self')) ?>
       </p>
       <p class="text-[11px] text-zinc-400 mt-0.5">
         <?php if ($sslDaysLeft !== null): ?>
           <?= e(t('site.ov.days_left', ['n' => $sslDaysLeft])) ?>
-          · <?= e(t('ssl.le')) ?>
+          · <?= e($sslTypeLabel) ?>
         <?php else: ?>
-          <?= e(t('ssl.self')) ?>
+          <?= e($sslTypeLabel) ?>
         <?php endif; ?>
       </p>
     </div>
@@ -499,8 +518,165 @@ if ($opcacheEnabled && isset($opcache['opcache_statistics'])) {
 
   </div>
 
+<?php elseif ($activeTab === 'ssl'): ?>
+<!-- ──────────────── SSL / TLS ──────────────── -->
+  <div class="max-w-2xl" x-data="{ modal: null, submitting: false, domains: ['<?= e($domain) ?>'] }">
+
+    <div class="card overflow-hidden">
+      <div class="card-head">
+        <div>
+          <h2 class="card-title"><i class="ti <?= $hasTrustedSsl ? 'ti-lock-check text-emerald-500' : 'ti-lock-open text-amber-500' ?>"></i> <?= e(t('site.ssl.title')) ?></h2>
+          <p class="text-[11px] text-zinc-400 mt-0.5"><?= e(t('site.ssl.subtitle')) ?></p>
+        </div>
+        <span class="badge <?= $hasTrustedSsl ? 'badge-ok' : 'badge-warn' ?>"><?= e($sslTypeLabel) ?></span>
+      </div>
+
+      <div class="p-5">
+        <?php if (!$hasTrustedSsl): ?>
+        <div class="flex items-start gap-2.5 bg-amber-50 border border-amber-200/70 rounded-lg px-4 py-3 mb-5">
+          <i class="ti ti-alert-triangle text-amber-500 mt-0.5 shrink-0"></i>
+          <div>
+            <?php if ($sslReason !== null): ?>
+            <p class="text-xs font-semibold text-amber-900 mb-0.5"><?= e(t('site.ssl.not_secure_because', ['reason' => $sslReason])) ?></p>
+            <?php endif; ?>
+            <p class="text-xs text-amber-800 leading-relaxed"><?= e(t('site.ssl.warn_untrusted')) ?></p>
+          </div>
+        </div>
+        <?php endif; ?>
+        <div class="grid grid-cols-3 gap-4">
+          <div>
+            <p class="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1"><?= e(t('site.ssl.f.type')) ?></p>
+            <p class="text-sm font-medium text-zinc-800"><?= e($sslTypeLabel) ?></p>
+            <?php if (!empty($ssl['issuer'])): ?>
+            <p class="text-[11px] text-zinc-400 mt-0.5 truncate" title="<?= e($ssl['issuer']) ?>"><?= e(t('site.ssl.f.issuer')) ?>: <?= e($ssl['issuer']) ?></p>
+            <?php endif; ?>
+          </div>
+          <div>
+            <p class="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1"><?= e(t('site.ssl.f.domains')) ?></p>
+            <p class="text-sm mono text-zinc-800 leading-relaxed">
+              <?php foreach ((!empty($ssl['domains']) ? $ssl['domains'] : [$domain]) as $i => $cd): ?><?= $i ? '<br>' : '' ?><?= e($cd) ?><?php endforeach; ?>
+            </p>
+          </div>
+          <div>
+            <p class="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1"><?= e(t('site.ssl.f.valid_until')) ?></p>
+            <p class="text-sm font-medium text-zinc-800">
+              <?php if (!empty($ssl['expiry'])): ?><?= e($ssl['expiry']) ?> <span class="text-zinc-400">(<?= e(t('site.ssl.days_left', ['n' => $ssl['daysLeft']])) ?>)</span><?php else: ?>—<?php endif; ?>
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2.5 px-5 py-3.5 border-t border-zinc-100 bg-zinc-50/60">
+        <?php if ($sslState === 'letsencrypt'): ?>
+        <form method="POST" action="/sites/<?= e($domain) ?>/ssl/renew" @submit="submitting = true">
+          <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+          <button type="submit" class="btn btn-primary" :disabled="submitting">
+            <i class="ti ti-refresh text-sm" x-show="!submitting"></i>
+            <i class="ti ti-loader-2 text-sm animate-spin" x-show="submitting" x-cloak></i>
+            <span x-show="!submitting"><?= e(t('site.ssl.renew')) ?></span>
+            <span x-show="submitting" x-cloak><?= e(t('site.ssl.processing')) ?></span>
+          </button>
+        </form>
+        <?php else: ?>
+        <button type="button" @click="modal='le'" class="btn btn-primary"><i class="ti ti-lock-check text-sm"></i> <?= e(t('site.ssl.install_le')) ?></button>
+        <?php endif; ?>
+        <button type="button" @click="modal='import'" class="btn btn-secondary"><i class="ti ti-certificate text-sm"></i> <?= e(t('site.ssl.import')) ?></button>
+      </div>
+    </div>
+
+    <!-- Modal: Install Let's Encrypt -->
+    <div x-show="modal==='le'" x-cloak class="fixed inset-0 z-50">
+      <div class="absolute inset-0 bg-zinc-900/40" @click="modal=null"></div>
+      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl" @keydown.escape.window="modal=null">
+        <div class="card-head">
+          <h3 class="card-title"><i class="ti ti-rosette-discount-check text-speed"></i> <?= e(t('site.ssl.le_modal_title')) ?></h3>
+          <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
+        </div>
+        <form method="POST" action="/sites/<?= e($domain) ?>/ssl/install" @submit="submitting = true">
+          <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+          <div class="p-5">
+            <div class="flex items-start gap-2.5 bg-speed-pale border border-speed/20 rounded-lg px-4 py-3 mb-4">
+              <i class="ti ti-info-circle text-speed mt-0.5 shrink-0"></i>
+              <p class="text-xs text-zinc-600 leading-relaxed"><?= e(t('site.ssl.le_prereq', ['domain' => $domain])) ?></p>
+            </div>
+
+            <label class="lbl"><?= e(t('site.ssl.f.domains')) ?></label>
+            <template x-for="(d, i) in domains" :key="i">
+              <div class="flex items-center gap-2 mb-2">
+                <input type="text" name="domains[]" x-model="domains[i]" required
+                       class="inp mono text-sm flex-1" placeholder="example.com" autocomplete="off" spellcheck="false">
+                <button type="button" @click="domains.splice(i, 1)" x-show="domains.length > 1"
+                        class="shrink-0 w-9 h-9 grid place-items-center rounded-lg border border-zinc-200 text-zinc-400 hover:text-red-500 hover:border-red-200 transition"
+                        title="<?= e(t('common.remove')) ?>"><i class="ti ti-x text-sm"></i></button>
+              </div>
+            </template>
+            <button type="button" @click="domains.push('')"
+                    class="inline-flex items-center gap-1 text-xs font-semibold text-speed hover:underline">
+              <i class="ti ti-plus text-xs"></i> <?= e(t('site.ssl.add_domain')) ?>
+            </button>
+            <p class="hint mt-1"><?= e(t('site.ssl.domains_hint')) ?></p>
+
+            <label class="lbl mt-4"><?= e(t('site.ssl.email')) ?> <span class="text-zinc-400 font-normal">(<?= e(t('common.optional')) ?>)</span></label>
+            <input type="email" name="email" class="inp" placeholder="you@example.com">
+            <p class="hint"><?= e(t('site.ssl.email_hint')) ?></p>
+          </div>
+          <div class="flex items-center justify-end gap-2 px-5 py-3.5 border-t border-zinc-100">
+            <button type="button" @click="modal=null" class="btn btn-ghost" :disabled="submitting"><?= e(t('common.cancel')) ?></button>
+            <button type="submit" class="btn btn-primary" :disabled="submitting">
+              <i class="ti ti-lock-check text-sm" x-show="!submitting"></i>
+              <i class="ti ti-loader-2 text-sm animate-spin" x-show="submitting" x-cloak></i>
+              <span x-show="!submitting"><?= e(t('site.ssl.install_btn')) ?></span>
+              <span x-show="submitting" x-cloak><?= e(t('site.ssl.processing')) ?></span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal: Import certificate -->
+    <div x-show="modal==='import'" x-cloak class="fixed inset-0 z-50">
+      <div class="absolute inset-0 bg-zinc-900/40" @click="modal=null"></div>
+      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-lg card shadow-2xl max-h-[90vh] overflow-y-auto" @keydown.escape.window="modal=null">
+        <div class="card-head">
+          <h3 class="card-title"><i class="ti ti-certificate text-speed"></i> <?= e(t('site.ssl.import_modal_title')) ?></h3>
+          <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
+        </div>
+        <form method="POST" action="/sites/<?= e($domain) ?>/ssl/import" @submit="submitting = true">
+          <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+          <div class="p-5 space-y-4">
+            <p class="text-[11px] text-zinc-400"><?= e(t('site.ssl.import_hint')) ?></p>
+            <div>
+              <label class="lbl"><?= e(t('site.ssl.cert')) ?></label>
+              <textarea name="cert" rows="4" class="inp mono text-xs leading-relaxed" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
+            </div>
+            <div>
+              <label class="lbl"><?= e(t('site.ssl.key')) ?></label>
+              <textarea name="key" rows="4" class="inp mono text-xs leading-relaxed" placeholder="-----BEGIN PRIVATE KEY-----"></textarea>
+              <p class="hint"><?= e(t('site.ssl.key_hint')) ?></p>
+            </div>
+            <div>
+              <label class="lbl"><?= e(t('site.ssl.chain')) ?> <span class="text-zinc-400 font-normal">(<?= e(t('common.optional')) ?>)</span></label>
+              <textarea name="chain" rows="3" class="inp mono text-xs leading-relaxed" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
+              <p class="hint"><?= e(t('site.ssl.chain_hint')) ?></p>
+            </div>
+          </div>
+          <div class="flex items-center justify-end gap-2 px-5 py-3.5 border-t border-zinc-100">
+            <button type="button" @click="modal=null" class="btn btn-ghost" :disabled="submitting"><?= e(t('common.cancel')) ?></button>
+            <button type="submit" class="btn btn-primary" :disabled="submitting">
+              <i class="ti ti-upload text-sm" x-show="!submitting"></i>
+              <i class="ti ti-loader-2 text-sm animate-spin" x-show="submitting" x-cloak></i>
+              <span x-show="!submitting"><?= e(t('site.ssl.import_btn')) ?></span>
+              <span x-show="submitting" x-cloak><?= e(t('site.ssl.processing')) ?></span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+  </div>
+
 <?php else: ?>
-<!-- ──────────────── SSL / DATABASE / SECURITY / CRON / FILES ────────────── -->
+<!-- ──────────────── DATABASE / SECURITY / CRON / FILES ────────────── -->
 
   <div class="card px-8 py-16 text-center max-w-lg mx-auto">
     <?php

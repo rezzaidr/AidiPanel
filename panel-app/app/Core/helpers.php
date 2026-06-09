@@ -198,7 +198,7 @@ function web_cli_allowed_commands(): array
         'cache:status', 'cache:purge', 'cache:enable', 'cache:disable',
         'db:add', 'db:delete', 'db:list', 'db:backup',
         'php:list', 'php:version', 'php:restart',
-        'ssl:install', 'ssl:renew', 'ssl:status',
+        'ssl:install', 'ssl:renew', 'ssl:status', 'ssl:import',
         'service:status', 'service:start', 'service:stop', 'service:restart',
         'system:info',
     ];

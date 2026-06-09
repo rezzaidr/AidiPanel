@@ -63,6 +63,9 @@ $router->post('/sites/{domain}/delete', 'SiteController@delete');
 $router->post('/sites/{domain}/php', 'SiteController@changePhp');
 $router->get('/sites/{domain}/nginx','SiteController@nginxEditor');
 $router->post('/sites/{domain}/nginx','SiteController@saveNginx');
+$router->post('/sites/{domain}/ssl/install', 'SiteSslController@install');
+$router->post('/sites/{domain}/ssl/renew',   'SiteSslController@renew');
+$router->post('/sites/{domain}/ssl/import',  'SiteSslController@import');
 
 // Cache
 $router->get('/cache',         'CacheController@index');

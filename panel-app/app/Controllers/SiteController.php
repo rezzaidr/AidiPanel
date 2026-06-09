@@ -99,16 +99,11 @@ class SiteController extends BaseController
             $nginxConf = file_get_contents($confFile);
         }
 
-        $sslExpiry  = null;
-        $sslDaysLeft = null;
-        $lePath      = "/etc/letsencrypt/live/{$domain}/fullchain.pem";
-        if (file_exists($lePath)) {
-            $certInfo = openssl_x509_parse((string) file_get_contents($lePath));
-            if ($certInfo) {
-                $sslExpiry   = date('Y-m-d', $certInfo['validTo_time_t']);
-                $sslDaysLeft = (int) ceil(($certInfo['validTo_time_t'] - time()) / 86400);
-            }
-            $site['ssl_type'] = 'letsencrypt';
+        $ssl         = $this->getSslInfo($domain);
+        $sslExpiry   = $ssl['expiry'];
+        $sslDaysLeft = $ssl['daysLeft'];
+        if ($ssl['state'] === 'letsencrypt' || $ssl['state'] === 'custom') {
+            $site['ssl_type'] = $ssl['state'];
         }
 
         $logs = $this->db->rows(
@@ -121,7 +116,7 @@ class SiteController extends BaseController
         $redisInfo = $activeTab === 'performance' ? $this->getRedisInfo()    : [];
 
         $this->view('sites/detail', compact(
-            'site', 'nginxConf', 'sslExpiry', 'sslDaysLeft',
+            'site', 'nginxConf', 'ssl', 'sslExpiry', 'sslDaysLeft',
             'logs', 'activeTab', 'diskSize', 'opcache', 'redisInfo'
         ) + ['_full_bleed' => true]);
     }
@@ -336,6 +331,86 @@ class SiteController extends BaseController
         ];
 
         return $forms[$slug] ?? null;
+    }
+
+    /** Detect the active certificate for a site (files are the source of truth). */
+    private function getSslInfo(string $domain): array
+    {
+        $candidates = [
+            'letsencrypt' => "/etc/letsencrypt/live/{$domain}/fullchain.pem",
+            'custom'      => "/etc/ssl/aidipanel-custom/{$domain}/fullchain.pem",
+            'self-signed' => "/etc/ssl/aidipanel-self/{$domain}.crt",
+        ];
+        $info = [
+            'state' => 'none', 'expiry' => null, 'daysLeft' => null,
+            'issuer' => null, 'selfSigned' => false, 'covers' => false,
+            'domains' => [], 'trusted' => false,
+        ];
+
+        // is_readable (not file_exists): the panel runs as www-data, so a cert it
+        // cannot read is a cert it cannot vouch for. The CLI now makes the public
+        // cert + its directory readable, keeping only the private key root-only.
+        $path = null;
+        foreach ($candidates as $state => $p) {
+            if (is_readable($p)) { $info['state'] = $state; $path = $p; break; }
+        }
+        if ($path === null) {
+            return $info;
+        }
+
+        $cert = openssl_x509_parse((string) file_get_contents($path));
+        if (!$cert) {
+            return $info;
+        }
+
+        if (isset($cert['validTo_time_t'])) {
+            $info['expiry']   = date('Y-m-d', $cert['validTo_time_t']);
+            $info['daysLeft'] = (int) ceil(($cert['validTo_time_t'] - time()) / 86400);
+        }
+        $info['issuer']     = $cert['issuer']['CN'] ?? ($cert['issuer']['O'] ?? null);
+        $info['selfSigned'] = !empty($cert['issuer']) && ($cert['issuer'] === $cert['subject']);
+
+        // Names the cert is valid for (Subject CN + SAN DNS entries).
+        $names = [];
+        if (!empty($cert['subject']['CN'])) {
+            $names[] = strtolower((string) $cert['subject']['CN']);
+        }
+        foreach (explode(',', (string) ($cert['extensions']['subjectAltName'] ?? '')) as $san) {
+            $san = trim($san);
+            if (stripos($san, 'DNS:') === 0) {
+                $names[] = strtolower(substr($san, 4));
+            }
+        }
+        $info['domains'] = array_values(array_unique($names));
+        $info['covers']  = $this->certCoversDomain($domain, $info['domains']);
+
+        $notExpired = $info['daysLeft'] === null || $info['daysLeft'] > 0;
+        // Browser-trusted only when CA-signed, valid for this exact domain, and current.
+        $info['trusted'] = $info['state'] !== 'none'
+            && !$info['selfSigned'] && $info['covers'] && $notExpired;
+
+        return $info;
+    }
+
+    /** Exact or wildcard (*.example.com) match of $domain against cert names. */
+    private function certCoversDomain(string $domain, array $names): bool
+    {
+        $domain = strtolower($domain);
+        foreach ($names as $name) {
+            if ($name === $domain) {
+                return true;
+            }
+            if (str_starts_with($name, '*.')) {
+                $base = substr($name, 2);
+                if (str_ends_with($domain, '.' . $base)) {
+                    $sub = substr($domain, 0, -strlen('.' . $base));
+                    if ($sub !== '' && !str_contains($sub, '.')) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     private function getSiteDiskUsage(string $domain): string

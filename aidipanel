@@ -219,6 +219,7 @@ _usage() {
   echo -e "\n${BOLD}${BLUE}SSL / TLS${RESET}"
   echo "  ssl:install     Install Let's Encrypt certificate for a domain (--staging for test certs)"
   echo "  ssl:renew       Renew certificates (all or per domain)"
+  echo "  ssl:import      Import your own certificate (--cert <f> --key <f> [--chain <f>])"
   echo "  ssl:status      Show SSL certificate status"
 
   echo -e "\n${BOLD}${BLUE}Service Management${RESET}"
@@ -1060,42 +1061,176 @@ _php_info() {
 # SSL COMMANDS
 # ===========================================================================
 
+# Does any of the given cert names cover $domain? Exact match or wildcard
+# (*.example.com matches a single-label subdomain). Case-insensitive.
+_cert_covers_domain() {
+  local domain="${1,,}"; shift
+  local name base sub
+  for name in "$@"; do
+    name="${name,,}"
+    [[ "$name" == "$domain" ]] && return 0
+    if [[ "$name" == \*.* ]]; then
+      base="${name#\*.}"
+      if [[ "$domain" == *".$base" ]]; then
+        sub="${domain%.$base}"
+        [[ -n "$sub" && "$sub" != *.* ]] && return 0
+      fi
+    fi
+  done
+  return 1
+}
+
+# Point a site's vhost at the given cert paths. Generalized: replaces whatever
+# ssl_certificate path is currently set (self-signed / LE / custom), so switching
+# between cert types always works. Backs up the conf and restores on nginx -t fail.
+_ssl_point_vhost() {
+  local domain="$1" fullchain="$2" privkey="$3"
+  local conf="${NGINX_CONF_DIR}/${domain}.conf"
+  [[ -f "$conf" ]] || die "Vhost not found: ${conf}"
+  local bak tmp; bak=$(mktemp); tmp=$(mktemp)
+  cp "$conf" "$bak"
+  sed -E \
+    -e "s#^([[:space:]]*ssl_certificate)[[:space:]]+[^;]+;#\1 ${fullchain};#" \
+    -e "s#^([[:space:]]*ssl_certificate_key)[[:space:]]+[^;]+;#\1 ${privkey};#" \
+    "$conf" > "$tmp" && cp "$tmp" "$conf"
+  rm -f "$tmp"
+  if ! nginx -t >> "$CLI_LOG" 2>&1; then
+    cp "$bak" "$conf"; rm -f "$bak"
+    die "Nginx config test failed after cert change — reverted ${domain}. Run: nginx -t"
+  fi
+  rm -f "$bak"
+  systemctl reload nginx >> "$CLI_LOG" 2>&1
+}
+
+# Import a user-supplied certificate (paid / wildcard / existing LE).
+_ssl_import() {
+  _require_root "ssl:import"
+  _parse_opts "$@"
+  local domain cert_path key_path chain_path
+  domain=$(_opt "domain")
+  cert_path=$(_opt "cert")
+  key_path=$(_opt "key")
+  chain_path=$(_opt "chain" "")
+  _require_arg "domain" "$domain"    "ssl:import --domain example.com --cert cert.pem --key key.pem"
+  _require_arg "cert"   "$cert_path" "ssl:import --domain example.com --cert cert.pem --key key.pem"
+  _require_arg "key"    "$key_path"  "ssl:import --domain example.com --cert cert.pem --key key.pem"
+  _domain_valid "$domain"  || die "Invalid domain name: ${domain}"
+  _domain_exists "$domain" || die "Site not found: ${domain}"
+  [[ -f "$cert_path" ]] || die "Certificate file not found: ${cert_path}"
+  [[ -f "$key_path"  ]] || die "Private key file not found: ${key_path}"
+  [[ -z "$chain_path" || -f "$chain_path" ]] || die "Chain file not found: ${chain_path}"
+
+  # Validate: cert + key parse, key matches cert, cert not expired.
+  openssl x509 -noout -in "$cert_path" 2>/dev/null || die "Certificate is not valid PEM."
+  openssl pkey -noout -in "$key_path"  2>/dev/null || die "Private key is not valid PEM."
+  local cert_pub key_pub
+  cert_pub=$(openssl x509 -in "$cert_path" -noout -pubkey 2>/dev/null | openssl md5 2>/dev/null)
+  key_pub=$(openssl pkey -in "$key_path" -pubout 2>/dev/null | openssl md5 2>/dev/null)
+  [[ -n "$cert_pub" && "$cert_pub" == "$key_pub" ]] || die "Private key does not match the certificate."
+  openssl x509 -checkend 0 -noout -in "$cert_path" 2>/dev/null || die "Certificate has already expired."
+
+  # Ensure the cert actually covers this domain (CN or SAN). Importing a cert for
+  # the wrong host is the most common mistake — it leaves the browser showing
+  # "not secure" even though the import itself "succeeded".
+  local -a cert_names=()
+  local cn san
+  cn=$(openssl x509 -in "$cert_path" -noout -subject 2>/dev/null \
+       | grep -oiE 'CN *= *[A-Za-z0-9.*_-]+' | sed -E 's/^CN *= *//I' | head -1)
+  [[ -n "$cn" ]] && cert_names+=("$cn")
+  while IFS= read -r san; do
+    [[ -n "$san" ]] && cert_names+=("$san")
+  done < <(openssl x509 -in "$cert_path" -noout -ext subjectAltName 2>/dev/null \
+           | grep -oiE 'DNS:[A-Za-z0-9.*_-]+' | sed -E 's/^DNS://I')
+  _cert_covers_domain "$domain" "${cert_names[@]}" \
+    || die "Certificate does not cover ${domain} (it is issued for: ${cert_names[*]:-unknown}). Import the certificate that matches this site."
+
+  log "Importing certificate for: ${domain}..."
+  local dir="/etc/ssl/aidipanel-custom/${domain}"
+  mkdir -p "$dir"
+  cat "$cert_path" > "${dir}/fullchain.pem"
+  if [[ -n "$chain_path" ]]; then
+    printf '\n' >> "${dir}/fullchain.pem"
+    cat "$chain_path" >> "${dir}/fullchain.pem"
+  fi
+  cp "$key_path" "${dir}/privkey.pem"
+  chown -R root:root "$dir"
+  # The directory + public certificate must be readable by the panel (www-data)
+  # so it can report the real SSL status; only the private key stays root-only.
+  chmod 755 "$dir"
+  chmod 644 "${dir}/fullchain.pem"
+  chmod 600 "${dir}/privkey.pem"
+
+  _ssl_point_vhost "$domain" "${dir}/fullchain.pem" "${dir}/privkey.pem"
+  ok "Certificate imported for: ${domain}"
+}
+
 _ssl_install() {
   _require_root "ssl:install"
   _parse_opts "$@"
-  local domain; domain=$(_opt "domain")
   local email; email=$(_opt "email" "")
   local staging; staging=$(_opt "staging" "")
-  _require_arg "domain" "$domain" "ssl:install --domain example.com --email admin@example.com"
-  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
-  _domain_exists "$domain" || die "Site not found: ${domain}"
+
+  # Domains: prefer --domains "a,www.a" (the user picks which names go on the
+  # cert); fall back to the legacy single --domain. This is why we never force
+  # "www." onto a domain that has no DNS record — the #1 cause of LE failures.
+  local domains_csv; domains_csv=$(_opt "domains" "")
+  [[ -z "$domains_csv" ]] && domains_csv=$(_opt "domain" "")
+  _require_arg "domains" "$domains_csv" "ssl:install --domains example.com,www.example.com"
+
+  local -a domains=() _raw=()
+  IFS=',' read -ra _raw <<< "$domains_csv"
+  local d e exists
+  for d in "${_raw[@]}"; do
+    d="${d//[[:space:]]/}"
+    [[ -z "$d" ]] && continue
+    _domain_valid "$d" || die "Invalid domain name: ${d}"
+    exists=0; for e in "${domains[@]}"; do [[ "$e" == "$d" ]] && exists=1; done
+    [[ $exists -eq 0 ]] && domains+=("$d")
+  done
+  [[ ${#domains[@]} -gt 0 ]] || die "No valid domains provided."
+
+  # certbot uses the first -d as the certificate name / live dir, so the site's
+  # own domain leads.
+  local primary="${domains[0]}"
+  _domain_exists "$primary" || die "Site not found: ${primary}"
 
   command -v certbot &>/dev/null || die "Certbot is not installed. Run: apt install certbot python3-certbot-nginx"
 
-  if [[ -n "$staging" ]]; then
-    log "Installing Let's Encrypt SSL (STAGING) for: ${domain}"
-  else
-    log "Installing Let's Encrypt SSL for: ${domain}"
+  # Pre-flight DNS: every name must resolve, or certbot's HTTP-01 challenge fails
+  # with a cryptic error. Fail early with a clear, per-domain message instead.
+  local -a unresolved=()
+  for d in "${domains[@]}"; do
+    getent hosts "$d" >/dev/null 2>&1 || unresolved+=("$d")
+  done
+  if [[ ${#unresolved[@]} -gt 0 ]]; then
+    die "These domains do not resolve in DNS yet: ${unresolved[*]} — point them to this server (or remove them) and try again."
   fi
 
-  local certbot_args=(certbot --nginx -d "$domain" -d "www.${domain}" --non-interactive --agree-tos)
+  if [[ -n "$staging" ]]; then
+    log "Installing Let's Encrypt SSL (STAGING) for: ${domains[*]}"
+  else
+    log "Installing Let's Encrypt SSL for: ${domains[*]}"
+  fi
+
+  local certbot_args=(certbot --nginx --non-interactive --agree-tos --cert-name "$primary")
+  for d in "${domains[@]}"; do certbot_args+=(-d "$d"); done
   [[ -n "$email" ]] && certbot_args+=(--email "$email") || certbot_args+=(--register-unsafely-without-email)
   [[ -n "$staging" ]] && certbot_args+=(--test-cert)
 
   "${certbot_args[@]}" >> "$CLI_LOG" 2>&1 \
     || die "Certbot failed. Check: ${CLI_LOG}"
 
-  # Update nginx vhost to point to Let's Encrypt certs
-  local conf="${NGINX_CONF_DIR}/${domain}.conf"
-  local tmp; tmp=$(mktemp)
-  sed \
-    -e "s|ssl_certificate .*aidipanel-self.*|ssl_certificate /etc/letsencrypt/live/${domain}/fullchain.pem;|" \
-    -e "s|ssl_certificate_key .*aidipanel-self.*|ssl_certificate_key /etc/letsencrypt/live/${domain}/privkey.pem;|" \
-    "$conf" > "$tmp" && cp "$tmp" "$conf"
-  rm -f "$tmp"
+  # certbot makes /etc/letsencrypt/{live,archive} 0700 (root-only), which blocks
+  # the panel (www-data) from reading the public cert to report SSL status.
+  # Make the two parent dirs traversable; private keys keep their own 0600.
+  chmod 755 /etc/letsencrypt/live /etc/letsencrypt/archive 2>/dev/null || true
 
-  _nginx_test_reload
-  ok "SSL certificate installed for: ${domain}"
+  # Point the vhost at the LE certs (generalized — replaces whatever path is
+  # currently set, so self-signed/custom → LE all work; tests + restores on fail).
+  _ssl_point_vhost "$primary" \
+    "/etc/letsencrypt/live/${primary}/fullchain.pem" \
+    "/etc/letsencrypt/live/${primary}/privkey.pem"
+  ok "SSL certificate installed for: ${domains[*]}"
   info "Auto-renewal is managed by: /etc/cron.d/aidipanel"
 }
 
@@ -1134,6 +1269,11 @@ _ssl_status() {
       cert_type="Let's Encrypt"
       expiry=$(openssl x509 -enddate -noout \
         -in "/etc/letsencrypt/live/${domain}/fullchain.pem" 2>/dev/null \
+        | cut -d= -f2 || echo "unknown")
+    elif [[ -f "/etc/ssl/aidipanel-custom/${domain}/fullchain.pem" ]]; then
+      cert_type="imported"
+      expiry=$(openssl x509 -enddate -noout \
+        -in "/etc/ssl/aidipanel-custom/${domain}/fullchain.pem" 2>/dev/null \
         | cut -d= -f2 || echo "unknown")
     elif [[ -f "/etc/ssl/aidipanel-self/${domain}.crt" ]]; then
       cert_type="self-signed"
@@ -1422,6 +1562,7 @@ main() {
     ssl:install)    _ssl_install "$@" ;;
     ssl:renew)      _ssl_renew "$@" ;;
     ssl:status)     _ssl_status "$@" ;;
+    ssl:import)     _ssl_import "$@" ;;
 
     # Service
     service:status)  _service_status "$@" ;;
