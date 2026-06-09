@@ -18,6 +18,8 @@ IFS=$'\n\t'
 readonly CLI_VERSION="1.2.0-rc1"
 readonly PANEL_DIR="/opt/aidipanel"
 readonly SITES_DIR="/var/www"
+readonly HOME_BASE="/home"
+readonly RESERVED_SITE_USERS=(root www-data ubuntu debian nginx mysql mariadb postgres redis aidipanel daemon bin sys sync games man lp mail news uucp proxy backup list irc gnats nobody systemd-network systemd-resolve)
 readonly NGINX_CONF_DIR="/etc/nginx/sites-available"
 readonly NGINX_ENABLED_DIR="/etc/nginx/sites-enabled"
 readonly NGINX_SNIPPET_DIR="/etc/nginx/snippets"
@@ -113,6 +115,123 @@ _php_version_valid() {
 
 _php_sock() {
   echo "/run/php/php${1}-fpm.sock"
+}
+
+# Per-site PHP-FPM socket path:  _site_php_sock <php_ver> <site_user>
+_site_php_sock() { echo "/run/php/php${1}-fpm-${2}.sock"; }
+
+# Suggest a Linux-safe site-user from a domain's first label.
+_suggest_site_user() {
+  local base="${1%%.*}"
+  base="${base,,}"; base="${base//[^a-z0-9-]/}"; base="${base#-}"
+  [[ "$base" =~ ^[a-z] ]] || base="site${base}"
+  echo "${base:0:32}"
+}
+
+# Return a username not currently taken (append -2,-3,...).
+_unique_site_user() {
+  local want="$1" cand="$1" n=2
+  while id "$cand" &>/dev/null; do cand="${want:0:29}-${n}"; n=$((n + 1)); done
+  echo "$cand"
+}
+
+# Validate a site-user name (format + reserved). die on failure.
+_validate_site_user() {
+  local u="$1" r
+  [[ "$u" =~ ^[a-z][a-z0-9_-]{0,31}$ ]] \
+    || die "Invalid site user '${u}': lowercase, start with a letter, [a-z0-9_-], max 32."
+  for r in "${RESERVED_SITE_USERS[@]}"; do
+    [[ "$u" == "$r" ]] && die "Site user '${u}' is reserved."
+  done
+  return 0
+}
+
+# Create a no-login site-user if absent. Idempotent. Sets global DID_CREATE_USER.
+# flock + retry dodges the /etc/passwd|/etc/group lock race that broke the earlier attempt.
+_ensure_site_user() {
+  local user="$1"
+  DID_CREATE_USER=0
+  id "$user" &>/dev/null && return 0
+  local lock="/run/lock/aidipanel-useradd.lock" tries=0
+  while (( tries < 5 )); do
+    if flock -w 10 "$lock" useradd --create-home --home-dir "${HOME_BASE}/${user}" \
+         --shell /usr/sbin/nologin "$user" >> "$CLI_LOG" 2>&1; then
+      passwd -l "$user" >> "$CLI_LOG" 2>&1 || true
+      DID_CREATE_USER=1
+      return 0
+    fi
+    id "$user" &>/dev/null && return 0    # a racing call created it
+    tries=$((tries + 1)); sleep 1
+  done
+  warn "Failed to create site user '${user}' (lock contention?). Check: ${CLI_LOG}"
+  return 1
+}
+
+# Create the per-site tree (group+setgid) and the root-owned .aidipanel-managed marker.
+_site_make_layout() {
+  local user="$1" domain="$2" webroot="$3" home="${HOME_BASE}/${1}"
+  mkdir -p "${home}/tmp" "${home}/logs" "${home}/backups" "$webroot"
+  chown -R "${user}:${user}" "$home"
+  chmod 750 "$home" "${home}/logs" "${home}/backups"
+  chmod 700 "${home}/tmp"
+  chmod 2750 "${home}/htdocs" "$webroot"          # setgid: new files keep group <user>
+  cat > "${home}/.aidipanel-managed" <<JSON
+{ "managed_by": "aidipanel", "domain": "${domain}", "site_user": "${user}", "created_at": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" }
+JSON
+  chown root:root "${home}/.aidipanel-managed"
+  chmod 644 "${home}/.aidipanel-managed"
+}
+
+# Let nginx (www-data) read/traverse this site's tree. MVP = group model;
+# the whole policy lives here so ACL can replace it without touching callers.
+_site_grant_web_access() {
+  usermod -aG "$1" www-data >> "$CLI_LOG" 2>&1 || { warn "Could not add www-data to group ${1}"; return 1; }
+}
+
+# Write + test a per-site pool, then reload that version's service. return 1 on failure.
+_write_fpm_pool() {
+  local user="$1" ver="$2"
+  local pool_dir="/etc/php/${ver}/fpm/pool.d"
+  [[ -d "$pool_dir" ]] || { warn "Pool dir missing: ${pool_dir}"; return 1; }
+  local sock home tmp; sock=$(_site_php_sock "$ver" "$user"); home="${HOME_BASE}/${user}"; tmp=$(mktemp)
+  cat > "$tmp" <<POOL
+[${user}]
+user = ${user}
+group = ${user}
+
+listen = ${sock}
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0660
+
+pm = ondemand
+pm.max_children = 15
+pm.process_idle_timeout = 10s
+pm.max_requests = 100
+
+clear_env = yes
+security.limit_extensions = .php
+
+php_admin_value[upload_tmp_dir] = ${home}/tmp
+php_admin_value[session.save_path] = ${home}/tmp
+php_admin_value[error_log] = ${home}/logs/php-error.log
+php_admin_flag[log_errors] = on
+POOL
+  cp "$tmp" "${pool_dir}/${user}.conf"; rm -f "$tmp"
+  if ! "php-fpm${ver}" -t >> "$CLI_LOG" 2>&1; then
+    rm -f "${pool_dir}/${user}.conf"
+    warn "PHP-FPM config test failed for pool ${user} (php${ver}). Check: ${CLI_LOG}"
+    return 1
+  fi
+  systemctl reload "php${ver}-fpm" >> "$CLI_LOG" 2>&1 || systemctl restart "php${ver}-fpm" >> "$CLI_LOG" 2>&1
+}
+
+# Remove a per-site pool and reload that version's service.
+_remove_fpm_pool() {
+  local pool="/etc/php/${2}/fpm/pool.d/${1}.conf"
+  [[ -f "$pool" ]] || return 0
+  rm -f "$pool"
+  systemctl reload "php${2}-fpm" >> "$CLI_LOG" 2>&1 || true
 }
 
 _load_credentials() {
@@ -241,7 +360,7 @@ _usage() {
   echo "  self:update     Update AidiPanel CLI to latest version"
 
   echo -e "\n${BOLD}Examples:${RESET}"
-  echo "  aidipanel site:add --domain example.com --type wordpress --php 8.3"
+  echo "  aidipanel site:add --domain example.com --user example --type wordpress --php 8.3"
   echo "  aidipanel cache:purge --domain example.com"
   echo "  aidipanel db:add --name mydb --user myuser"
   echo "  aidipanel ssl:install --domain example.com"
@@ -294,12 +413,11 @@ _site_add() {
   _require_root "site:add"
   _parse_opts "$@"
 
-  local domain php_ver site_type
-  domain=$(_opt "domain")
-  php_ver=$(_opt "php" "8.3")
-  site_type=$(_opt "type" "php")
+  local domain php_ver site_type site_user
+  domain=$(_opt "domain"); php_ver=$(_opt "php" "8.3"); site_type=$(_opt "type" "php")
+  site_user=$(_opt "user" "")
 
-  _require_arg "domain" "$domain" "site:add --domain example.com --type wordpress --php 8.3"
+  _require_arg "domain" "$domain" "site:add --domain example.com --user example --type wordpress --php 8.3"
 
   # Validate
   _domain_valid "$domain" || die "Invalid domain name: ${domain}"
@@ -309,52 +427,63 @@ _site_add() {
   [[ "$site_type" =~ ^(wordpress|php|laravel|static|proxy)$ ]] \
     || die "Invalid site type: ${site_type}. Supported: wordpress, php, laravel, static, proxy"
 
-  log "Creating site: ${domain} (type: ${site_type}, PHP: ${php_ver})..."
+  # --user is optional; derive a unique suggestion from the domain when absent.
+  [[ -z "$site_user" ]] && site_user=$(_unique_site_user "$(_suggest_site_user "$domain")")
+  _validate_site_user "$site_user"
+  id "$site_user" &>/dev/null && die "Site user already exists: ${site_user} (pass a different --user)."
 
-  # Create web root
-  local webroot="${SITES_DIR}/${domain}/htdocs"
-  mkdir -p "$webroot"
+  # Preflight (FPM presence via its pool dir; the php CLI binary is NOT required —
+  # PHP-FPM serves the site, and _write_fpm_pool runs `php-fpm<ver> -t`).
+  [[ -d "/etc/php/${php_ver}/fpm/pool.d" ]] || die "php${php_ver}-fpm is not installed (no ${php_ver} pool dir)."
+  [[ -w "$HOME_BASE" ]] || die "${HOME_BASE} is not writable."
 
-  # Gunakan www-data langsung — tidak buat user per-site
-  # (useradd per-site menyebabkan /etc/group lock error)
-  chown -R www-data:www-data "${SITES_DIR}/${domain}"
-  chmod 755 "${SITES_DIR}/${domain}"
-  chmod 755 "$webroot"
+  log "Creating site: ${domain} (user: ${site_user}, type: ${site_type}, PHP: ${php_ver})..."
+  local webroot="${HOME_BASE}/${site_user}/htdocs/${domain}"
 
-  # Generate Nginx vhost
-  _site_write_vhost "$domain" "$php_ver" "$webroot" "$site_type"
+  # Rollback ledger
+  DID_CREATE_USER=0
+  local created_home=0 wrote_pool=0 wrote_vhost=0 enabled=0
+  _site_add_rollback() {
+    [[ "$enabled"     == 1 ]] && rm -f "${NGINX_ENABLED_DIR}/${domain}.conf"
+    [[ "$wrote_vhost" == 1 ]] && rm -f "${NGINX_CONF_DIR}/${domain}.conf"
+    [[ "$wrote_pool"  == 1 ]] && _remove_fpm_pool "$site_user" "$php_ver"
+    if [[ "$DID_CREATE_USER" == 1 ]]; then
+      userdel --remove "$site_user" >> "$CLI_LOG" 2>&1 || true   # removes user AND home first
+    elif [[ "$created_home" == 1 ]]; then
+      rm -rf "${HOME_BASE}/${site_user}/htdocs/${domain}"
+    fi
+    systemctl reload nginx >> "$CLI_LOG" 2>&1 || true
+  }
 
-  # Enable site
-  ln -sf "${NGINX_CONF_DIR}/${domain}.conf" \
-         "${NGINX_ENABLED_DIR}/${domain}.conf"
+  _ensure_site_user "$site_user"            || { _site_add_rollback; die "Could not create site user '${site_user}'."; }
+  _site_make_layout "$site_user" "$domain" "$webroot"; created_home=1
+  _site_grant_web_access "$site_user"       || { _site_add_rollback; die "Could not grant web access for '${site_user}'."; }
+  _write_fpm_pool "$site_user" "$php_ver"   || { _site_add_rollback; die "PHP-FPM pool creation failed."; }
+  wrote_pool=1
+  _site_write_vhost "$domain" "$php_ver" "$webroot" "$site_type" "$site_user"; wrote_vhost=1
+  ln -sf "${NGINX_CONF_DIR}/${domain}.conf" "${NGINX_ENABLED_DIR}/${domain}.conf"; enabled=1
 
-  # Test before reload. nginx -t validates ALL enabled vhosts, so if this test
-  # fails we roll back THIS site's files — otherwise one broken vhost would make
-  # every future site:add fail too (the cascade behind "creating any site fails").
+  # nginx -t validates ALL enabled vhosts; on failure roll back THIS site so one
+  # broken vhost can't make every future site:add fail.
   if ! nginx -t >> "$CLI_LOG" 2>&1; then
-    rm -f "${NGINX_ENABLED_DIR}/${domain}.conf" "${NGINX_CONF_DIR}/${domain}.conf"
-    die "Nginx config test failed — rolled back ${domain}. Inspect other vhosts: nginx -t"
+    _site_add_rollback
+    die "Nginx config test failed — rolled back ${domain}. Inspect: nginx -t"
   fi
   systemctl reload nginx >> "$CLI_LOG" 2>&1
-  ok "Nginx reloaded"
-
   ok "Site created: ${domain}"
-  echo ""
-  _table_row "Domain:"   "$domain"
-  _table_row "Type:"     "$site_type"
-  _table_row "PHP:"      "$php_ver"
-  _table_row "Webroot:"  "$webroot"
-  _table_row "Nginx:"    "${NGINX_CONF_DIR}/${domain}.conf"
-  echo ""
-  info "Next steps:"
-  info "  1. Point DNS to this server"
-  info "  2. Install SSL: aidipanel ssl:install --domain ${domain}"
-  info "  3. Upload files to: ${webroot}"
+
+  # Machine-readable summary for the Panel (Patch 2). The CLI writes NO DB state.
+  local sock; sock=$(_site_php_sock "$php_ver" "$site_user")
+  echo "site_user=${site_user}"
+  echo "web_root=${webroot}"
+  echo "pool=${site_user}"
+  echo "socket=${sock}"
+  echo "php_version=${php_ver}"
 }
 
 _site_write_vhost() {
-  local domain="$1" php_ver="$2" webroot="$3" site_type="$4"
-  local sock; sock=$(_php_sock "$php_ver")
+  local domain="$1" php_ver="$2" webroot="$3" site_type="$4" site_user="$5"
+  local sock; sock=$(_site_php_sock "$php_ver" "$site_user")
   local conf_file="${NGINX_CONF_DIR}/${domain}.conf"
 
   # Self-signed cert FIRST — the HTTPS vhost below references it, so if cert
@@ -532,43 +661,67 @@ ${proxy_block}
 VHOST
 }
 
+# Validate the .aidipanel-managed marker before a destructive purge. return 1 to refuse.
+_site_purge_guard() {
+  local domain="$1" site_user="$2" expect_user="$3"
+  [[ -n "$site_user" ]] || { warn "No site_user resolved for ${domain}."; return 1; }
+  local marker="${HOME_BASE}/${site_user}/.aidipanel-managed"
+  [[ -f "$marker" ]] || { warn "Marker missing: ${marker}"; return 1; }
+  [[ "$(stat -c '%U:%G' "$marker" 2>/dev/null)" == "root:root" ]] \
+    || { warn "Marker not root-owned (site-user may have replaced it) — refusing purge."; return 1; }
+  case "$(stat -c '%a' "$marker" 2>/dev/null)" in
+    644|640|600|400) ;;
+    *) warn "Marker has unsafe/writable mode — refusing purge."; return 1 ;;
+  esac
+  grep -q "\"domain\": \"${domain}\"" "$marker"       || { warn "Marker domain mismatch."; return 1; }
+  grep -q "\"site_user\": \"${site_user}\"" "$marker" || { warn "Marker site_user mismatch."; return 1; }
+  if [[ -n "$expect_user" && "$expect_user" != "$site_user" ]]; then
+    warn "Marker user (${site_user}) != --user (${expect_user})."; return 1
+  fi
+  return 0
+}
+
 _site_delete() {
   _require_root "site:delete"
   _parse_opts "$@"
   local domain; domain=$(_opt "domain")
-  _require_arg "domain" "$domain" "site:delete --domain example.com"
+  _require_arg "domain" "$domain" "site:delete --domain example.com [--purge --yes]"
   _domain_valid "$domain" || die "Invalid domain name: ${domain}"
   _domain_exists "$domain" || die "Site not found: ${domain}"
-  local force; force=$(_opt "force" "false")
+  local purge yes force expect_user
+  purge=$(_opt "purge" "false"); yes=$(_opt "yes" "false")
+  force=$(_opt "force" "false"); expect_user=$(_opt "user" "")
+  [[ "$force" == "true" ]] && yes="true"     # back-compat: --force == non-interactive (keep-home)
 
-  if [[ "$force" != "true" ]]; then
-    echo -e "${RED}WARNING: This will permanently delete:${RESET}"
-    echo "  • Nginx config: ${NGINX_CONF_DIR}/${domain}.conf"
-    echo "  • Web files: ${SITES_DIR}/${domain}/"
-    echo "  • SSL cert:  /etc/ssl/aidipanel-self/${domain}.{crt,key}"
-    echo ""
+  # Resolve site_user from the vhost root (works for ALL types incl static/proxy);
+  # php_ver from the FPM socket if present (none for static/proxy -> no pool).
+  local conf="${NGINX_CONF_DIR}/${domain}.conf"
+  local site_user php_ver
+  site_user=$(grep -oP '^\s*root\s+/home/\K[^/;]+' "$conf" 2>/dev/null | head -1 || echo "")
+  php_ver=$(grep -oP 'php\K[0-9.]+(?=-fpm)' "$conf" 2>/dev/null | head -1 || echo "")
+
+  if [[ "$purge" == "true" ]]; then
+    [[ "$yes" == "true" ]] || die "Refusing purge without --yes (no interactive TTY through the web wrapper)."
+    _site_purge_guard "$domain" "$site_user" "$expect_user" || die "Purge refused for ${domain} (marker validation failed)."
+  elif [[ "$yes" != "true" ]]; then
+    echo -e "${RED}WARNING: removes vhost + PHP-FPM pool for ${domain} (home kept).${RESET}"
     _confirm "Delete site '${domain}'?" || { log "Cancelled."; return 0; }
   fi
 
-  # Remove nginx vhost
-  rm -f "${NGINX_ENABLED_DIR}/${domain}.conf"
-  rm -f "${NGINX_CONF_DIR}/${domain}.conf"
-
-  # Remove self-signed certs
-  rm -f "/etc/ssl/aidipanel-self/${domain}.crt"
-  rm -f "/etc/ssl/aidipanel-self/${domain}.key"
-
-  # Remove web files (with safety check — must be under SITES_DIR)
-  local site_dir="${SITES_DIR}/${domain}"
-  if [[ "$site_dir" == "${SITES_DIR}/"* && -d "$site_dir" ]]; then
-    rm -rf "$site_dir"
-  fi
-
-  # Purge its FastCGI cache
+  # Teardown (both modes)
+  rm -f "${NGINX_ENABLED_DIR}/${domain}.conf" "${NGINX_CONF_DIR}/${domain}.conf"
+  rm -f "/etc/ssl/aidipanel-self/${domain}.crt" "/etc/ssl/aidipanel-self/${domain}.key"
+  [[ -n "$site_user" && -n "$php_ver" ]] && _remove_fpm_pool "$site_user" "$php_ver"
   _cache_purge_domain "$domain" 2>/dev/null || true
-
   _nginx_test_reload
-  ok "Site deleted: ${domain}"
+
+  if [[ "$purge" == "true" && -n "$site_user" ]]; then
+    userdel --remove "$site_user" >> "$CLI_LOG" 2>&1 || true   # user + home in one step
+    ok "Site purged: ${domain} (user ${site_user} + home removed)"
+  else
+    [[ -n "$site_user" ]] && passwd -l "$site_user" >> "$CLI_LOG" 2>&1 || true
+    ok "Site deleted: ${domain} (home kept; user ${site_user:-unknown} locked)"
+  fi
 }
 
 _site_list() {
@@ -1012,10 +1165,18 @@ _php_version() {
 
   log "Changing PHP for ${domain}: ${current_ver} → ${new_ver}"
 
-  # Replace socket path in nginx config (menggunakan tmp file agar aman)
-  local old_sock; old_sock=$(_php_sock "$current_ver")
-  local new_sock; new_sock=$(_php_sock "$new_ver")
-  local site_type; site_type=$(grep -oP '# Type: \K\w+' "$conf" 2>/dev/null | head -1 || echo "php")
+  # Resolve the site-user from the current vhost socket, recreate its pool on the
+  # new version, then repoint the vhost socket. (Pool must follow the version.)
+  local site_user; site_user=$(grep -oP 'php[0-9.]+-fpm-\K[a-z0-9_-]+(?=\.sock)' "$conf" 2>/dev/null | head -1 || echo "")
+  local old_sock new_sock
+  if [[ -n "$site_user" ]]; then
+    _write_fpm_pool "$site_user" "$new_ver" || die "Could not create php${new_ver} pool for ${site_user}."
+    _remove_fpm_pool "$site_user" "$current_ver"
+    old_sock=$(_site_php_sock "$current_ver" "$site_user")
+    new_sock=$(_site_php_sock "$new_ver" "$site_user")
+  else
+    old_sock=$(_php_sock "$current_ver"); new_sock=$(_php_sock "$new_ver")   # legacy fallback
+  fi
 
   local tmp; tmp=$(mktemp)
   sed "s|${old_sock}|${new_sock}|g" "$conf" > "$tmp" && cp "$tmp" "$conf"
