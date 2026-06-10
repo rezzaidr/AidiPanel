@@ -197,7 +197,7 @@ function web_cli_allowed_commands(): array
         'vhost:save',
         'cache:status', 'cache:purge', 'cache:enable', 'cache:disable',
         'db:add', 'db:delete', 'db:list', 'db:backup',
-        'php:list', 'php:version', 'php:restart',
+        'php:list', 'php:version', 'php:restart', 'php:install',
         'ssl:install', 'ssl:renew', 'ssl:status', 'ssl:import',
         'service:status', 'service:start', 'service:stop', 'service:restart',
         'system:info',
@@ -208,6 +208,66 @@ function is_web_cli_command_allowed(string $command): bool
 {
     return in_array($command, web_cli_allowed_commands(), true);
 }
+
+/**
+ * PHP version policy from /etc/aidipanel/php.conf (Patch A single source of truth).
+ * Parsed directly (no sudo) for speed; falls back to a sane built-in if the file
+ * is missing. Returns: ['default'=>'8.4', 'available'=>['8.2','8.3','8.4','8.5']].
+ */
+function php_policy(): array
+{
+    static $cache = null;
+    if ($cache !== null) return $cache;
+
+    $default   = '8.4';
+    $available = ['8.2', '8.3', '8.4', '8.5'];
+
+    $conf = '/etc/aidipanel/php.conf';
+    if (is_readable($conf)) {
+        $txt = (string) file_get_contents($conf);
+        if (preg_match('/^\s*PHP_DEFAULT_VERSION\s*=\s*"?([0-9.]+)"?/m', $txt, $m)) {
+            $default = $m[1];
+        }
+        if (preg_match('/^\s*PHP_AVAILABLE_VERSIONS\s*=\s*"?([0-9. ]+)"?/m', $txt, $m)) {
+            $parsed = preg_split('/\s+/', trim($m[1]), -1, PREG_SPLIT_NO_EMPTY);
+            if (!empty($parsed)) $available = $parsed;
+        }
+    }
+
+    return $cache = ['default' => $default, 'available' => $available];
+}
+
+/**
+ * Per-version status for the Admin > PHP page and the wizard/switcher.
+ * installed = /etc/php/<ver>/fpm exists (Patch A filesystem check).
+ * running   = php<ver>-fpm service is active.
+ * Returns an ordered map: ver => ['installed','running','default','label'].
+ */
+function php_versions_status(): array
+{
+    $policy = php_policy();
+    $labels = [
+        '8.5' => 'php.label.latest',
+        '8.4' => 'php.label.default',
+        '8.3' => 'php.label.compat',
+        '8.2' => 'php.label.legacy',
+    ];
+
+    $out = [];
+    foreach ($policy['available'] as $ver) {
+        $installed = is_dir("/etc/php/{$ver}/fpm");
+        $running   = $installed
+            && trim((string) shell_exec("systemctl is-active php{$ver}-fpm 2>/dev/null")) === 'active';
+        $out[$ver] = [
+            'installed' => $installed,
+            'running'   => $running,
+            'default'   => $ver === $policy['default'],
+            'label'     => $labels[$ver] ?? 'php.label.compat',
+        ];
+    }
+    return $out;
+}
+
 /**
  * Safe CLI runner — pakai sudo jika dijalankan dari web (www-data)
  */

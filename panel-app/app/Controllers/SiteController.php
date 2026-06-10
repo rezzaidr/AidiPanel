@@ -33,7 +33,7 @@ class SiteController extends BaseController
     {
         $domain    = strtolower(trim((string) $this->request->post('domain', '')));
         $type      = (string) $this->request->post('type', 'php');
-        $phpVer    = (string) $this->request->post('php_version', '8.3');
+        $phpVer    = (string) $this->request->post('php_version', php_policy()['default']);
         $proxyPass = (string) $this->request->post('proxy_pass', 'http://127.0.0.1:3000');
         $siteUser  = strtolower(trim((string) $this->request->post('site_user', '')));
 
@@ -43,8 +43,11 @@ class SiteController extends BaseController
         if (!in_array($type, ['wordpress', 'php', 'laravel', 'static', 'proxy'], true)) {
             $this->error('Invalid site type.');
         }
-        if (!in_array($phpVer, ['8.1', '8.2', '8.3'], true)) {
+        if (!in_array($phpVer, php_policy()['available'], true)) {
             $this->error('Invalid PHP version.');
+        }
+        if (!is_dir("/etc/php/{$phpVer}/fpm")) {
+            $this->error("PHP {$phpVer} is not installed. Install it in Admin > PHP first.");
         }
         if ($type === 'proxy' && !is_valid_proxy_url($proxyPass)) {
             $this->error('Invalid reverse proxy URL.');
@@ -168,10 +171,13 @@ class SiteController extends BaseController
     public function changePhp(array $params = []): void
     {
         $domain = $params['domain'] ?? '';
-        $phpVer = (string) $this->request->post('php_version', '8.3');
+        $phpVer = (string) $this->request->post('php_version', php_policy()['default']);
 
-        if (!in_array($phpVer, ['8.1', '8.2', '8.3'], true)) {
+        if (!in_array($phpVer, php_policy()['available'], true)) {
             $this->error('Invalid PHP version.');
+        }
+        if (!is_dir("/etc/php/{$phpVer}/fpm")) {
+            $this->error("PHP {$phpVer} is not installed. Install it in Admin > PHP first.");
         }
 
         $result = run_cli('php:version', ['--domain', $domain, '--set', $phpVer]);
@@ -277,7 +283,18 @@ class SiteController extends BaseController
         $userField = ['key' => 'site_user', 'label' => 'site.add.f.site_user', 'input' => 'text',
                       'required' => false, 'enabled' => true, 'placeholder' => 'auto from domain',
                       'note' => 'site.add.f.site_user_note'];
-        $phpField = ['key' => 'php_version', 'label' => 'site.add.f.php', 'input' => 'select', 'required' => false, 'enabled' => true, 'options' => ['8.3', '8.2', '8.1']];
+        $phpStatus = php_versions_status();
+        // Default first, then the rest descending, so the dropdown prefills the recommended version.
+        $phpOpts = [];
+        foreach ($phpStatus as $ver => $s) {
+            $phpOpts[] = ['value' => $ver, 'disabled' => !$s['installed'], 'default' => $s['default']];
+        }
+        usort($phpOpts, function ($a, $b) {
+            if ($a['default'] !== $b['default']) return $a['default'] ? -1 : 1;
+            return version_compare($b['value'], $a['value']);
+        });
+        $phpField = ['key' => 'php_version', 'label' => 'site.add.f.php', 'input' => 'phpselect',
+                     'required' => false, 'enabled' => true, 'options' => $phpOpts];
 
         $forms = [
             'wordpress' => [
@@ -506,7 +523,7 @@ class SiteController extends BaseController
 
             // Deteksi PHP version
             preg_match('/php(\d+\.\d+)-fpm\.sock/', $content, $m);
-            $phpVer = $m[1] ?? '8.3';
+            $phpVer = $m[1] ?? php_policy()['default'];
 
             $this->syncOneSite($domain, $type, $phpVer);
         }

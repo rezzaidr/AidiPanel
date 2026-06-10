@@ -100,7 +100,10 @@ class DashboardController extends BaseController
 
     private function getServicesStatus(): array
     {
-        $services = ['nginx', 'mysql', 'mariadb', 'redis-server', 'php8.1-fpm', 'php8.2-fpm', 'php8.3-fpm'];
+        $services = ['nginx', 'mysql', 'mariadb', 'redis-server', 'aidipanel-fpm'];
+        foreach (php_versions_status() as $ver => $s) {
+            if ($s['installed']) $services[] = "php{$ver}-fpm";
+        }
         $result   = [];
         foreach ($services as $svc) {
             $status = trim((string) shell_exec("systemctl is-active " . escapeshellarg($svc) . " 2>/dev/null"));

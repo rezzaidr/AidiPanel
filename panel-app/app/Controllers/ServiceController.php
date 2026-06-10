@@ -2,7 +2,21 @@
 
 class ServiceController extends BaseController
 {
-    private const SERVICES = ['nginx', 'mysql', 'mariadb', 'redis-server', 'php8.1-fpm', 'php8.2-fpm', 'php8.3-fpm'];
+    /** php<ver>-fpm names for every installed PHP version. */
+    private function phpFpmServices(): array
+    {
+        $out = [];
+        foreach (php_versions_status() as $ver => $s) {
+            if ($s['installed']) $out[] = "php{$ver}-fpm";
+        }
+        return $out;
+    }
+
+    /** Base services + the panel runtime + every installed PHP-FPM service. */
+    private function services(): array
+    {
+        return array_merge(['nginx', 'mysql', 'mariadb', 'redis-server', 'aidipanel-fpm'], $this->phpFpmServices());
+    }
 
     public function index(array $params = []): void
     {
@@ -20,7 +34,7 @@ class ServiceController extends BaseController
         $service = (string) $this->request->post('service', '');
         $action  = (string) $this->request->post('action', '');
 
-        $allowed = ['nginx', 'mysql', 'mariadb', 'redis', 'redis-server', 'php8.1-fpm', 'php8.2-fpm', 'php8.3-fpm'];
+        $allowed = array_merge(['nginx', 'mysql', 'mariadb', 'redis', 'redis-server', 'aidipanel-fpm'], $this->phpFpmServices());
         if (!in_array($service, $allowed, true)) $this->error('Invalid service.');
         if (!in_array($action, ['start', 'stop', 'restart'], true)) $this->error('Invalid action.');
 
@@ -39,7 +53,7 @@ class ServiceController extends BaseController
     private function fetchStatus(): array
     {
         $result = [];
-        foreach (self::SERVICES as $svc) {
+        foreach ($this->services() as $svc) {
             $status   = trim((string) shell_exec("systemctl is-active " . escapeshellarg($svc) . " 2>/dev/null"));
             if ($status === '') continue;
             $enabled  = trim((string) shell_exec("systemctl is-enabled " . escapeshellarg($svc) . " 2>/dev/null"));

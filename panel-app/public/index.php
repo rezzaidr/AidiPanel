@@ -81,6 +81,7 @@ $router->post('/databases/backup', 'DatabaseController@backup');
 // PHP
 $router->get('/php',           'PhpController@index');
 $router->post('/php/restart',  'PhpController@restart');
+$router->post('/php/install',  'PhpController@install');
 
 // SSL
 $router->get('/ssl',           'SslController@index');

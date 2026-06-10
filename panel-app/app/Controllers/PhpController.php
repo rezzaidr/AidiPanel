@@ -4,15 +4,18 @@ class PhpController extends BaseController
 {
     public function index(array $params = []): void
     {
+        $status   = php_versions_status();
         $versions = [];
-        foreach (['8.1', '8.2', '8.3'] as $v) {
-            $installed  = is_executable("/usr/bin/php{$v}");
-            $fpmActive  = $installed && trim((string) shell_exec("systemctl is-active php{$v}-fpm 2>/dev/null")) === 'active';
-            $phpVersion = $installed ? trim((string) shell_exec("/usr/bin/php{$v} -r 'echo PHP_VERSION;' 2>/dev/null")) : null;
-            $versions[$v] = [
-                'installed'  => $installed,
-                'fpm_active' => $fpmActive,
-                'full_ver'   => $phpVersion,
+        foreach ($status as $ver => $s) {
+            $full = $s['installed']
+                ? trim((string) shell_exec("/usr/bin/php{$ver} -r 'echo PHP_VERSION;' 2>/dev/null"))
+                : null;
+            $versions[$ver] = [
+                'installed'  => $s['installed'],
+                'fpm_active' => $s['running'],
+                'default'    => $s['default'],
+                'label'      => $s['label'],
+                'full_ver'   => $full,
             ];
         }
         $sites = $this->db->rows('SELECT domain, php_version, type FROM sites ORDER BY domain');
@@ -22,7 +25,7 @@ class PhpController extends BaseController
     public function restart(array $params = []): void
     {
         $version = (string) $this->request->post('version', 'all');
-        $allowed = array_merge(['all'], ['8.1', '8.2', '8.3']);
+        $allowed = array_merge(['all'], php_policy()['available']);
         if (!in_array($version, $allowed, true)) $this->error('Invalid PHP version.');
 
         $args = $version !== 'all' ? ['--version', $version] : [];
@@ -35,5 +38,21 @@ class PhpController extends BaseController
             $this->json(['success' => true, 'message' => "PHP-FPM {$version} restarted."]);
         }
         $this->success("PHP-FPM {$version} restarted.", '/php');
+    }
+
+    public function install(array $params = []): void
+    {
+        $version = (string) $this->request->post('version', '');
+        if (!in_array($version, php_policy()['available'], true)) {
+            $this->error('Invalid PHP version.');
+        }
+
+        $result = run_cli('php:install', ['--version', $version]);
+        if (!$result['success']) {
+            $this->error('PHP ' . $version . ' install failed: ' . $result['output']);
+        }
+
+        \Core\DB::log('php:install', "Installed PHP {$version}");
+        $this->success("PHP {$version} installed.", '/php');
     }
 }
