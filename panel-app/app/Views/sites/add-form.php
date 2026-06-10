@@ -45,6 +45,18 @@ $renderField = function (array $f): void {
             echo '</select>';
             break;
 
+        case 'phpselect':
+            echo '<select name="' . e($f['key']) . '" class="' . $inCls . '"' . $da . '>';
+            foreach ($f['options'] as $opt) {
+                $od  = !empty($opt['disabled']) ? ' disabled' : '';
+                $sel = !empty($opt['default']) ? ' selected' : '';
+                $sfx = !empty($opt['disabled']) ? ' — ' . t('php.not_installed') : '';
+                echo '<option value="' . e($opt['value']) . '"' . $od . $sel . '>PHP ' . e($opt['value']) . e($sfx) . '</option>';
+            }
+            echo '</select>';
+            echo '<p class="hint">' . e(t('site.set.php_install_hint')) . '</p>';
+            break;
+
         default: // text | password (shown as visible text)
             $val = isset($f['value'])       ? ' value="' . e($f['value']) . '"'             : '';
             $ph  = isset($f['placeholder']) ? ' placeholder="' . e($f['placeholder']) . '"' : '';

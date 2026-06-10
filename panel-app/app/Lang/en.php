@@ -245,6 +245,14 @@ return [
     'php.per_site_title'    => 'PHP version per site',
     'php.not_installed'     => 'Not installed',
     'php.change'            => 'Change →',
+    'php.is_default'        => 'Default',
+    'php.available'         => 'Available',
+    'php.install_btn'       => 'Install PHP',
+    'php.installing'        => 'Installing…',
+    'php.label.default'     => 'Recommended',
+    'php.label.latest'      => 'Latest',
+    'php.label.compat'      => 'Compatibility',
+    'php.label.legacy'      => 'Legacy',
 
     // Cache admin page
     'cache.title_size'      => 'Cache size',
@@ -430,6 +438,7 @@ return [
     'site.set.php_title'    => 'PHP Version',
     'site.set.php_hint'     => 'Restart PHP-FPM after changing version.',
     'site.set.php_apply'    => 'Apply',
+    'site.set.php_install_hint' => 'Versions not installed are greyed out — install them in Admin > PHP first.',
     'site.set.nginx_title'  => 'Nginx Configuration',
     'site.set.nginx_hint'   => 'Edit the raw Nginx vhost config for this site.',
     'site.set.nginx_edit'   => 'Edit in editor',

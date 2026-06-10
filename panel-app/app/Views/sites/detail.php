@@ -482,10 +482,13 @@ if ($opcacheEnabled && isset($opcache['opcache_statistics'])) {
         <div class="flex-1">
           <label class="lbl">PHP version</label>
           <select name="php_version" class="inp">
-            <?php foreach (['8.1', '8.2', '8.3'] as $v): ?>
-            <option value="<?= e($v) ?>" <?= $phpVer === $v ? 'selected' : '' ?>>PHP <?= e($v) ?></option>
+            <?php foreach (php_versions_status() as $v => $s): ?>
+            <option value="<?= e($v) ?>"
+              <?= $phpVer === $v ? 'selected' : '' ?>
+              <?= $s['installed'] ? '' : 'disabled' ?>>PHP <?= e($v) ?><?= $s['installed'] ? '' : ' — ' . e(t('php.not_installed')) ?></option>
             <?php endforeach; ?>
           </select>
+          <p class="hint mt-1"><?= e(t('site.set.php_install_hint')) ?></p>
         </div>
         <button type="submit" class="btn btn-primary"><?= e(t('site.set.php_apply')) ?></button>
       </form>

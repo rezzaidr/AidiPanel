@@ -19,7 +19,7 @@
 </div>
 
 <!-- PHP version cards -->
-<div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
   <?php foreach ($versions as $ver => $info): ?>
   <div class="card p-5">
     <div class="flex items-center justify-between mb-3">
@@ -28,9 +28,16 @@
           <i class="ti ti-brand-php text-ink text-lg"></i>
         </div>
         <div>
-          <p class="text-sm font-semibold text-zinc-900">PHP <?= e($ver) ?></p>
+          <p class="text-sm font-semibold text-zinc-900">
+            PHP <?= e($ver) ?>
+            <span class="badge badge-muted text-[10px] ml-1"><?= e(t($info['label'])) ?></span>
+          </p>
           <p class="text-[11px] text-zinc-400">
-            <?= $info['installed'] ? e($info['full_ver']) : e(t('php.not_installed')) ?>
+            <?php if ($info['installed']): ?>
+              <?= e($info['full_ver']) ?><?= $info['default'] ? ' · ' . e(t('php.is_default')) : '' ?>
+            <?php else: ?>
+              <?= e(t('php.not_installed')) ?>
+            <?php endif; ?>
           </p>
         </div>
       </div>
@@ -41,7 +48,7 @@
           <span class="badge badge-danger"><?= e(t('services.stopped')) ?></span>
         <?php endif; ?>
       <?php else: ?>
-        <span class="badge badge-muted"><?= e(t('php.not_installed')) ?></span>
+        <span class="badge badge-muted"><?= e(t('php.available')) ?></span>
       <?php endif; ?>
     </div>
 
@@ -51,6 +58,15 @@
       <input type="hidden" name="version" value="<?= e($ver) ?>">
       <button type="submit" class="btn btn-ghost btn-sm w-full">
         <i class="ti ti-refresh text-sm"></i> Restart PHP <?= e($ver) ?>-FPM
+      </button>
+    </form>
+    <?php else: ?>
+    <form method="POST" action="/php/install" x-data="{ busy: false }" @submit="busy = true">
+      <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+      <input type="hidden" name="version" value="<?= e($ver) ?>">
+      <button type="submit" class="btn btn-primary btn-sm w-full" :disabled="busy">
+        <span x-show="!busy"><i class="ti ti-download text-sm"></i> <?= e(t('php.install_btn')) ?> <?= e($ver) ?></span>
+        <span x-show="busy" x-cloak><i class="ti ti-loader-2 text-sm animate-spin"></i> <?= e(t('php.installing')) ?></span>
       </button>
     </form>
     <?php endif; ?>
