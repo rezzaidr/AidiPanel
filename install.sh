@@ -37,8 +37,7 @@ readonly NGINX_CACHE_SIZE="10g"
 readonly NGINX_CACHE_KEYS_ZONE="200m"
 readonly SITES_DIR="/var/www"
 readonly DB_NAME="aidipanel"
-readonly PHP_DEFAULT_VERSION="8.3"
-readonly PHP_VERSIONS=("8.1" "8.2" "8.3")
+PHP_DEFAULT_VERSION="8.4"
 
 declare -A DB_ENGINE_LABELS=(
   [mysql80]="MySQL 8.0"
@@ -148,8 +147,7 @@ run_quiet() {
 }
 # <<< CONSOLE_HELPERS_END
 
-# space-joined PHP version list (IFS is \n\t globally, so a bare ${arr[*]} newline-joins)
-_php_list() { local IFS=' '; echo "${PHP_VERSIONS[*]}"; }
+_php_list() { echo "${PHP_DEFAULT_VERSION}"; }
 
 # ---------------------------------------------------------------------------
 # 2. TRAP — cleanup lockfile & print failure context on any error
@@ -382,7 +380,7 @@ print_provisioning_plan() {
   ui_section "Provisioning Plan"
   ui_kv "Foundation"    "System tools · Swap · Base services"
   ui_kv "Web Engine"    "Nginx mainline · FastCGI Cache"
-  ui_kv "Runtime"       "PHP-FPM $(_php_list)"
+  ui_kv "Runtime"       "PHP-FPM ${PHP_DEFAULT_VERSION} (default) · 8.2/8.3/8.5 on-demand"
   ui_kv "Data Layer"    "${DB_ENGINE_LABELS[$DB_ENGINE]} · Redis"
   ui_kv "Security"      "UFW · Fail2ban · Certbot · Sudo wrapper"
   ui_kv "Control Plane" "AidiPanel Web UI · CLI · Cron"
@@ -395,13 +393,10 @@ print_blueprint() {
   printf '%s\n' "Internet"
   printf '  %s\n' "$(_u '↓' 'v')"
   printf '%s\n' "Nginx ${NGINX_VERSION:-mainline}"
-  local mid end g i n=${#PHP_VERSIONS[@]}
+  local mid end
   mid="$(_u '├─' '|-')"; end="$(_u '└─' '\-')"
   printf '  %s %-16s %s\n' "$mid" "FastCGI Cache" "$1"
-  for (( i=0; i<n; i++ )); do
-    g="$mid"; (( i == n-1 )) && g="$end"
-    printf '  %s %-16s %s\n' "$g" "PHP-FPM ${PHP_VERSIONS[$i]}" "$1"
-  done
+  printf '  %s %-16s %s\n' "$end" "PHP-FPM ${PHP_DEFAULT_VERSION}" "$1"
   printf '\n'
   printf '%-24s %s\n' "MariaDB" "$2"
   printf '%-24s %s\n' "Redis" "$2"
@@ -752,23 +747,22 @@ PHP_REPO
 _install_php_version() {
   local ver="$1"
   log "Installing PHP ${ver} and extensions..."
-  _apt_install \
-    "php${ver}-fpm" \
-    "php${ver}-cli" \
-    "php${ver}-common" \
-    "php${ver}-mysql" \
-    "php${ver}-sqlite3" \
-    "php${ver}-redis" \
-    "php${ver}-xml" \
-    "php${ver}-mbstring" \
-    "php${ver}-curl" \
-    "php${ver}-zip" \
-    "php${ver}-gd" \
-    "php${ver}-intl" \
-    "php${ver}-bcmath" \
-    "php${ver}-soap" \
-    "php${ver}-imagick" \
-    "php${ver}-opcache"
+  [[ -z "${PHP_EXTENSIONS:-}" ]] && source /etc/aidipanel/php.conf
+  # Skip suffixes the repo does not ship for this version (e.g. PHP 8.5 bundles
+  # OPcache into core, so php8.5-opcache is absent). Keeps on-demand + upfront in
+  # sync (both build from PHP_EXTENSIONS) and avoids apt failing the whole install.
+  local pkgs=() skipped=() exts ext
+  local IFS=' '
+  read -ra exts <<< "$PHP_EXTENSIONS"
+  for ext in "${exts[@]}"; do
+    if apt-cache show "php${ver}-${ext}" >/dev/null 2>&1; then
+      pkgs+=("php${ver}-${ext}")
+    else
+      skipped+=("php${ver}-${ext}")
+    fi
+  done
+  [[ ${#skipped[@]} -gt 0 ]] && log "Skipping packages not in repo for PHP ${ver}: ${skipped[*]} (bundled into core or unavailable)."
+  _apt_install "${pkgs[@]}"
   ok "PHP ${ver} installed"
 }
 
@@ -830,13 +824,26 @@ PHPINI
 }
 
 _install_all_php_versions() {
-  for ver in "${PHP_VERSIONS[@]}"; do
-    _install_php_version "$ver"
-    ui_ok "PHP ${ver} installed"
-    _configure_php_fpm "$ver"
-    ui_ok "PHP ${ver}-FPM tuned: max_children=${PHP_MAXCHILDREN:-?}"
-  done
-  ok "All PHP versions installed: ${PHP_VERSIONS[*]}"
+  log "Writing PHP policy..."
+  mkdir -p /etc/aidipanel
+  cat > /etc/aidipanel/php.conf <<'PHPCONF'
+# /etc/aidipanel/php.conf — AidiPanel PHP version policy (single source of truth).
+# Written by install.sh; sourced by the CLI; parsed by the panel.
+PHP_DEFAULT_VERSION="8.4"
+PHP_AVAILABLE_VERSIONS="8.2 8.3 8.4 8.5"
+PHP_EXTENSIONS="fpm cli common mysql sqlite3 redis xml mbstring curl zip gd intl bcmath soap imagick opcache"
+PHPCONF
+  chmod 644 /etc/aidipanel/php.conf
+
+  # shellcheck source=/dev/null
+  source /etc/aidipanel/php.conf
+
+  log "Installing PHP ${PHP_DEFAULT_VERSION} (default)..."
+  _install_php_version "$PHP_DEFAULT_VERSION"
+  ui_ok "PHP ${PHP_DEFAULT_VERSION} installed"
+  _configure_php_fpm "$PHP_DEFAULT_VERSION"
+  ui_ok "PHP ${PHP_DEFAULT_VERSION}-FPM tuned: max_children=${PHP_MAXCHILDREN:-?}"
+  ok "Default PHP installed: ${PHP_DEFAULT_VERSION} (others available on-demand)"
 }
 
 # ---------------------------------------------------------------------------
@@ -1540,7 +1547,7 @@ case "$cmd" in
   site:add|site:delete|site:list|vhost:save|\
   cache:status|cache:purge|cache:enable|cache:disable|\
   db:add|db:delete|db:list|db:backup|\
-  php:list|php:version|php:restart|\
+  php:list|php:version|php:restart|php:install|\
   ssl:install|ssl:renew|ssl:status|ssl:import|\
   service:status|service:start|service:stop|service:restart|\
   system:info)
@@ -1651,10 +1658,7 @@ _test_and_start_services() {
     || die "Nginx configuration test FAILED. Check: nginx -t"
   ok "Nginx config: OK"
 
-  local services=("nginx")
-  for ver in "${PHP_VERSIONS[@]}"; do
-    services+=("php${ver}-fpm")
-  done
+  local services=("nginx" "php${PHP_DEFAULT_VERSION}-fpm")
   services+=("$(_db_service_name)")
   [[ "$INSTALL_REDIS" == "true" ]] && services+=("redis-server")
 
@@ -1680,7 +1684,7 @@ _health_check() {
 
   ui_section "Verification Matrix"
   _svc_row nginx
-  for ver in "${PHP_VERSIONS[@]}"; do _svc_row "php${ver}-fpm"; done
+  _svc_row "php${PHP_DEFAULT_VERSION}-fpm"
   _svc_row aidipanel-fpm
   _svc_row "$(_db_service_name)"
   [[ "$INSTALL_REDIS" == "true" ]] && _svc_row redis-server
@@ -1835,10 +1839,11 @@ main() {
   _create_fastcgi_params_snippet; ui_ok "FastCGI cache snippet installed"
   ui_elapsed "$t"
 
-  ui_section "Runtime Layer"; ui_note "Installing isolated PHP-FPM runtime versions"; printf '\n'
-  printf '%s\n' "Runtime bundle"
+  ui_section "Runtime Layer"; ui_note "Installing the default PHP-FPM runtime"; printf '\n'
+  printf '%s\n' "Runtime bundle (PHP ${PHP_DEFAULT_VERSION})"
   ui_note "PHP-FPM · CLI · MySQL · Redis · SQLite · XML · mbstring"
   ui_note "curl · zip · GD · intl · bcmath · SOAP · imagick · OPcache"
+  ui_note "Versions 8.2 / 8.3 / 8.5 install on-demand (aidipanel php:install)"
   printf '\n'
   t=$SECONDS
   _add_php_repo

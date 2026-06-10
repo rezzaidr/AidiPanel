@@ -27,7 +27,18 @@ readonly NGINX_CACHE_DIR="/var/cache/nginx/fastcgi"
 readonly NGINX_CACHE_ZONE="aidipanel_fcgi"
 readonly CREDENTIALS_FILE="${PANEL_DIR}/credentials.conf"
 readonly CLI_LOG="${PANEL_DIR}/storage/logs/aidipanel-cli.log"
-readonly PHP_VERSIONS_SUPPORTED=("8.1" "8.2" "8.3")
+# PHP policy — single source of truth (/etc/aidipanel/php.conf), with a dev fallback.
+if [[ -f "/etc/aidipanel/php.conf" ]]; then
+  # shellcheck source=/dev/null
+  source /etc/aidipanel/php.conf
+else
+  PHP_DEFAULT_VERSION="8.4"
+  PHP_AVAILABLE_VERSIONS="8.2 8.3 8.4 8.5"
+  PHP_EXTENSIONS="fpm cli common mysql sqlite3 redis xml mbstring curl zip gd intl bcmath soap imagick opcache"
+fi
+# Build the supported-versions array (space-split despite global IFS=$'\n\t').
+PHP_VERSIONS_SUPPORTED=()
+{ local_ifs_save=$IFS; IFS=' '; read -ra PHP_VERSIONS_SUPPORTED <<< "$PHP_AVAILABLE_VERSIONS"; IFS=$local_ifs_save; }
 
 # Colors
 # Colors — NO_COLOR support (https://no-color.org)
@@ -347,6 +358,7 @@ _usage() {
   echo "  db:backup       Backup a database to file"
 
   echo -e "\n${BOLD}${BLUE}PHP Management${RESET}"
+  echo "  php:install     Install a supported PHP version on-demand"
   echo "  php:list        List installed PHP versions"
   echo "  php:version     Get or set PHP version for a site"
   echo "  php:restart     Restart PHP-FPM (all or specific version)"
@@ -451,7 +463,7 @@ _site_add() {
 
   # Preflight (FPM presence via its pool dir; the php CLI binary is NOT required —
   # PHP-FPM serves the site, and _write_fpm_pool runs `php-fpm<ver> -t`).
-  [[ -d "/etc/php/${php_ver}/fpm/pool.d" ]] || die "php${php_ver}-fpm is not installed (no ${php_ver} pool dir)."
+  [[ -d "/etc/php/${php_ver}/fpm/pool.d" ]] || die "PHP ${php_ver} is not installed. Run: aidipanel php:install --version ${php_ver}"
   [[ -w "$HOME_BASE" ]] || die "${HOME_BASE} is not writable."
 
   log "Creating site: ${domain} (user: ${site_user}, type: ${site_type}, PHP: ${php_ver})..."
@@ -1139,16 +1151,99 @@ _db_backup() {
 # PHP COMMANDS
 # ===========================================================================
 
+_ensure_php_version() {
+  local ver="$1"
+  _php_version_valid "$ver" || die "Invalid PHP version: ${ver}. Supported: ${PHP_AVAILABLE_VERSIONS}"
+
+  if [[ -f "/etc/php/${ver}/fpm/conf.d/99-aidipanel.ini" ]]; then
+    ok "PHP ${ver} is already installed."
+    return 0
+  fi
+
+  log "Installing PHP ${ver} on-demand (this may take 1-2 minutes)..."
+
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq || true
+
+  # Build the package list, skipping suffixes the repo does not ship for this
+  # version (e.g. PHP 8.5 bundles OPcache into core, so php8.5-opcache is absent).
+  # apt-get fails the whole transaction on one unlocatable package, so filter first.
+  local pkgs=() skipped=() exts ext
+  local IFS=' '
+  read -ra exts <<< "$PHP_EXTENSIONS"
+  for ext in "${exts[@]}"; do
+    if apt-cache show "php${ver}-${ext}" >/dev/null 2>&1; then
+      pkgs+=("php${ver}-${ext}")
+    else
+      skipped+=("php${ver}-${ext}")
+    fi
+  done
+  [[ ${#skipped[@]} -gt 0 ]] && log "Skipping packages not in repo for PHP ${ver}: ${skipped[*]} (bundled into core or unavailable)."
+  [[ ${#pkgs[@]} -gt 0 ]] || die "No php${ver} packages found in the repository. Check that the ondrej PPA provides PHP ${ver}."
+
+  apt-get install -y -qq "${pkgs[@]}" || die "Failed to install PHP ${ver}. Check that the package repository provides php${ver}."
+
+  local ini_dir="/etc/php/${ver}/fpm/conf.d"
+  mkdir -p "$ini_dir"
+  cat > "${ini_dir}/99-aidipanel.ini" <<PHPINI
+; AidiPanel PHP-FPM tuning (PHP ${ver})
+memory_limit         = 256M
+max_execution_time   = 300
+max_input_time       = 300
+post_max_size        = 256M
+upload_max_filesize  = 256M
+date.timezone        = Asia/Jakarta
+expose_php           = Off
+
+; OPcache (important for performance)
+opcache.enable                  = 1
+opcache.enable_cli              = 0
+opcache.memory_consumption      = 128
+opcache.interned_strings_buffer = 16
+opcache.max_accelerated_files   = 10000
+opcache.revalidate_freq         = 2
+opcache.fast_shutdown           = 1
+opcache.validate_timestamps     = 1
+opcache.save_comments           = 1
+PHPINI
+
+  local pool_conf="/etc/php/${ver}/fpm/pool.d/www.conf"
+  if [[ -f "$pool_conf" ]]; then
+    local mem_mb max_ch=10 start_sv=2 min_sp=2 max_sp=4
+    mem_mb=$(awk '/MemTotal/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 0)
+    [[ -z "$mem_mb" ]] && mem_mb=0
+    if (( mem_mb >= 2048 )); then max_ch=20; start_sv=4; min_sp=2; max_sp=6; fi
+    if (( mem_mb >= 4096 )); then max_ch=40; start_sv=6; min_sp=4; max_sp=10; fi
+    sed -i \
+      -e "s|^listen = .*|listen = /run/php/php${ver}-fpm.sock|" \
+      -e 's|^;listen.owner = .*|listen.owner = www-data|' \
+      -e 's|^;listen.group = .*|listen.group = www-data|' \
+      -e 's|^;listen.mode = .*|listen.mode = 0660|' \
+      -e 's|^pm = .*|pm = dynamic|' \
+      -e "s|^pm.max_children = .*|pm.max_children = ${max_ch}|" \
+      -e "s|^pm.start_servers = .*|pm.start_servers = ${start_sv}|" \
+      -e "s|^pm.min_spare_servers = .*|pm.min_spare_servers = ${min_sp}|" \
+      -e "s|^pm.max_spare_servers = .*|pm.max_spare_servers = ${max_sp}|" \
+      -e 's|^;pm.max_requests = .*|pm.max_requests = 500|' \
+      "$pool_conf"
+  fi
+
+  systemctl enable --now "php${ver}-fpm" || die "Failed to start php${ver}-fpm"
+  ok "PHP ${ver} installed successfully."
+  return 0
+}
+
 _php_list() {
   _parse_opts "$@"
   echo ""
-  echo -e "  ${BOLD}Installed PHP versions${RESET}"
+  echo -e "  ${BOLD}PHP versions${RESET}"
   _hr
   for ver in "${PHP_VERSIONS_SUPPORTED[@]}"; do
-    local status="${RED}not installed${RESET}"
+    local status="${DIM}available${RESET}"
     local fpm_status="${DIM}stopped${RESET}"
-    if command -v "php${ver}" &>/dev/null; then
+    if [[ -d "/etc/php/${ver}/fpm" ]]; then
       status="${GREEN}installed${RESET}"
+      [[ "$ver" == "$PHP_DEFAULT_VERSION" ]] && status="${GREEN}installed (default)${RESET}"
       systemctl is-active --quiet "php${ver}-fpm" 2>/dev/null \
         && fpm_status="${GREEN}running${RESET}" \
         || fpm_status="${RED}stopped${RESET}"
@@ -1178,7 +1273,7 @@ _php_version() {
   fi
 
   _php_version_valid "$new_ver" || die "Invalid PHP version: ${new_ver}. Supported: ${PHP_VERSIONS_SUPPORTED[*]}"
-  command -v "php${new_ver}" &>/dev/null || die "PHP ${new_ver} is not installed on this server."
+  [[ -d "/etc/php/${new_ver}/fpm/pool.d" ]] || die "PHP ${new_ver} is not installed. Run: aidipanel php:install --version ${new_ver}"
 
   log "Changing PHP for ${domain}: ${current_ver} → ${new_ver}"
 
@@ -1201,6 +1296,14 @@ _php_version() {
 
   _nginx_test_reload
   ok "PHP version changed for ${domain}: ${current_ver} → ${new_ver}"
+}
+
+_php_install() {
+  _require_root "php:install"
+  _parse_opts "$@"
+  local ver; ver=$(_opt "version")
+  _require_arg "version" "$ver" "php:install --version 8.5"
+  _ensure_php_version "$ver"
 }
 
 _php_restart() {
@@ -1516,7 +1619,7 @@ _service_action() {
   [[ "$service_name" =~ ^php[0-9]+\.[0-9]+$ ]] && service_name="${service_name}-fpm"
 
   case "$service_name" in
-    nginx|mysql|mariadb|redis-server|php8.1-fpm|php8.2-fpm|php8.3-fpm) ;;
+    nginx|mysql|mariadb|redis-server|php8.2-fpm|php8.3-fpm|php8.4-fpm|php8.5-fpm) ;;
     *) die "Invalid service: ${service_name}" ;;
   esac
 
@@ -1731,6 +1834,7 @@ main() {
     db:backup)      _db_backup "$@" ;;
 
     # PHP
+    php:install)    _php_install "$@" ;;
     php:list)       _php_list "$@" ;;
     php:version)    _php_version "$@" ;;
     php:restart)    _php_restart "$@" ;;
