@@ -55,8 +55,14 @@ DRY_RUN=false
 DB_ROOT_PASS=""
 PANEL_ADMIN_PASS=""        # generated random, shown at end
 SWAP_SIZE_MB=2048
+UI_PLAIN=false        # --plain -> ASCII fallback (no unicode)
+UI_VERBOSE=false      # --verbose -> inline command output (tee), for debugging
+readonly RULE_WIDTH=47
 DEBIAN_FRONTEND=noninteractive
 export DEBIAN_FRONTEND
+NEEDRESTART_MODE=a
+NEEDRESTART_SUSPEND=1
+export NEEDRESTART_MODE NEEDRESTART_SUSPEND
 
 # Colors
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
@@ -66,9 +72,9 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
 # 1. LOGGING HELPERS
 # ---------------------------------------------------------------------------
 _ts()   { date '+%Y-%m-%d %H:%M:%S'; }
-log()   { echo -e "${CYAN}[$(_ts)] [INFO]${RESET}  $*" | tee -a "$PANEL_LOG"; }
-warn()  { echo -e "${YELLOW}[$(_ts)] [WARN]${RESET}  $*" | tee -a "$PANEL_LOG"; }
-ok()    { echo -e "${GREEN}[$(_ts)] [OK]${RESET}    $*" | tee -a "$PANEL_LOG"; }
+log()   { printf '[%s] [INFO]  %s\n' "$(_ts)" "$*" >> "$PANEL_LOG"; }
+warn()  { printf '[%s] [WARN]  %s\n' "$(_ts)" "$*" >> "$PANEL_LOG"; }
+ok()    { printf '[%s] [OK]    %s\n' "$(_ts)" "$*" >> "$PANEL_LOG"; }
 die()   {
   echo -e "${RED}[$(_ts)] [ERROR]${RESET} $*" | tee -a "$PANEL_LOG" >&2
   exit 1
@@ -86,6 +92,64 @@ credential_line() {
   local key="$1" value="$2"
   printf '%s=%q\n' "$key" "$value"
 }
+
+# ---------------------------------------------------------------------------
+# 1b. PROVISIONING CONSOLE — presentation helpers (Phase 2; output/logging only)
+# ---------------------------------------------------------------------------
+# >>> CONSOLE_HELPERS_START (sourced by tests/unit/console_helpers_test.sh)
+# unicode glyph, or ASCII fallback under --plain.  _u <unicode> <ascii>
+_u() { if [[ "$UI_PLAIN" == "true" ]]; then printf '%s' "$2"; else printf '%s' "$1"; fi; }
+
+# Color is enabled ONLY on an interactive TTY (and not --plain); piped/logged output
+# stays clean (no ANSI codes in the install log or the test loop). Call once from main().
+_color_init() {
+  if [[ -t 1 && "$UI_PLAIN" != "true" ]]; then
+    C_TITLE=$'\033[1;36m'; C_OK=$'\033[0;32m'; C_WARN=$'\033[1;33m'
+    C_FAIL=$'\033[1;31m'; C_KEY=$'\033[1m'; C_RESET=$'\033[0m'
+  else
+    C_TITLE=''; C_OK=''; C_WARN=''; C_FAIL=''; C_KEY=''; C_RESET=''
+  fi
+}
+
+# timestamped line to the FILE log only (no terminal)
+_logf() { printf '[%s] %s\n' "$(_ts)" "$*" >> "$PANEL_LOG"; }
+
+ui_rule() { local ch n="$RULE_WIDTH" out=''; ch=$(_u '━' '-'); while (( n-- > 0 )); do out+="$ch"; done; printf '%s\n' "$out"; }
+
+ui_section() { printf '\n\n%s%s%s\n' "${C_TITLE:-}" "$1" "${C_RESET:-}"; ui_rule; _logf "=== $1 ==="; }
+
+ui_kv()   { printf '%s%-12s%s %s\n' "${C_KEY:-}" "$1" "${C_RESET:-}" "$2"; }
+ui_ok()   { printf '%s%s%s %s\n' "${C_OK:-}" "$(_u '✓' '[OK]')" "${C_RESET:-}" "$1"; _logf "[OK] $1"; }
+ui_warn() { printf '%s%s %s%s\n' "${C_WARN:-}" "$(_u '⚠' '[!]')" "$1" "${C_RESET:-}"; _logf "[WARN] $1"; }
+ui_fail() { printf '%s%s %s%s\n' "${C_FAIL:-}" "$(_u '✗' '[X]')" "$1" "${C_RESET:-}"; _logf "[FAIL] $1"; }
+ui_note() { printf '  %s\n' "$1"; }
+
+# Elapsed for a layer.  ui_elapsed <start_seconds>
+ui_elapsed() { local d=$(( SECONDS - $1 )); printf '\nElapsed  %02d:%02d\n' $(( d/60 )) $(( d%60 )); }
+
+# run_quiet <Layer> <step> <cmd...> — command output to the log only; on failure print a
+# fail-loud line (layer/step/exit/log) and exit with the command's code. --verbose tees
+# inline. Uses `if` (not `cmd; rc=$?`) so `set -e` doesn't abort before we read the code.
+run_quiet() {
+  local layer="$1" step="$2"; shift 2
+  _logf ">>> [${layer}] ${step}"
+  local rc=0
+  if [[ "$UI_VERBOSE" == "true" ]]; then
+    if "$@" 2>&1 | tee -a "$PANEL_LOG"; then rc=0; else rc=${PIPESTATUS[0]}; fi
+  else
+    if "$@" >> "$PANEL_LOG" 2>&1; then rc=0; else rc=$?; fi
+  fi
+  if (( rc != 0 )); then
+    ui_fail "${layer} failed at: ${step} (exit ${rc})"
+    ui_note "See ${PANEL_LOG}"
+    exit "$rc"
+  fi
+  return 0
+}
+# <<< CONSOLE_HELPERS_END
+
+# space-joined PHP version list (IFS is \n\t globally, so a bare ${arr[*]} newline-joins)
+_php_list() { local IFS=' '; echo "${PHP_VERSIONS[*]}"; }
 
 # ---------------------------------------------------------------------------
 # 2. TRAP — cleanup lockfile & print failure context on any error
@@ -136,6 +200,12 @@ _parse_args() {
         DRY_RUN=true
         warn "Dry-run mode enabled — no changes will be made to the system."
         ;;
+      --plain)
+        UI_PLAIN=true
+        ;;
+      --verbose)
+        UI_VERBOSE=true
+        ;;
       --help|-h)
         echo "Usage: bash $0 [OPTIONS]"
         echo "  --port PORT           Panel HTTPS port (default: 8443)"
@@ -144,6 +214,8 @@ _parse_args() {
         echo "  --db-root-pass PASS   Set DB root password non-interactively"
         echo "  --no-redis            Skip Redis installation"
         echo "  --dry-run             Simulate install without making changes"
+        echo "  --plain               ASCII output (no unicode); for basic terminals"
+        echo "  --verbose             Show command output inline (debug)"
         exit 0
         ;;
       *)
@@ -230,10 +302,14 @@ _check_resources() {
   mem_gb=$(awk "BEGIN {printf \"%.1f\", ${mem_kb}/1024/1024}")
   disk_gb=$(awk "BEGIN {printf \"%.1f\", ${disk_kb}/1024/1024}")
 
-  log "Resources: ${cpu_cores} CPU cores, ${mem_gb}GB RAM, ${disk_gb}GB free disk"
+  if (( cpu_cores > 1 )); then PROFILE_CPU="${cpu_cores} cores"; else PROFILE_CPU="${cpu_cores} core"; fi
+  PROFILE_RAM="${mem_gb} GB"
+  PROFILE_DISK="${disk_gb} GB"
+  PROFILE_LOWRAM=false; (( mem_kb >= 2048000 )) || PROFILE_LOWRAM=true
+  _logf "Resources: ${cpu_cores} CPU, ${mem_gb}GB RAM, ${disk_gb}GB free"
 
   (( mem_kb >= 512000 )) \
-    || warn "Low RAM detected: ~${mem_gb}GB. Minimum 1GB recommended. Continuing anyway."
+    || _logf "Low RAM: ~${mem_gb}GB (min 1GB recommended; swap will be created)."
   (( disk_kb >= 5120000 )) \
     || die "Insufficient disk space. Minimum 5GB free required. Current: ~${disk_gb}GB."
 }
@@ -273,23 +349,80 @@ _check_hostname_resolves() {
 }
 
 # ---------------------------------------------------------------------------
+# 4b. PRE-FLIGHT PRESENTATION (Server Profile · Readiness · Plan)
+# ---------------------------------------------------------------------------
+print_server_profile() {
+  ui_section "Server Profile"
+  ui_kv "Host"       "$(hostname -s 2>/dev/null || hostname)"
+  ui_kv "OS"         "${OS_ID^} ${OS_VERSION_ID} ${OS_CODENAME}"
+  ui_kv "Kernel"     "$(uname -r)"
+  ui_kv "CPU"        "${PROFILE_CPU:-?}"
+  ui_kv "RAM"        "${PROFILE_RAM:-?}"
+  ui_kv "Disk free"  "${PROFILE_DISK:-?}"
+  ui_kv "Network"    "online"
+  ui_kv "Panel port" "${PANEL_PORT}"
+  if [[ "${PROFILE_LOWRAM:-false}" == "true" ]]; then
+    printf '\n%s\n' "Resource note"
+    ui_note "$(_u '⚠' '[!]') RAM is below recommended production size."
+    ui_note "Swap will be created automatically to keep installation stable."
+  fi
+}
+
+print_readiness_check() {
+  ui_section "Readiness Check"
+  ui_ok "Root access"
+  ui_ok "Internet connectivity"
+  ui_ok "Ubuntu version supported"
+  ui_ok "Port ${PANEL_PORT} available"
+  ui_ok "Hostname detected"
+  ui_ok "No blocking pre-flight issue found"
+}
+
+print_provisioning_plan() {
+  ui_section "Provisioning Plan"
+  ui_kv "Foundation"    "System tools · Swap · Base services"
+  ui_kv "Web Engine"    "Nginx mainline · FastCGI Cache"
+  ui_kv "Runtime"       "PHP-FPM $(_php_list)"
+  ui_kv "Data Layer"    "${DB_ENGINE_LABELS[$DB_ENGINE]} · Redis"
+  ui_kv "Security"      "UFW · Fail2ban · Certbot · Sudo wrapper"
+  ui_kv "Control Plane" "AidiPanel Web UI · CLI · Cron"
+  ui_kv "Verification"  "Service status · Panel response · Config test"
+}
+
+# print_blueprint <web_state> <data_state> <panel_state> — the Runtime Blueprint tree.
+print_blueprint() {
+  ui_section "Runtime Blueprint"
+  printf '%s\n' "Internet"
+  printf '  %s\n' "$(_u '↓' 'v')"
+  printf '%s\n' "Nginx ${NGINX_VERSION:-mainline}"
+  local mid end g i n=${#PHP_VERSIONS[@]}
+  mid="$(_u '├─' '|-')"; end="$(_u '└─' '\-')"
+  printf '  %s %-16s %s\n' "$mid" "FastCGI Cache" "$1"
+  for (( i=0; i<n; i++ )); do
+    g="$mid"; (( i == n-1 )) && g="$end"
+    printf '  %s %-16s %s\n' "$g" "PHP-FPM ${PHP_VERSIONS[$i]}" "$1"
+  done
+  printf '\n'
+  printf '%-24s %s\n' "MariaDB" "$2"
+  printf '%-24s %s\n' "Redis" "$2"
+  printf '%-24s %s\n' "AidiPanel UI" "$3"
+}
+
+# ---------------------------------------------------------------------------
 # 5. BANNER — with "by rezzaid" branding
 # ---------------------------------------------------------------------------
 _banner() {
-  echo -e "\n${BOLD}${CYAN}"
-  echo "  ╔══════════════════════════════════════════════════╗"
-  echo "  ║                                                  ║"
-  echo "  ║        AidiPanel Installer v${PANEL_VERSION}     ║"
-  echo "  ║     Nginx + FastCGI Cache + PHP-FPM + Redis      ║"
-  echo "  ║                      by rezzaid                  ║"
-  echo "  ║                                                  ║"
-  echo "  ╚══════════════════════════════════════════════════╝"
-  echo -e "${RESET}\n"
-  log "Starting ${PANEL_NAME} v${PANEL_VERSION} installation"
-  log "DB engine    : ${DB_ENGINE_LABELS[$DB_ENGINE]}"
-  log "Panel port   : ${PANEL_PORT}"
-  log "Redis        : ${INSTALL_REDIS}"
-  log "Log file     : ${PANEL_LOG}"
+  printf '%s\n' "AidiPanel Provisioning Console"
+  ui_rule
+  printf '%s\n\n' "Fast LEMP Server Management Panel"
+  ui_kv "Version"    "v${PANEL_VERSION}"
+  ui_kv "Stack"      "Nginx · PHP-FPM · ${DB_ENGINE_LABELS[$DB_ENGINE]%% *} · Redis · SSL"
+  ui_kv "Mode"       "Fresh VPS provisioning"
+  ui_kv "By"         "rezzaid"
+  printf '\n'
+  ui_kv "Detail log" "${PANEL_LOG}"
+  ui_kv "Verbose"    "bash install.sh --verbose"
+  _logf "=== Provisioning Console start: ${PANEL_NAME} v${PANEL_VERSION} (port ${PANEL_PORT}, db ${DB_ENGINE}) ==="
 }
 
 # ---------------------------------------------------------------------------
@@ -339,6 +472,7 @@ _create_swap() {
   swap_total=$(free -m | awk '/^Swap:/ {print $2}')
 
   if (( swap_total >= 512 )); then
+    SWAP_NOTE="present: ${swap_total} MB"
     ok "Swap already exists: ${swap_total}MB — skipping"
     return 0
   fi
@@ -382,6 +516,7 @@ SYSCTL
 
   local actual_swap
   actual_swap=$(free -m | awk '/^Swap:/ {print $2}')
+  SWAP_NOTE="created: ${actual_swap} MB"
   ok "Swap created: ${actual_swap}MB (swappiness=10)"
 }
 
@@ -651,6 +786,7 @@ _configure_php_fpm() {
   local max_ch=10 start_sv=2 min_sp=2 max_sp=4
   if (( mem_mb >= 2048 )); then max_ch=20; start_sv=4; min_sp=2; max_sp=6; fi
   if (( mem_mb >= 4096 )); then max_ch=40; start_sv=6; min_sp=4; max_sp=10; fi
+  PHP_MAXCHILDREN="$max_ch"
 
   sed -i \
     -e "s|^listen = .*|listen = /run/php/php${ver}-fpm.sock|" \
@@ -696,7 +832,9 @@ PHPINI
 _install_all_php_versions() {
   for ver in "${PHP_VERSIONS[@]}"; do
     _install_php_version "$ver"
+    ui_ok "PHP ${ver} installed"
     _configure_php_fpm "$ver"
+    ui_ok "PHP ${ver}-FPM tuned: max_children=${PHP_MAXCHILDREN:-?}"
   done
   ok "All PHP versions installed: ${PHP_VERSIONS[*]}"
 }
@@ -906,14 +1044,16 @@ _configure_firewall() {
   log "Configuring UFW firewall..."
   [[ "$DRY_RUN" == "true" ]] && return 0
 
-  ufw --force reset > /dev/null 2>&1 || true
-  ufw default deny incoming
-  ufw default allow outgoing
-  ufw allow ssh          comment 'SSH'
-  ufw allow 80/tcp       comment 'HTTP'
-  ufw allow 443/tcp      comment 'HTTPS'
-  ufw allow "${PANEL_PORT}/tcp" comment 'AidiPanel'
-  ufw --force enable
+  run_quiet "Security" "configure UFW rules" bash -c "
+    set -e
+    ufw --force reset >/dev/null 2>&1 || true
+    ufw default deny incoming
+    ufw default allow outgoing
+    ufw allow ssh comment 'SSH'
+    ufw allow 80/tcp comment 'HTTP'
+    ufw allow 443/tcp comment 'HTTPS'
+    ufw allow ${PANEL_PORT}/tcp comment 'AidiPanel'
+    ufw --force enable"
   ok "UFW enabled — allowed ports: 22, 80, 443, ${PANEL_PORT}"
 }
 
@@ -1535,42 +1675,19 @@ _health_check() {
   [[ "$DRY_RUN" == "true" ]] && return 0
 
   local failed=0
+  _matrix()  { printf '%-22s %s\n' "$1" "$2"; }
+  _svc_row() { if systemctl is-active --quiet "$1"; then _matrix "$1" "running"; else _matrix "$1" "NOT running"; failed=$((failed+1)); fi; }
 
-  _svc_check() {
-    if systemctl is-active --quiet "$1"; then
-      ok "  ✓ $1 is running"
-    else
-      warn "  ✗ $1 is NOT running"
-      (( failed++ )) || true
-    fi
-  }
-
-  _svc_check nginx
-  for ver in "${PHP_VERSIONS[@]}"; do
-    _svc_check "php${ver}-fpm"
-  done
-  _svc_check aidipanel-fpm
-  _svc_check "$(_db_service_name)"
-  [[ "$INSTALL_REDIS" == "true" ]] && _svc_check redis-server
-
-  if [[ -d "$NGINX_CACHE_DIR" ]] && [[ -w "$NGINX_CACHE_DIR" || "$(stat -c %U "$NGINX_CACHE_DIR")" == "www-data" ]]; then
-    ok "  ✓ FastCGI cache dir OK: ${NGINX_CACHE_DIR}"
-  else
-    warn "  ✗ FastCGI cache dir may have permission issues"
-    (( failed++ )) || true
-  fi
-
-  if curl -ksfS --max-time 5 "https://127.0.0.1:${PANEL_PORT}/" -o /dev/null; then
-    ok "  ✓ AidiPanel responding on port ${PANEL_PORT}"
-  else
-    warn "  ✗ AidiPanel not responding on port ${PANEL_PORT} yet"
-  fi
-
-  if (( failed > 0 )); then
-    warn "Health check: ${failed} issue(s) — review log: ${PANEL_LOG}"
-  else
-    ok "Health check: ALL PASSED"
-  fi
+  ui_section "Verification Matrix"
+  _svc_row nginx
+  for ver in "${PHP_VERSIONS[@]}"; do _svc_row "php${ver}-fpm"; done
+  _svc_row aidipanel-fpm
+  _svc_row "$(_db_service_name)"
+  [[ "$INSTALL_REDIS" == "true" ]] && _svc_row redis-server
+  if [[ -d "$NGINX_CACHE_DIR" ]]; then _matrix "FastCGI cache" "ready"; else _matrix "FastCGI cache" "missing"; failed=$((failed+1)); fi
+  if curl -ksfS --max-time 5 "https://127.0.0.1:${PANEL_PORT}/" -o /dev/null; then _matrix "AidiPanel port ${PANEL_PORT}" "responding"; else _matrix "AidiPanel port ${PANEL_PORT}" "no response"; fi
+  printf '\n'
+  if (( failed > 0 )); then ui_kv "Result" "${failed} issue(s) — see ${PANEL_LOG}"; else ui_kv "Result" "all checks passed"; fi
 }
 
 # ---------------------------------------------------------------------------
@@ -1595,38 +1712,57 @@ _print_summary() {
 
   [[ "$DRY_RUN" == "true" ]] && return 0
 
-  echo -e "\n${BOLD}${GREEN}"
-  echo "  ╔════════════════════════════════════════════════════════╗"
-  echo "  ║     AidiPanel v${PANEL_VERSION} — Installation Complete!          ║"
-  echo "  ║                        by rezzaid                     ║"
-  echo "  ╚════════════════════════════════════════════════════════╝"
-  echo -e "${RESET}"
-  echo -e "  ${BOLD}Panel URL       :${RESET} https://${server_ip}:${PANEL_PORT}"
-  echo -e "  ${BOLD}Panel Login     :${RESET} admin"
+  local dur; dur=$(printf '%02dm %02ds' $(( SECONDS/60 )) $(( SECONDS%60 )))
+
+  ui_section "Transformation Summary"
+  printf '%-30s %s\n' "Before" "After"
+  printf '%-30s %s %s\n' "Plain Ubuntu VPS" "$(_u '→' '->')" "Managed LEMP server"
+  printf '%-30s %s %s\n' "No web engine"     "$(_u '→' '->')" "Nginx ${NGINX_VERSION:-installed}"
+  printf '%-30s %s %s\n' "No PHP runtime"    "$(_u '→' '->')" "PHP-FPM $(_php_list)"
+  printf '%-30s %s %s\n' "No database layer" "$(_u '→' '->')" "${DB_ENGINE_LABELS[$DB_ENGINE]%% (*}"
+  printf '%-30s %s %s\n' "No cache layer"    "$(_u '→' '->')" "Redis + FastCGI Cache"
+  printf '%-30s %s %s\n' "No control panel"  "$(_u '→' '->')" "AidiPanel on port ${PANEL_PORT}"
+
+  ui_section "Server Passport"
+  ui_kv "Panel"       "AidiPanel v${PANEL_VERSION}"
+  ui_kv "URL"         "https://${server_ip}:${PANEL_PORT}"
+  ui_kv "Login"       "admin"
+  ui_kv "Credentials" "${PANEL_DIR}/credentials.conf"
+  printf '\n'
+  ui_kv "Web Engine"  "Nginx ${NGINX_VERSION:-installed}"
+  ui_kv "Runtime"     "PHP-FPM $(_php_list)"
+  ui_kv "Database"    "${DB_ENGINE_LABELS[$DB_ENGINE]}"
+  ui_kv "Cache"       "Redis + FastCGI Cache"
+  ui_kv "Firewall"    "UFW enabled"
+  ui_kv "Protection"  "Fail2ban enabled"
+  printf '\n'
+  printf '%s\n' "Panel runtime aidipanel-fpm · www-data (transitional)"
+  ui_kv "Site Model"  "/home/<site-user>/htdocs/<domain>"
+  ui_kv "Cache Dir"   "${NGINX_CACHE_DIR}"
+  ui_kv "Install Log" "${PANEL_LOG}"
+  ui_kv "Duration"    "${dur}"
+
+  ui_section "Important"
+  ui_note "The panel currently uses a self-signed SSL certificate."
+  ui_note "Install trusted SSL later from the SSL/TLS tab or CLI."
+  printf '\n'
+  ui_note "Credentials are stored in:"
+  ui_note "  ${PANEL_DIR}/credentials.conf"
+  printf '\n'
+  ui_note "Keep this file secure."
   if [[ -n "$PANEL_ADMIN_PASS" ]]; then
-    echo -e "  ${BOLD}${RED}Panel Password  :${RESET} ${BOLD}${PANEL_ADMIN_PASS}${RESET}  ← SAVE THIS NOW"
-  else
-    echo -e "  ${BOLD}Panel Password  :${RESET} (see credentials.conf — panel app not deployed)"
+    printf '\n'
+    ui_warn "SAVE THIS — panel admin password (shown only once):"
+    printf '\n      %s%s%s\n' "${C_FAIL:-}${C_KEY:-}" "${PANEL_ADMIN_PASS}" "${C_RESET:-}"
   fi
-  echo -e "  ${BOLD}Database        :${RESET} ${DB_ENGINE_LABELS[$DB_ENGINE]}"
-  echo -e "  ${BOLD}Credentials     :${RESET} ${PANEL_DIR}/credentials.conf"
-  echo -e "  ${BOLD}Config dir      :${RESET} ${PANEL_DIR}/config/"
-  echo -e "  ${BOLD}Sites dir       :${RESET} ${SITES_DIR}/"
-  echo -e "  ${BOLD}Cache dir       :${RESET} ${NGINX_CACHE_DIR}"
-  echo -e "  ${BOLD}Log             :${RESET} ${PANEL_LOG}"
-  echo -e "  ${BOLD}PHP versions    :${RESET} ${PHP_VERSIONS[*]}"
-  echo -e "  ${BOLD}Redis           :${RESET} ${INSTALL_REDIS}"
-  echo -e "  ${BOLD}Duration        :${RESET} ${SECONDS}s"
-  echo ""
-  echo -e "  ${YELLOW}NOTE: Panel uses a self-signed SSL certificate.${RESET}"
-  echo -e "  ${YELLOW}      Run: aidipanel ssl:install --domain your-domain.com${RESET}"
-  echo ""
-  echo -e "  ${CYAN}Quick commands:${RESET}"
-  echo -e "  ${CYAN}  aidipanel site:add --domain example.com --type wordpress --php 8.3${RESET}"
-  echo -e "  ${CYAN}  aidipanel system:info${RESET}"
-  echo ""
-  echo -e "  ${BOLD}${RED}⚠ Save the panel password above — it will not be shown again!${RESET}"
-  echo ""
+
+  ui_section "Next Steps"
+  printf '1. %s\n' "Open the Panel URL"
+  printf '2. %s\n' "Save/change the admin password"
+  printf '3. %s\n' "Add your first isolated site"
+  printf '4. %s\n' "Point your domain DNS to this server"
+  printf '5. %s\n' "Install trusted SSL for the panel"
+  printf '\n'
 
   # Also save admin pass to credentials file
   if [[ -n "$PANEL_ADMIN_PASS" ]]; then
@@ -1664,6 +1800,7 @@ main() {
   chmod 640 "$PANEL_LOG"
 
   _parse_args "$@"
+  _color_init
   _banner
   _check_root
   _check_lock
@@ -1673,64 +1810,79 @@ main() {
   _check_internet
   _check_port_free
   _check_hostname_resolves
+  print_server_profile
+  print_readiness_check
+  print_provisioning_plan
 
-  log "=== Phase 1: Base system ==="
-  _apt_update
-  _install_base_packages
+  local t
 
-  log "=== Phase 1b: Swap ==="
-  _create_swap
+  ui_section "Foundation Layer"; ui_note "Preparing the base server environment"; printf '\n'
+  t=$SECONDS
+  _apt_update;            ui_ok "Package index updated"
+  _install_base_packages; ui_ok "Base tools installed"
+  _create_swap;           ui_ok "Swap ${SWAP_NOTE:-ready}"
+  ui_ok "Foundation ready"
+  ui_elapsed "$t"
 
-  log "=== Phase 2: Nginx + FastCGI Cache ==="
-  _add_nginx_repo
+  ui_section "Web Engine Layer"; ui_note "Building the Nginx + FastCGI Cache layer"; printf '\n'
+  t=$SECONDS
+  _add_nginx_repo;                ui_ok "Official Nginx repository added"
   _install_nginx
-  _configure_nginx_main
-  _create_fastcgi_cache_dir
-  _create_fastcgi_params_snippet
+  NGINX_VERSION="$(nginx -v 2>&1 | grep -oP 'nginx/\K[0-9.]+' || echo '?')"
+  ui_ok "Nginx installed: ${NGINX_VERSION}"
+  _configure_nginx_main;          ui_ok "Optimized nginx.conf written"
+  _create_fastcgi_cache_dir;      ui_ok "FastCGI cache directory created"
+  _create_fastcgi_params_snippet; ui_ok "FastCGI cache snippet installed"
+  ui_elapsed "$t"
 
-  log "=== Phase 3: PHP-FPM (multi-version) ==="
+  ui_section "Runtime Layer"; ui_note "Installing isolated PHP-FPM runtime versions"; printf '\n'
+  printf '%s\n' "Runtime bundle"
+  ui_note "PHP-FPM · CLI · MySQL · Redis · SQLite · XML · mbstring"
+  ui_note "curl · zip · GD · intl · bcmath · SOAP · imagick · OPcache"
+  printf '\n'
+  t=$SECONDS
   _add_php_repo
   _install_all_php_versions
+  ui_elapsed "$t"
+  print_blueprint ready pending pending
 
-  log "=== Phase 4: Database (${DB_ENGINE_LABELS[$DB_ENGINE]}) ==="
+  ui_section "Data Layer"; ui_note "Installing database and cache services"; printf '\n'
+  t=$SECONDS
   _add_mysql_repo
   _add_mariadb_repo
-  _install_database
-  _configure_database
+  ui_ok "${DB_ENGINE_LABELS[$DB_ENGINE]%% (*} repository added"
+  _install_database;   ui_ok "${DB_ENGINE_LABELS[$DB_ENGINE]%% (*} installed"
+  _configure_database; ui_ok "Database secured"; ui_ok "AidiPanel database created"
+  _install_redis;      ui_ok "Redis installed"
+  _configure_redis;    ui_ok "Redis configured: 128mb, allkeys-lru, persistence off"
+  ui_elapsed "$t"
 
-  log "=== Phase 5: Redis ==="
-  _install_redis
-  _configure_redis
+  ui_section "Security Layer"; ui_note "Applying base protection"; printf '\n'
+  t=$SECONDS
+  _configure_firewall; ui_ok "UFW enabled: 22, 80, 443, ${PANEL_PORT}"
+  _configure_sudoers;  ui_ok "AidiPanel sudo wrapper configured"
+  _configure_fail2ban; ui_ok "Fail2ban configured"
+  _install_certbot;    ui_ok "Certbot installed"
+  printf '\n%s\n' "Security note"
+  ui_note "The web panel can only run approved privileged actions"
+  ui_note "through the AidiPanel wrapper."
+  ui_elapsed "$t"
 
-  log "=== Phase 6: Security ==="
-  _configure_firewall
-  _configure_sudoers
-  _configure_fail2ban
-  _install_certbot
-
-  log "=== Phase 7: ProFTPD ==="
-  _install_proftpd
-
-  log "=== Phase 8: Panel Scaffold ==="
-  _create_panel_user
-  _create_panel_scaffold
-  _setup_panel_fpm
-  _configure_panel_vhost
-
-  log "=== Phase 9: CLI Tool ==="
-  _install_cli
-
-  log "=== Phase 10: Deploy Panel App ==="
-  _deploy_panel_app
-
-  log "=== Phase 11: Cron & Services ==="
-  _setup_cron
+  ui_section "Control Plane"; ui_note "Deploying AidiPanel web UI and CLI"; printf '\n'
+  t=$SECONDS
+  _install_proftpd;       ui_ok "SFTP (ProFTPD) ready"
+  _create_panel_user;     ui_ok "System user created: aidipanel"
+  _create_panel_scaffold; ui_ok "Panel directory prepared: ${PANEL_DIR}"
+  _setup_panel_fpm;       ui_ok "Panel PHP-FPM service: aidipanel-fpm (www-data, transitional)"
+  _configure_panel_vhost; ui_ok "Self-signed panel SSL generated"
+  _install_cli;           ui_ok "CLI installed: /usr/local/bin/aidipanel"
+  _deploy_panel_app;      ui_ok "Web UI deployed"
+  _setup_cron;            ui_ok "Maintenance cron configured"
   _test_and_start_services
+  ui_elapsed "$t"
 
-  log "=== Phase 12: Health Check ==="
   _health_check
 
-  log "=== Phase 13: Cleanup ==="
   _cleanup_system
   _cleanup_installer
 
