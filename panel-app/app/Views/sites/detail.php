@@ -225,6 +225,19 @@ if ($opcacheEnabled && isset($opcache['opcache_statistics'])) {
             <p class="eyebrow mb-1"><?= e(t('site.detail.webroot')) ?></p>
             <p class="text-sm text-zinc-800 mono truncate"><?= e($site['webroot'] ?? '—') ?></p>
           </div>
+          <?php if (!empty($site['site_user'])): ?>
+          <div>
+            <p class="eyebrow mb-1"><?= e(t('site.detail.site_user')) ?></p>
+            <p class="text-sm text-zinc-800 mono"><?= e($site['site_user']) ?>
+              <span class="text-zinc-400 text-xs">· <?= e(t('site.detail.no_login')) ?></span></p>
+          </div>
+          <?php if ($phpVer && $type !== 'static' && $type !== 'proxy'): ?>
+          <div>
+            <p class="eyebrow mb-1"><?= e(t('site.detail.fpm_socket')) ?></p>
+            <p class="text-sm text-zinc-800 mono truncate" title="/run/php/php<?= e($phpVer) ?>-fpm-<?= e($site['site_user']) ?>.sock">pool <?= e($site['site_user']) ?> · /run/php/php<?= e($phpVer) ?>-fpm-<?= e($site['site_user']) ?>.sock</p>
+          </div>
+          <?php endif; ?>
+          <?php endif; ?>
         </div>
       </div>
 

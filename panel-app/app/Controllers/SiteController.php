@@ -35,6 +35,7 @@ class SiteController extends BaseController
         $type      = (string) $this->request->post('type', 'php');
         $phpVer    = (string) $this->request->post('php_version', '8.3');
         $proxyPass = (string) $this->request->post('proxy_pass', 'http://127.0.0.1:3000');
+        $siteUser  = strtolower(trim((string) $this->request->post('site_user', '')));
 
         if (!is_valid_domain($domain)) {
             $this->error('Invalid domain name.');
@@ -47,6 +48,9 @@ class SiteController extends BaseController
         }
         if ($type === 'proxy' && !is_valid_proxy_url($proxyPass)) {
             $this->error('Invalid reverse proxy URL.');
+        }
+        if ($siteUser !== '' && !preg_match('/^[a-z][a-z0-9_-]{0,31}$/', $siteUser)) {
+            $this->error('Invalid site user: lowercase, start with a letter, [a-z0-9_-], max 32 chars.');
         }
 
         // Cek di DB DAN filesystem — keduanya harus tidak ada
@@ -65,6 +69,10 @@ class SiteController extends BaseController
 
         // Build CLI args
         $args = ['--domain', $domain, '--type', $type, '--php', $phpVer];
+        if ($siteUser !== '') {           // blank => CLI derives it from the domain
+            $args[] = '--user';
+            $args[] = $siteUser;
+        }
         if ($type === 'proxy') {
             $args[] = '--proxy-pass';
             $args[] = $proxyPass;
@@ -111,7 +119,7 @@ class SiteController extends BaseController
             ["%{$domain}%"]
         );
 
-        $diskSize  = $this->getSiteDiskUsage($domain);
+        $diskSize  = $this->getSiteDiskUsage((string) ($site['webroot'] ?? ''));
         $opcache   = $activeTab === 'performance' ? $this->getOpcacheStatus() : [];
         $redisInfo = $activeTab === 'performance' ? $this->getRedisInfo()    : [];
 
@@ -254,11 +262,10 @@ class SiteController extends BaseController
      */
     private function addFormConfig(string $slug): ?array
     {
-        // Shared "Soon" Site User block (no per-site Linux users yet).
-        $userBlock = [
-            ['key' => 'site_user',      'label' => 'site.add.f.site_user',      'input' => 'text',     'required' => true, 'enabled' => false, 'value' => 'aidi-example'],
-            ['key' => 'site_user_pass', 'label' => 'site.add.f.site_user_pass', 'input' => 'password', 'required' => true, 'enabled' => false, 'value' => 'K7x@2pLm9!qF', 'generate' => true],
-        ];
+        // Site User: active, optional. Blank => the CLI derives it from the domain.
+        $userField = ['key' => 'site_user', 'label' => 'site.add.f.site_user', 'input' => 'text',
+                      'required' => false, 'enabled' => true, 'placeholder' => 'auto from domain',
+                      'note' => 'site.add.f.site_user_note'];
         $phpField = ['key' => 'php_version', 'label' => 'site.add.f.php', 'input' => 'select', 'required' => false, 'enabled' => true, 'options' => ['8.3', '8.2', '8.1']];
 
         $forms = [
@@ -268,7 +275,7 @@ class SiteController extends BaseController
                 'fields' => [
                     ['key' => 'domain',      'label' => 'site.add.f.domain',      'input' => 'text',     'required' => true,  'enabled' => true,  'placeholder' => 'example.com'],
                     ['key' => 'site_title',  'label' => 'site.add.f.site_title',  'input' => 'text',     'required' => true,  'enabled' => false, 'placeholder' => 'My WordPress Site'],
-                    $userBlock[0], $userBlock[1],
+                    $userField,
                     ['key' => 'admin_user',  'label' => 'site.add.f.admin_user',  'input' => 'text',     'required' => true,  'enabled' => false, 'placeholder' => 'admin'],
                     ['key' => 'admin_pass',  'label' => 'site.add.f.admin_pass',  'input' => 'password', 'required' => true,  'enabled' => false, 'value' => 'W3b#8nRt5!yH'],
                     ['key' => 'admin_email', 'label' => 'site.add.f.admin_email', 'input' => 'text',     'required' => true,  'enabled' => false, 'placeholder' => 'you@example.com'],
@@ -286,7 +293,7 @@ class SiteController extends BaseController
                      'note'   => 'site.add.php.appnote'],
                     ['key' => 'domain', 'label' => 'site.add.f.domain', 'input' => 'text', 'required' => true, 'enabled' => true, 'placeholder' => 'example.com'],
                     $phpField,
-                    $userBlock[0], $userBlock[1],
+                    $userField,
                 ],
             ],
             'static' => [
@@ -294,7 +301,7 @@ class SiteController extends BaseController
                 'title' => 'site.add.static.title', 'desc' => 'site.add.static.desc', 'creatable' => true,
                 'fields' => [
                     ['key' => 'domain', 'label' => 'site.add.f.domain', 'input' => 'text', 'required' => true, 'enabled' => true, 'placeholder' => 'example.com'],
-                    $userBlock[0], $userBlock[1],
+                    $userField,
                 ],
             ],
             'reverse-proxy' => [
@@ -303,7 +310,7 @@ class SiteController extends BaseController
                 'fields' => [
                     ['key' => 'domain',     'label' => 'site.add.f.domain',    'input' => 'text', 'required' => true, 'enabled' => true, 'placeholder' => 'example.com'],
                     ['key' => 'proxy_pass', 'label' => 'site.add.f.proxy_url', 'input' => 'text', 'required' => true, 'enabled' => true, 'mono' => true, 'placeholder' => 'http://127.0.0.1:3000'],
-                    $userBlock[0], $userBlock[1],
+                    $userField,
                 ],
             ],
             'nodejs' => [
@@ -314,7 +321,7 @@ class SiteController extends BaseController
                     ['key' => 'domain',       'label' => 'site.add.f.domain',       'input' => 'text',   'required' => true,  'enabled' => false, 'placeholder' => 'example.com'],
                     ['key' => 'node_version', 'label' => 'site.add.f.node_version', 'input' => 'select', 'required' => false, 'enabled' => false, 'options' => ['Node 22 LTS', 'Node 20 LTS', 'Node 18 LTS', 'Node 16 LTS']],
                     ['key' => 'app_port',     'label' => 'site.add.f.app_port',     'input' => 'text',   'required' => true,  'enabled' => false, 'placeholder' => '3000'],
-                    $userBlock[0], $userBlock[1],
+                    $userField,
                 ],
             ],
             'python' => [
@@ -325,7 +332,7 @@ class SiteController extends BaseController
                     ['key' => 'domain',         'label' => 'site.add.f.domain',         'input' => 'text',   'required' => true,  'enabled' => false, 'placeholder' => 'example.com'],
                     ['key' => 'python_version', 'label' => 'site.add.f.python_version', 'input' => 'select', 'required' => false, 'enabled' => false, 'options' => ['Python 3.12'], 'note' => 'site.add.python.docs'],
                     ['key' => 'app_port',       'label' => 'site.add.f.app_port',       'input' => 'text',   'required' => true,  'enabled' => false, 'value' => '8090'],
-                    $userBlock[0], $userBlock[1],
+                    $userField,
                 ],
             ],
         ];
@@ -413,10 +420,9 @@ class SiteController extends BaseController
         return false;
     }
 
-    private function getSiteDiskUsage(string $domain): string
+    private function getSiteDiskUsage(string $path): string
     {
-        $path = "/var/www/{$domain}";
-        if (!is_dir($path)) return '—';
+        if ($path === '' || !is_dir($path)) return '—';
         $raw = trim((string) @shell_exec('du -sh ' . escapeshellarg($path) . ' 2>/dev/null'));
         return $raw !== '' ? (explode("\t", $raw)[0] ?? '—') : '—';
     }
@@ -500,20 +506,29 @@ class SiteController extends BaseController
      */
     private function syncOneSite(string $domain, string $type, string $phpVer): void
     {
-        $webroot = "/var/www/{$domain}/htdocs";
-        if ($type === 'laravel') {
-            $webroot .= '/public';
-        }
-
-        $hasLe  = file_exists("/etc/letsencrypt/live/{$domain}/fullchain.pem");
-        $ssl    = $hasLe ? 'letsencrypt' : 'self-signed';
         $confFile = "/etc/nginx/sites-available/{$domain}.conf";
         $conf     = is_file($confFile) ? (string) file_get_contents($confFile) : '';
-        $cache    = preg_match('/^\s*fastcgi_cache\s+aidipanel_fcgi\b/m', $conf) ? 1 : 0;
+
+        // Source of truth = the vhost the CLI wrote. Read the active web root, and
+        // derive the site_user when it lives under /home/<user>/.
+        $webroot  = "/var/www/{$domain}/htdocs";                 // legacy fallback
+        if ($type === 'laravel') { $webroot .= '/public'; }
+        $siteUser = null;
+        if (preg_match('~^\s*root\s+([^;]+);~m', $conf, $m)) {
+            $webroot = trim($m[1]);
+            if (preg_match('~^/home/([a-z][a-z0-9_-]*)/~', $webroot, $mu)) {
+                $siteUser = $mu[1];
+            }
+        }
+
+        $hasLe = file_exists("/etc/letsencrypt/live/{$domain}/fullchain.pem");
+        $ssl   = $hasLe ? 'letsencrypt' : 'self-signed';
+        $cache = preg_match('/^\s*fastcgi_cache\s+aidipanel_fcgi\b/m', $conf) ? 1 : 0;
 
         $this->db->run(
-            'INSERT OR IGNORE INTO sites (domain, type, php_version, webroot, ssl_type, cache_enabled) VALUES (?, ?, ?, ?, ?, ?)',
-            [$domain, $type, $phpVer, $webroot, $ssl, $cache]
+            'INSERT OR IGNORE INTO sites (domain, type, php_version, webroot, site_user, ssl_type, cache_enabled)
+             VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [$domain, $type, $phpVer, $webroot, $siteUser, $ssl, $cache]
         );
     }
 }

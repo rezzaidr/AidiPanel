@@ -108,3 +108,21 @@ $renderField = function (array $f): void {
     </form>
   </div>
 </div>
+
+<script>
+// Prefill the Site User input from the domain (first label, sanitised) until the
+// user edits it manually. Mirrors the CLI's _suggest_site_user.
+(function () {
+  var d = document.querySelector('input[name="domain"]');
+  var u = document.querySelector('input[name="site_user"]');
+  if (!d || !u) return;
+  var edited = false;
+  u.addEventListener('input', function () { edited = true; });
+  d.addEventListener('input', function () {
+    if (edited) return;
+    var base = (d.value.split('.')[0] || '').toLowerCase().replace(/[^a-z0-9-]/g, '').replace(/^-+/, '');
+    if (base && !/^[a-z]/.test(base)) base = 'site' + base;
+    u.value = base.slice(0, 32);
+  });
+})();
+</script>

@@ -61,6 +61,7 @@ class DB
                 type          TEXT    NOT NULL DEFAULT 'php',
                 php_version   TEXT    NOT NULL DEFAULT '8.3',
                 webroot       TEXT    NOT NULL,
+                site_user     TEXT,
                 ssl_type      TEXT    NOT NULL DEFAULT 'self-signed',
                 cache_enabled INTEGER NOT NULL DEFAULT 0,
                 created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
@@ -95,6 +96,9 @@ class DB
             );
         ");
 
+        // Additive migrations (CREATE TABLE IF NOT EXISTS won't alter an existing table).
+        $this->addColumnIfMissing('sites', 'site_user', 'TEXT');
+
         // Seed admin HANYA jika belum ada user sama sekali
         // Password hash sudah ditulis oleh deploy-panel.sh via CLI —
         // TIDAK dibaca dari file saat runtime untuk menghindari permission issues
@@ -115,6 +119,15 @@ class DB
             $this->pdo->prepare(
                 'INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)'
             )->execute(['admin', $hash, 'admin']);
+        }
+    }
+
+    /** Add a column to an existing table only if it's missing (SQLite-safe). */
+    private function addColumnIfMissing(string $table, string $column, string $type): void
+    {
+        $cols = $this->pdo->query("PRAGMA table_info({$table})")->fetchAll(\PDO::FETCH_COLUMN, 1);
+        if (!in_array($column, $cols, true)) {
+            $this->pdo->exec("ALTER TABLE {$table} ADD COLUMN {$column} {$type}");
         }
     }
 
