@@ -1103,6 +1103,81 @@ VHOST_WP
 }
 
 # ---------------------------------------------------------------------------
+# 15b. DEDICATED PANEL PHP-FPM  (isolates the panel from per-site reloads)
+# ---------------------------------------------------------------------------
+# The panel must keep answering while sites are created/deleted. site:add /
+# site:delete run `systemctl reload php<ver>-fpm`; if the panel shared that
+# service, the reload would cycle its worker mid-request -> 502. A dedicated
+# service (own master + socket) is never touched by those reloads.
+# Runtime user = www-data (TRANSITIONAL; a dedicated aidipanel runtime user is a
+# later hardening slice — see the installer-runtime-maturity spec).
+_setup_panel_fpm() {
+  log "Setting up dedicated panel PHP-FPM service (aidipanel-fpm)..."
+  [[ "$DRY_RUN" == "true" ]] && { warn "[dry-run] skipping aidipanel-fpm setup"; return 0; }
+
+  local conf_dir="/etc/aidipanel/php-fpm"
+  local conf="${conf_dir}/php-fpm.conf"
+  local fpm_bin="/usr/sbin/php-fpm${PHP_DEFAULT_VERSION}"
+  [[ -x "$fpm_bin" ]] || die "PHP-FPM binary not found: ${fpm_bin} (is php${PHP_DEFAULT_VERSION}-fpm installed?)"
+
+  mkdir -p "$conf_dir"
+
+  # Quoted heredoc: nothing here should be expanded by the installer shell.
+  cat > "$conf" <<'PANELFPM'
+; AidiPanel dedicated PHP-FPM — serves ONLY the panel UI.
+; Isolated from php<ver>-fpm so site:add/site:delete reloads never cycle the
+; panel worker (the create/delete 502 fix). Runtime user = www-data
+; (TRANSITIONAL — a dedicated aidipanel runtime user is a later hardening slice).
+[global]
+error_log = /var/log/aidipanel-fpm.log
+log_level = warning
+daemonize = no
+
+[aidipanel]
+user = www-data
+group = www-data
+listen = /run/aidipanel-fpm.sock
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0660
+pm = ondemand
+pm.max_children = 8
+pm.process_idle_timeout = 10s
+pm.max_requests = 200
+php_admin_value[error_log] = /var/log/aidipanel-fpm.log
+php_admin_flag[log_errors] = on
+PANELFPM
+
+  # Unquoted heredoc: ${fpm_bin}/${conf} expand; \$MAINPID is a systemd runtime
+  # variable and MUST stay literal (escaped) so it is not eaten by the shell.
+  cat > /etc/systemd/system/aidipanel-fpm.service <<UNIT
+[Unit]
+Description=AidiPanel dedicated PHP-FPM (panel UI runtime, isolated from site pools)
+After=network.target
+
+[Service]
+Type=notify
+ExecStart=${fpm_bin} --nodaemonize --fpm-config ${conf}
+ExecReload=/bin/kill -USR2 \$MAINPID
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+  # Fail loud on a bad global/pool config BEFORE trying to start the service.
+  "$fpm_bin" --fpm-config "$conf" -t >> "$PANEL_LOG" 2>&1 \
+    || die "aidipanel-fpm config test failed — check: ${PANEL_LOG}"
+
+  systemctl daemon-reload >> "$PANEL_LOG" 2>&1
+  systemctl enable --now aidipanel-fpm >> "$PANEL_LOG" 2>&1 \
+    || die "Could not start aidipanel-fpm — check: ${PANEL_LOG} and 'journalctl -u aidipanel-fpm'"
+
+  ok "Dedicated panel PHP-FPM active: aidipanel-fpm → /run/aidipanel-fpm.sock (www-data, transitional)"
+}
+
+# ---------------------------------------------------------------------------
 # 16. PANEL NGINX VHOST
 # ---------------------------------------------------------------------------
 _configure_panel_vhost() {
@@ -1149,7 +1224,7 @@ server {
 
     location ~ \.php$ {
         try_files \$uri =404;
-        fastcgi_pass unix:/run/php/php${PHP_DEFAULT_VERSION}-fpm.sock;
+        fastcgi_pass unix:/run/aidipanel-fpm.sock;
         fastcgi_index index.php;
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
         include fastcgi_params;
@@ -1474,6 +1549,7 @@ _health_check() {
   for ver in "${PHP_VERSIONS[@]}"; do
     _svc_check "php${ver}-fpm"
   done
+  _svc_check aidipanel-fpm
   _svc_check "$(_db_service_name)"
   [[ "$INSTALL_REDIS" == "true" ]] && _svc_check redis-server
 
@@ -1638,6 +1714,7 @@ main() {
   log "=== Phase 8: Panel Scaffold ==="
   _create_panel_user
   _create_panel_scaffold
+  _setup_panel_fpm
   _configure_panel_vhost
 
   log "=== Phase 9: CLI Tool ==="
