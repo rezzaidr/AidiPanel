@@ -29,3 +29,6 @@ Thumbs.db
 *.tar.gz
 *.zip
 dist/
+
+# local session/resume notes — keep out of the repo
+docs/handoffs/
