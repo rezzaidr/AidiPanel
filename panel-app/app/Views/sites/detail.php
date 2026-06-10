@@ -511,21 +511,51 @@ if ($opcacheEnabled && isset($opcache['opcache_statistics'])) {
     </div>
 
     <!-- Danger zone -->
-    <div class="card border-red-200 overflow-hidden">
+    <?php $siteUser = (string)($site['site_user'] ?? ''); $webRoot = $siteUser !== '' ? "/home/{$siteUser}/htdocs/{$domain}" : ''; ?>
+    <div class="card border-red-200 overflow-hidden" x-data="{ open:false, typed:'' }">
       <div class="card-head bg-red-50/50">
         <h2 class="font-head font-semibold text-sm text-red-700"><?= e(t('site.set.danger_zone')) ?></h2>
       </div>
       <div class="p-5">
         <p class="text-sm text-zinc-600 mb-1 font-medium"><?= e(t('site.set.delete_site')) ?></p>
         <p class="text-xs text-zinc-400 mb-4"><?= e(t('site.set.delete_hint')) ?></p>
-        <form method="POST" action="/sites/<?= e($domain) ?>/delete"
-              onsubmit="return confirm('<?= e(t('site.set.delete_confirm', ['domain' => $domain])) ?>')">
-          <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
-          <button type="submit" class="btn btn-danger">
-            <i class="ti ti-trash text-sm"></i>
-            <?= e(t('site.set.delete_btn', ['domain' => $domain])) ?>
-          </button>
-        </form>
+        <button type="button" @click="open=true; typed=''" class="btn btn-danger">
+          <i class="ti ti-trash text-sm"></i>
+          <?= e(t('site.set.delete_btn', ['domain' => $domain])) ?>
+        </button>
+      </div>
+
+      <!-- Modal: permanent delete (type-the-domain confirm) -->
+      <div x-show="open" x-cloak class="fixed inset-0 z-50">
+        <div class="absolute inset-0 bg-zinc-900/40" @click="open=false"></div>
+        <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl"
+             @keydown.escape.window="open=false">
+          <div class="card-head flex items-center justify-between bg-red-50/50">
+            <h3 class="card-title text-red-700"><i class="ti ti-alert-triangle"></i> <?= e(t('site.set.delete_modal_title', ['domain' => $domain])) ?></h3>
+            <button type="button" @click="open=false" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
+          </div>
+          <div class="p-5 space-y-3">
+            <p class="text-sm text-zinc-600"><?= e(t('site.set.delete_modal_removes')) ?></p>
+            <ul class="text-xs text-zinc-600 space-y-1 mono">
+              <li>• <?= e(t('site.set.delete_li_vhost')) ?></li>
+              <li>• <?= e(t('site.set.delete_li_pool')) ?></li>
+              <li>• <?= e(t('site.set.delete_li_user', ['user' => $siteUser])) ?></li>
+              <?php if ($webRoot !== ''): ?><li>• <?= e(t('site.set.delete_li_webroot', ['path' => $webRoot])) ?></li><?php endif; ?>
+              <?php if ($siteUser !== ''): ?><li>• <?= e(t('site.set.delete_li_home', ['path' => "/home/{$siteUser}"])) ?></li><?php endif; ?>
+            </ul>
+            <label class="lbl"><?= e(t('site.set.delete_modal_type_to_confirm', ['domain' => $domain])) ?></label>
+            <input type="text" x-model="typed" class="inp w-full" autocomplete="off" spellcheck="false" placeholder="<?= e($domain) ?>">
+            <form method="POST" action="/sites/<?= e($domain) ?>/delete" class="flex justify-end gap-2 pt-1">
+              <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+              <button type="button" @click="open=false" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
+              <button type="submit" class="btn btn-danger"
+                      :disabled="typed !== '<?= e($domain) ?>'"
+                      :class="{ 'opacity-50 cursor-not-allowed': typed !== '<?= e($domain) ?>' }">
+                <i class="ti ti-trash text-sm"></i> <?= e(t('site.set.delete_modal_confirm_btn')) ?>
+              </button>
+            </form>
+          </div>
+        </div>
       </div>
     </div>
 

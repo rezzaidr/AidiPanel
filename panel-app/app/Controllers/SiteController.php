@@ -144,7 +144,18 @@ class SiteController extends BaseController
             $this->error("Invalid domain name: {$domain}");
         }
 
-        $result = run_cli('site:delete', ['--domain', $domain, '--force']);
+        // Full purge (CloudPanel-style): the CLI's _site_purge_guard enforces the
+        // .aidipanel-managed marker (root:root, domain+user match) before removing
+        // the Linux user + /home, so a wrong/blank --user can only make it stricter.
+        $row      = $this->db->row('SELECT site_user FROM sites WHERE domain = ?', [$domain]);
+        $siteUser = is_array($row) ? trim((string)($row['site_user'] ?? '')) : '';
+
+        $args = ['--domain', $domain, '--purge', '--yes'];
+        if ($siteUser !== '') {
+            $args[] = '--user';
+            $args[] = $siteUser;
+        }
+        $result = run_cli('site:delete', $args);
         if (!$result['success']) {
             $this->error('Failed to delete site: ' . $result['output']);
         }

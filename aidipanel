@@ -188,6 +188,23 @@ _site_grant_web_access() {
   usermod -aG "$1" www-data >> "$CLI_LOG" 2>&1 || { warn "Could not add www-data to group ${1}"; return 1; }
 }
 
+# Tear down a site user cleanly (symmetric to _ensure_site_user + _site_grant_web_access).
+# _site_grant_web_access adds www-data as a SECONDARY member of the user's group, so a
+# plain `userdel` refuses to remove that primary group ("not removed because it has other
+# members") — leaving an orphan group that makes re-creating the same site user fail with
+# "group X exists". So drop www-data from the group first (userdel then removes the now-
+# empty group), and groupdel mops up any residue. Best-effort: always return 0.
+_remove_site_user() {
+  local user="$1"
+  [[ -n "$user" ]] || return 0
+  if id "$user" &>/dev/null; then
+    gpasswd -d www-data "$user" >> "$CLI_LOG" 2>&1 || true   # undo the usermod -aG web grant
+    userdel --remove "$user"   >> "$CLI_LOG" 2>&1 || true    # user + home
+  fi
+  getent group "$user" >/dev/null 2>&1 && groupdel "$user" >> "$CLI_LOG" 2>&1 || true
+  return 0
+}
+
 # Write + test a per-site pool, then reload that version's service. return 1 on failure.
 _write_fpm_pool() {
   local user="$1" ver="$2"
@@ -448,7 +465,7 @@ _site_add() {
     [[ "$wrote_vhost" == 1 ]] && rm -f "${NGINX_CONF_DIR}/${domain}.conf"
     [[ "$wrote_pool"  == 1 ]] && _remove_fpm_pool "$site_user" "$php_ver"
     if [[ "$DID_CREATE_USER" == 1 ]]; then
-      userdel --remove "$site_user" >> "$CLI_LOG" 2>&1 || true   # removes user AND home first
+      _remove_site_user "$site_user"   # user + home + its (otherwise-orphan) group
     elif [[ "$created_home" == 1 ]]; then
       rm -rf "${HOME_BASE}/${site_user}/htdocs/${domain}"
     fi
@@ -716,7 +733,7 @@ _site_delete() {
   _nginx_test_reload
 
   if [[ "$purge" == "true" && -n "$site_user" ]]; then
-    userdel --remove "$site_user" >> "$CLI_LOG" 2>&1 || true   # user + home in one step
+    _remove_site_user "$site_user"   # user + home + its (otherwise-orphan) group
     ok "Site purged: ${domain} (user ${site_user} + home removed)"
   else
     [[ -n "$site_user" ]] && passwd -l "$site_user" >> "$CLI_LOG" 2>&1 || true
