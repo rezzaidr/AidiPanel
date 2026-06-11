@@ -46,9 +46,8 @@ class SiteController extends BaseController
         if (!in_array($phpVer, php_policy()['available'], true)) {
             $this->error('Invalid PHP version.');
         }
-        if (!is_dir("/etc/php/{$phpVer}/fpm")) {
-            $this->error("PHP {$phpVer} is not installed. Install it in Admin > PHP first.");
-        }
+        // Patch C: a not-installed version is no longer blocked here — the CLI
+        // (site:add) auto-installs it. The wizard confirms with the user first.
         if ($type === 'proxy' && !is_valid_proxy_url($proxyPass)) {
             $this->error('Invalid reverse proxy URL.');
         }
@@ -81,7 +80,21 @@ class SiteController extends BaseController
             $args[] = $proxyPass;
         }
 
+        // Patch C+: when the chosen version isn't installed, the CLI auto-installs
+        // it (~1–2 min). Guard that single long op: keep the request alive past a
+        // tab close so the DB-write below still runs, and take a per-version lock
+        // so two creates on the same uninstalled version can't race apt.
+        $lock = null;
+        if (!php_is_installed($phpVer)) {
+            $guard = php_install_begin($phpVer);
+            if (!$guard['ok']) {
+                $this->error("PHP {$phpVer} installation is already running. Please wait.");
+            }
+            $lock = $guard['handle'];
+        }
+
         $result = run_cli('site:add', $args);
+        php_install_end($lock);
 
         if (!$result['success']) {
             $this->error('Failed to create site: ' . $result['output']);
@@ -176,11 +189,24 @@ class SiteController extends BaseController
         if (!in_array($phpVer, php_policy()['available'], true)) {
             $this->error('Invalid PHP version.');
         }
-        if (!is_dir("/etc/php/{$phpVer}/fpm")) {
-            $this->error("PHP {$phpVer} is not installed. Install it in Admin > PHP first.");
+        // Patch C: the CLI (php:version) auto-installs a missing version; the
+        // per-site switcher confirms with the user before submitting.
+
+        // Patch C+: same guard as add() — keep the request alive through the
+        // DB-write past a tab close, and lock so two switches to the same
+        // uninstalled version don't race apt. Only when an install is needed.
+        $lock = null;
+        if (!php_is_installed($phpVer)) {
+            $guard = php_install_begin($phpVer);
+            if (!$guard['ok']) {
+                $this->error("PHP {$phpVer} installation is already running. Please wait.");
+            }
+            $lock = $guard['handle'];
         }
 
         $result = run_cli('php:version', ['--domain', $domain, '--set', $phpVer]);
+        php_install_end($lock);
+
         if (!$result['success']) {
             $this->error('Failed to change PHP version: ' . $result['output']);
         }

@@ -238,8 +238,24 @@ function php_policy(): array
 }
 
 /**
+ * True if PHP <ver> is genuinely installed.
+ *
+ * Probes the FPM *binary* (/usr/sbin/php-fpm<ver>, shipped by the phpX.Y-fpm
+ * package) — NOT the /etc/php/<ver> directory. `apt purge` removes the binary
+ * but can leave the config dir behind, and aidipanel itself writes files into
+ * that dir (99-aidipanel.ini, pool.d/*.conf), so a dir check reads a purged
+ * version as still installed. This mirrors the CLI's `_php_installed` exactly so
+ * panel-state and CLI-state agree. www-data can stat the world-readable binary
+ * without sudo.
+ */
+function php_is_installed(string $ver): bool
+{
+    return is_file("/usr/sbin/php-fpm{$ver}");
+}
+
+/**
  * Per-version status for the Admin > PHP page and the wizard/switcher.
- * installed = /etc/php/<ver>/fpm exists (Patch A filesystem check).
+ * installed = the php<ver>-fpm binary exists (see php_is_installed()).
  * running   = php<ver>-fpm service is active.
  * Returns an ordered map: ver => ['installed','running','default','label'].
  */
@@ -255,7 +271,7 @@ function php_versions_status(): array
 
     $out = [];
     foreach ($policy['available'] as $ver) {
-        $installed = is_dir("/etc/php/{$ver}/fpm");
+        $installed = php_is_installed($ver);
         $running   = $installed
             && trim((string) shell_exec("systemctl is-active php{$ver}-fpm 2>/dev/null")) === 'active';
         $out[$ver] = [
@@ -314,6 +330,71 @@ function run_cli(string $command, array $args = []): array
         'output'  => $cleanOutput,
         'code'    => $exitCode,
     ];
+}
+
+/**
+ * Guard an on-demand PHP install (site:add / php:version onto a not-yet-installed
+ * version). Two concerns, both scoped to THIS request only:
+ *
+ *  1. Make the request run to completion (incl. the panel DB-write that follows
+ *     the CLI call) even if the user reloads or closes the tab mid-install —
+ *     `ignore_user_abort(true)` + `set_time_limit(0)`. A PHP install is the only
+ *     long, idempotent panel operation, so these relaxations are NOT applied to
+ *     normal requests.
+ *  2. Stop two concurrent installs of the same version racing apt. A per-version
+ *     `flock(LOCK_EX|LOCK_NB)` lets the first request win; a second returns
+ *     busy=true so the caller can say "installation is already running". flock
+ *     auto-releases when the handle closes or the process dies, so a crash never
+ *     leaves a stuck lock.
+ *
+ * Caller pattern:
+ *   if (!php_is_installed($ver)) {                  // only when a real install is needed
+ *       $g = php_install_begin($ver);
+ *       if (!$g['ok']) { $this->error("PHP {$ver} installation is already running. Please wait."); }
+ *       $lock = $g['handle'];
+ *   }
+ *   $result = run_cli(...);                          // triggers the CLI auto-install
+ *   if (isset($lock)) php_install_end($lock);
+ *
+ * Returns ['ok'=>bool, 'handle'=>resource|null, 'busy'=>bool].
+ * ok=false (busy=true) means another install of the same version holds the lock.
+ */
+function php_install_begin(string $ver): array
+{
+    // This request may run for ~1–2 minutes and must finish its DB-write.
+    @ignore_user_abort(true);
+    @set_time_limit(0);
+
+    $dir = STORAGE_ROOT . '/tmp';
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0770, true);
+    }
+    $safe = preg_replace('/[^0-9.]/', '', $ver);     // lock name from digits/dot only
+    $fp   = @fopen($dir . "/php-install-{$safe}.lock", 'c');
+
+    // If the lock file can't be created, degrade gracefully (run without the lock)
+    // rather than block a legitimate install — the abort guard above still applies.
+    if ($fp === false) {
+        return ['ok' => true, 'handle' => null, 'busy' => false];
+    }
+    if (!flock($fp, LOCK_EX | LOCK_NB)) {
+        fclose($fp);
+        return ['ok' => false, 'handle' => null, 'busy' => true];
+    }
+    return ['ok' => true, 'handle' => $fp, 'busy' => false];
+}
+
+/**
+ * Release a lock taken by php_install_begin(). Safe to call with null. The lock
+ * also auto-releases when the request ends, so this is the tidy path, not a
+ * correctness requirement.
+ */
+function php_install_end($handle): void
+{
+    if (is_resource($handle)) {
+        @flock($handle, LOCK_UN);
+        @fclose($handle);
+    }
 }
 
 /**

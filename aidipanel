@@ -124,6 +124,17 @@ _php_version_valid() {
   return 1
 }
 
+# True if PHP <ver> is genuinely installed. Probes the FPM *binary*
+# (/usr/sbin/php-fpm<ver>, shipped by the phpX.Y-fpm package) — NOT the
+# /etc/php/<ver> dir: `apt purge` removes the binary but can leave the config
+# dir behind, and aidipanel itself writes 99-aidipanel.ini + pool.d/*.conf into
+# it, so the dir (and those markers) read as "installed" even after a purge.
+# The dpkg-owned binary is the honest signal; the panel's php_is_installed()
+# mirrors this exact probe so panel-state and CLI-state agree.
+_php_installed() {
+  [[ -x "/usr/sbin/php-fpm${1}" ]]
+}
+
 _php_sock() {
   echo "/run/php/php${1}-fpm.sock"
 }
@@ -443,7 +454,7 @@ _site_add() {
   _parse_opts "$@"
 
   local domain php_ver site_type site_user
-  domain=$(_opt "domain"); php_ver=$(_opt "php" "8.3"); site_type=$(_opt "type" "php")
+  domain=$(_opt "domain"); php_ver=$(_opt "php" "${PHP_DEFAULT_VERSION}"); site_type=$(_opt "type" "php")
   site_user=$(_opt "user" "")
 
   _require_arg "domain" "$domain" "site:add --domain example.com --user example --type wordpress --php 8.3"
@@ -461,9 +472,13 @@ _site_add() {
   _validate_site_user "$site_user"
   id "$site_user" &>/dev/null && die "Site user already exists: ${site_user} (pass a different --user)."
 
-  # Preflight (FPM presence via its pool dir; the php CLI binary is NOT required —
-  # PHP-FPM serves the site, and _write_fpm_pool runs `php-fpm<ver> -t`).
-  [[ -d "/etc/php/${php_ver}/fpm/pool.d" ]] || die "PHP ${php_ver} is not installed. Run: aidipanel php:install --version ${php_ver}"
+  # Auto-install the requested PHP version on demand if it is missing (Patch C).
+  # Runs BEFORE the rollback ledger below, so a failed install dies cleanly with
+  # no half-created site. _ensure_php_version is idempotent and validates the version.
+  if ! _php_installed "$php_ver"; then
+    log "PHP ${php_ver} not installed — installing it first (this may take 1-2 minutes)..."
+    _ensure_php_version "$php_ver"
+  fi
   [[ -w "$HOME_BASE" ]] || die "${HOME_BASE} is not writable."
 
   log "Creating site: ${domain} (user: ${site_user}, type: ${site_type}, PHP: ${php_ver})..."
@@ -1155,7 +1170,10 @@ _ensure_php_version() {
   local ver="$1"
   _php_version_valid "$ver" || die "Invalid PHP version: ${ver}. Supported: ${PHP_AVAILABLE_VERSIONS}"
 
-  if [[ -f "/etc/php/${ver}/fpm/conf.d/99-aidipanel.ini" ]]; then
+  # Idempotency probes the FPM binary, not the 99-aidipanel.ini marker we write:
+  # that marker lives under /etc/php/<ver> and survives `apt purge`, so keying off
+  # it would (a) read a purged version as installed and (b) refuse to reinstall it.
+  if _php_installed "$ver"; then
     ok "PHP ${ver} is already installed."
     return 0
   fi
@@ -1241,7 +1259,7 @@ _php_list() {
   for ver in "${PHP_VERSIONS_SUPPORTED[@]}"; do
     local status="${DIM}available${RESET}"
     local fpm_status="${DIM}stopped${RESET}"
-    if [[ -d "/etc/php/${ver}/fpm" ]]; then
+    if _php_installed "$ver"; then
       status="${GREEN}installed${RESET}"
       [[ "$ver" == "$PHP_DEFAULT_VERSION" ]] && status="${GREEN}installed (default)${RESET}"
       systemctl is-active --quiet "php${ver}-fpm" 2>/dev/null \
@@ -1273,7 +1291,11 @@ _php_version() {
   fi
 
   _php_version_valid "$new_ver" || die "Invalid PHP version: ${new_ver}. Supported: ${PHP_VERSIONS_SUPPORTED[*]}"
-  [[ -d "/etc/php/${new_ver}/fpm/pool.d" ]] || die "PHP ${new_ver} is not installed. Run: aidipanel php:install --version ${new_ver}"
+  # Auto-install the target version on demand if it is missing (Patch C).
+  if ! _php_installed "$new_ver"; then
+    log "PHP ${new_ver} not installed — installing it first (this may take 1-2 minutes)..."
+    _ensure_php_version "$new_ver"
+  fi
 
   log "Changing PHP for ${domain}: ${current_ver} → ${new_ver}"
 
