@@ -309,6 +309,9 @@ class SiteController extends BaseController
         $userField = ['key' => 'site_user', 'label' => 'site.add.f.site_user', 'input' => 'text',
                       'required' => false, 'enabled' => true, 'placeholder' => 'auto from domain',
                       'note' => 'site.add.f.site_user_note'];
+        // Pre-fill the WordPress admin password with a fresh random value on every
+        // render — never a hardcoded literal. The Generate button lets the user reroll.
+        $adminPass = bin2hex(random_bytes(12));
         $phpStatus = php_versions_status();
         // Default first, then the rest descending, so the dropdown prefills the recommended version.
         $phpOpts = [];
@@ -331,7 +334,7 @@ class SiteController extends BaseController
                     ['key' => 'site_title',  'label' => 'site.add.f.site_title',  'input' => 'text',     'required' => true,  'enabled' => false, 'placeholder' => 'My WordPress Site'],
                     $userField,
                     ['key' => 'admin_user',  'label' => 'site.add.f.admin_user',  'input' => 'text',     'required' => true,  'enabled' => false, 'placeholder' => 'admin'],
-                    ['key' => 'admin_pass',  'label' => 'site.add.f.admin_pass',  'input' => 'password', 'required' => true,  'enabled' => false, 'value' => 'W3b#8nRt5!yH'],
+                    ['key' => 'admin_pass',  'label' => 'site.add.f.admin_pass',  'input' => 'password', 'required' => true,  'enabled' => false, 'value' => $adminPass, 'generate' => true],
                     ['key' => 'admin_email', 'label' => 'site.add.f.admin_email', 'input' => 'text',     'required' => true,  'enabled' => false, 'placeholder' => 'you@example.com'],
                     ['key' => 'multisite',   'label' => 'site.add.f.multisite',   'input' => 'select',   'required' => false, 'enabled' => false, 'options' => ['Disabled', 'Subdomain', 'Subdirectory']],
                     $phpField,
