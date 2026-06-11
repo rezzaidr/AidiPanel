@@ -165,6 +165,13 @@ select.inp {
 }
 @keyframes pulse-ping { 75%, 100% { transform: scale(2); opacity: 0; } }
 
+/* --- Spinner ------------------------------------------------------------ */
+/* Icons render display:inline, where CSS transform is ignored — so an icon
+   with a spin animation never actually rotates. .spin forces inline-block and
+   drives the rotation, giving a real spinning indicator for in-progress work. */
+@keyframes ap-spin { to { transform: rotate(360deg); } }
+.spin { display: inline-block; animation: ap-spin .7s linear infinite; }
+
 /* --- Toasts (flash messages) -------------------------------------------- */
 .toast {
   display: flex; align-items: center; gap: .5rem;

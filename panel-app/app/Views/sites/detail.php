@@ -477,20 +477,56 @@ if ($opcacheEnabled && isset($opcache['opcache_statistics'])) {
     <div class="card p-5">
       <h2 class="font-head font-semibold text-sm text-zinc-900 mb-1"><?= e(t('site.set.php_title')) ?></h2>
       <p class="text-[11px] text-zinc-400 mb-4"><?= e(t('site.set.php_hint')) ?></p>
-      <form method="POST" action="/sites/<?= e($domain) ?>/php" class="flex items-end gap-3">
+      <form method="POST" action="/sites/<?= e($domain) ?>/php" class="flex items-end gap-3"
+            x-data="phpSwitchForm()" @submit="onSubmit($event)" x-ref="form">
         <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
         <div class="flex-1">
           <label class="lbl">PHP version</label>
-          <select name="php_version" class="inp">
+          <select name="php_version" class="inp" data-phpselect>
             <?php foreach (php_versions_status() as $v => $s): ?>
             <option value="<?= e($v) ?>"
               <?= $phpVer === $v ? 'selected' : '' ?>
-              <?= $s['installed'] ? '' : 'disabled' ?>>PHP <?= e($v) ?><?= $s['installed'] ? '' : ' — ' . e(t('php.not_installed')) ?></option>
+              <?= $s['installed'] ? '' : 'data-needs-install="1"' ?>>PHP <?= e($v) ?><?= $s['installed'] ? '' : ' — ' . e(t('php.will_install')) ?></option>
             <?php endforeach; ?>
           </select>
-          <p class="hint mt-1"><?= e(t('site.set.php_install_hint')) ?></p>
+          <p class="hint mt-1"><?= e(t('site.set.php_autoinstall_hint')) ?></p>
         </div>
-        <button type="submit" class="btn btn-primary"><?= e(t('site.set.php_apply')) ?></button>
+        <button type="submit" class="btn btn-primary" :disabled="submitting">
+          <span x-show="!submitting"><?= e(t('site.set.php_apply')) ?></span>
+          <span x-show="submitting" x-cloak><i class="ti ti-loader-2 text-sm spin"></i> <?= e(t('site.set.php_applying')) ?></span>
+        </button>
+
+        <!-- Modal: confirm on-demand PHP install before switching -->
+        <div x-show="confirmVer" x-cloak class="fixed inset-0 z-50">
+          <div class="absolute inset-0 bg-zinc-900/40" @click="!submitting && (confirmVer=null)"></div>
+          <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl text-left"
+               @keydown.escape.window="!submitting && (confirmVer=null)">
+            <div class="card-head flex items-center gap-2">
+              <span class="w-8 h-8 rounded-lg bg-ink-pale flex items-center justify-center shrink-0">
+                <i class="ti ti-download text-ink"></i>
+              </span>
+              <h3 class="card-title"><span x-text="'PHP ' + confirmVer"></span> <?= e(t('site.add.php_modal_title')) ?></h3>
+            </div>
+            <div class="p-5 space-y-4">
+              <p class="text-sm text-zinc-600"><?= e(t('site.add.php_modal_body')) ?></p>
+              <div class="flex items-start gap-2 bg-amber-50 border border-amber-200/70 rounded-lg px-3 py-2">
+                <i class="ti ti-clock text-amber-500 mt-0.5 text-sm"></i>
+                <p class="text-[11px] text-amber-800 leading-relaxed"><?= e(t('site.add.php_modal_eta')) ?></p>
+              </div>
+              <div x-show="submitting" x-cloak class="flex items-start gap-2 bg-ink-pale border border-ink/15 rounded-lg px-3 py-2">
+                <i class="ti ti-loader-2 text-ink mt-0.5 text-sm spin"></i>
+                <p class="text-[11px] text-ink leading-relaxed"><?= e(t('site.add.php_installing_note')) ?></p>
+              </div>
+              <div class="flex justify-end gap-2 pt-1">
+                <button type="button" @click="confirmVer=null" :disabled="submitting" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
+                <button type="button" @click="proceed()" :disabled="submitting" class="btn btn-primary">
+                  <span x-show="!submitting"><i class="ti ti-check text-sm"></i> <?= e(t('site.set.php_modal_confirm')) ?></span>
+                  <span x-show="submitting" x-cloak><i class="ti ti-loader-2 text-sm spin"></i> <?= e(t('site.set.php_applying')) ?></span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       </form>
     </div>
     <?php endif; ?>
@@ -548,7 +584,8 @@ if ($opcacheEnabled && isset($opcache['opcache_statistics'])) {
             </ul>
             <label class="lbl"><?= e(t('site.set.delete_modal_type_to_confirm', ['domain' => $domain])) ?></label>
             <input type="text" x-model="typed" class="inp w-full" autocomplete="off" spellcheck="false" placeholder="<?= e($domain) ?>">
-            <form method="POST" action="/sites/<?= e($domain) ?>/delete" class="flex justify-end gap-2 pt-1">
+            <form method="POST" action="/sites/<?= e($domain) ?>/delete" class="flex justify-end gap-2 pt-1"
+                  @submit="window.opGuard.start()">
               <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
               <button type="button" @click="open=false" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
               <button type="submit" class="btn btn-danger"
@@ -614,7 +651,7 @@ if ($opcacheEnabled && isset($opcache['opcache_statistics'])) {
 
       <div class="flex items-center gap-2.5 px-5 py-3.5 border-t border-zinc-100 bg-zinc-50/60">
         <?php if ($sslState === 'letsencrypt'): ?>
-        <form method="POST" action="/sites/<?= e($domain) ?>/ssl/renew" @submit="submitting = true">
+        <form method="POST" action="/sites/<?= e($domain) ?>/ssl/renew" @submit="submitting = true; window.opGuard.start()">
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
           <button type="submit" class="btn btn-primary" :disabled="submitting">
             <i class="ti ti-refresh text-sm" x-show="!submitting"></i>
@@ -638,7 +675,7 @@ if ($opcacheEnabled && isset($opcache['opcache_statistics'])) {
           <h3 class="card-title"><i class="ti ti-rosette-discount-check text-speed"></i> <?= e(t('site.ssl.le_modal_title')) ?></h3>
           <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
         </div>
-        <form method="POST" action="/sites/<?= e($domain) ?>/ssl/install" @submit="submitting = true">
+        <form method="POST" action="/sites/<?= e($domain) ?>/ssl/install" @submit="submitting = true; window.opGuard.start()">
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
           <div class="p-5">
             <div class="flex items-start gap-2.5 bg-speed-pale border border-speed/20 rounded-lg px-4 py-3 mb-4">
@@ -687,7 +724,7 @@ if ($opcacheEnabled && isset($opcache['opcache_statistics'])) {
           <h3 class="card-title"><i class="ti ti-certificate text-speed"></i> <?= e(t('site.ssl.import_modal_title')) ?></h3>
           <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
         </div>
-        <form method="POST" action="/sites/<?= e($domain) ?>/ssl/import" @submit="submitting = true">
+        <form method="POST" action="/sites/<?= e($domain) ?>/ssl/import" @submit="submitting = true; window.opGuard.start()">
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
           <div class="p-5 space-y-4">
             <p class="text-[11px] text-zinc-400"><?= e(t('site.ssl.import_hint')) ?></p>
@@ -738,3 +775,33 @@ if ($opcacheEnabled && isset($opcache['opcache_statistics'])) {
 <?php endif; ?>
 
 </main>
+
+<script>
+function phpSwitchForm() {
+  return {
+    submitting: false,
+    confirmVer: null,   // set to the version string when an in-app confirm is needed
+    onSubmit(e) {
+      var opt = this._selectedNeedsInstall();
+      if (opt && !this.confirmVer) {
+        e.preventDefault();
+        this.confirmVer = opt.value;
+        return;
+      }
+      this.submitting = true;
+      window.opGuard.start(); // warn on reload/leave until the redirect replaces the page
+    },
+    proceed() {
+      this.submitting = true;
+      window.opGuard.start();
+      this.$refs.form.submit();
+    },
+    _selectedNeedsInstall() {
+      var sel = this.$el.querySelector('select[data-phpselect]');
+      if (!sel) return null;
+      var opt = sel.options[sel.selectedIndex];
+      return (opt && opt.getAttribute('data-needs-install') === '1') ? opt : null;
+    }
+  };
+}
+</script>

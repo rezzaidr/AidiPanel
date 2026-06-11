@@ -61,12 +61,12 @@
       </button>
     </form>
     <?php else: ?>
-    <form method="POST" action="/php/install" x-data="{ busy: false }" @submit="busy = true">
+    <form method="POST" action="/php/install" x-data="{ busy: false }" @submit="busy = true; window.opGuard.start()">
       <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
       <input type="hidden" name="version" value="<?= e($ver) ?>">
       <button type="submit" class="btn btn-primary btn-sm w-full" :disabled="busy">
         <span x-show="!busy"><i class="ti ti-download text-sm"></i> <?= e(t('php.install_btn')) ?> <?= e($ver) ?></span>
-        <span x-show="busy" x-cloak><i class="ti ti-loader-2 text-sm animate-spin"></i> <?= e(t('php.installing')) ?></span>
+        <span x-show="busy" x-cloak><i class="ti ti-loader-2 text-sm spin"></i> <?= e(t('php.installing')) ?></span>
       </button>
     </form>
     <?php endif; ?>

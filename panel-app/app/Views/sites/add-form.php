@@ -46,15 +46,15 @@ $renderField = function (array $f): void {
             break;
 
         case 'phpselect':
-            echo '<select name="' . e($f['key']) . '" class="' . $inCls . '"' . $da . '>';
+            echo '<select name="' . e($f['key']) . '" class="' . $inCls . '" data-phpselect' . $da . '>';
             foreach ($f['options'] as $opt) {
-                $od  = !empty($opt['disabled']) ? ' disabled' : '';
-                $sel = !empty($opt['default']) ? ' selected' : '';
-                $sfx = !empty($opt['disabled']) ? ' — ' . t('php.not_installed') : '';
-                echo '<option value="' . e($opt['value']) . '"' . $od . $sel . '>PHP ' . e($opt['value']) . e($sfx) . '</option>';
+                $needs = !empty($opt['disabled']) ? ' data-needs-install="1"' : '';
+                $sel   = !empty($opt['default']) ? ' selected' : '';
+                $sfx   = !empty($opt['disabled']) ? ' — ' . t('php.will_install') : '';
+                echo '<option value="' . e($opt['value']) . '"' . $needs . $sel . '>PHP ' . e($opt['value']) . e($sfx) . '</option>';
             }
             echo '</select>';
-            echo '<p class="hint">' . e(t('site.set.php_install_hint')) . '</p>';
+            echo '<p class="hint">' . e(t('site.add.php_autoinstall_hint')) . '</p>';
             break;
 
         default: // text | password (shown as visible text)
@@ -99,7 +99,7 @@ $renderField = function (array $f): void {
     </div>
     <?php endif; ?>
 
-    <form method="POST" action="/sites/add">
+    <form method="POST" action="/sites/add" x-data="phpCreateForm()" @submit="onSubmit($event)" x-ref="form">
       <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
       <?php if ($creatable && !$hasApp): ?>
         <input type="hidden" name="type" value="<?= e($form['type']) ?>">
@@ -111,11 +111,46 @@ $renderField = function (array $f): void {
 
       <div class="flex items-center gap-3 mt-6 pt-5 border-t border-zinc-100">
         <?php if ($creatable): ?>
-          <button type="submit" class="btn btn-primary"><i class="ti ti-plus text-sm"></i> <?= e(t('site.add.create')) ?></button>
+          <button type="submit" class="btn btn-primary" :disabled="submitting">
+            <span x-show="!submitting"><i class="ti ti-plus text-sm"></i> <?= e(t('site.add.create')) ?></span>
+            <span x-show="submitting" x-cloak><i class="ti ti-loader-2 text-sm spin"></i> <?= e(t('site.add.creating')) ?></span>
+          </button>
           <a href="/sites/add" class="text-xs font-medium text-zinc-500 hover:text-zinc-700 px-2"><?= e(t('common.cancel')) ?></a>
         <?php else: ?>
           <button type="button" class="btn btn-secondary" disabled><i class="ti ti-clock text-sm"></i> <?= e(t('site.add.coming_soon')) ?></button>
         <?php endif; ?>
+      </div>
+
+      <!-- Modal: confirm on-demand PHP install before create -->
+      <div x-show="confirmVer" x-cloak class="fixed inset-0 z-50">
+        <div class="absolute inset-0 bg-zinc-900/40" @click="!submitting && (confirmVer=null)"></div>
+        <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl"
+             @keydown.escape.window="!submitting && (confirmVer=null)">
+          <div class="card-head flex items-center gap-2">
+            <span class="w-8 h-8 rounded-lg bg-ink-pale flex items-center justify-center shrink-0">
+              <i class="ti ti-download text-ink"></i>
+            </span>
+            <h3 class="card-title"><span x-text="'PHP ' + confirmVer"></span> <?= e(t('site.add.php_modal_title')) ?></h3>
+          </div>
+          <div class="p-5 space-y-4">
+            <p class="text-sm text-zinc-600"><?= e(t('site.add.php_modal_body')) ?></p>
+            <div class="flex items-start gap-2 bg-amber-50 border border-amber-200/70 rounded-lg px-3 py-2">
+              <i class="ti ti-clock text-amber-500 mt-0.5 text-sm"></i>
+              <p class="text-[11px] text-amber-800 leading-relaxed"><?= e(t('site.add.php_modal_eta')) ?></p>
+            </div>
+            <div x-show="submitting" x-cloak class="flex items-start gap-2 bg-ink-pale border border-ink/15 rounded-lg px-3 py-2">
+              <i class="ti ti-loader-2 text-ink mt-0.5 text-sm spin"></i>
+              <p class="text-[11px] text-ink leading-relaxed"><?= e(t('site.add.php_installing_note')) ?></p>
+            </div>
+            <div class="flex justify-end gap-2 pt-1">
+              <button type="button" @click="confirmVer=null" :disabled="submitting" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
+              <button type="button" @click="proceed()" :disabled="submitting" class="btn btn-primary">
+                <span x-show="!submitting"><i class="ti ti-check text-sm"></i> <?= e(t('site.add.php_modal_confirm')) ?></span>
+                <span x-show="submitting" x-cloak><i class="ti ti-loader-2 text-sm spin"></i> <?= e(t('site.add.creating')) ?></span>
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </form>
   </div>
@@ -137,4 +172,36 @@ $renderField = function (array $f): void {
     u.value = base.slice(0, 32);
   });
 })();
+</script>
+<script>
+function phpCreateForm() {
+  return {
+    submitting: false,
+    confirmVer: null,   // set to the version string when an in-app confirm is needed
+    onSubmit(e) {
+      // If a not-installed version is selected, intercept and show the in-app
+      // modal instead of submitting. The modal's Confirm calls proceed().
+      var opt = this._selectedNeedsInstall();
+      if (opt && !this.confirmVer) {
+        e.preventDefault();
+        this.confirmVer = opt.value;
+        return;
+      }
+      this.submitting = true; // spinner; install+create runs server-side (≤300s)
+      window.opGuard.start(); // warn on reload/leave until the redirect replaces the page
+    },
+    proceed() {
+      // User confirmed the install in the modal — submit the form for real.
+      this.submitting = true;
+      window.opGuard.start();
+      this.$refs.form.submit();
+    },
+    _selectedNeedsInstall() {
+      var sel = this.$el.querySelector('select[data-phpselect]');
+      if (!sel) return null;
+      var opt = sel.options[sel.selectedIndex];
+      return (opt && opt.getAttribute('data-needs-install') === '1') ? opt : null;
+    }
+  };
+}
 </script>

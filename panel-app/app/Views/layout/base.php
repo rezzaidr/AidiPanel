@@ -138,6 +138,47 @@ $_hostname = gethostname() ?: 'server';
 <meta name="csrf-token" content="<?= e($_csrf_token ?? '') ?>">
 
 <script>
+// opGuard — UX safety layer for long server operations (PHP on-demand install,
+// site create/delete, PHP switch, SSL issuance). While an op runs, a native
+// beforeunload dialog warns the user that reloading/leaving may interrupt it.
+// This is ONLY a warning — the backend already hardens these ops
+// (ignore_user_abort + per-version lock), so the work completes regardless; this
+// just stops an accidental reload mid-wait.
+//
+// Subtlety: these are plain synchronous form POSTs, and beforeunload fires at the
+// START of a navigation — including the form's OWN submit. Arming naively would
+// pop the dialog the instant the user clicks the legitimate button. So start() is
+// called right before the form navigates and flags that ONE navigation as
+// expected: the handler lets it through, then re-arms. The op's POST is in flight
+// while the old page stays visible; any FURTHER navigation (a real reload / tab
+// close) during that wait is what gets warned. The success/error redirect is a
+// continuation of the same POST navigation, so it does not re-fire beforeunload —
+// no spurious prompt on completion. The next page load resets everything.
+window.opGuard = (function () {
+  var armed = false;
+  var expectSelfNav = false;   // the op's own form submit is an allowed navigation
+  function handler(e) {
+    if (expectSelfNav) { expectSelfNav = false; return; }
+    e.preventDefault();
+    e.returnValue = '';
+    return '';
+  }
+  return {
+    start: function () {
+      expectSelfNav = true;    // allow the immediate form-submit navigation
+      if (armed) return;
+      armed = true;
+      window.addEventListener('beforeunload', handler);
+    },
+    stop: function () {
+      armed = false;
+      expectSelfNav = false;
+      window.removeEventListener('beforeunload', handler);
+    },
+    get running() { return armed; },
+  };
+})();
+
 window.api = async (url, method = 'GET', body = null) => {
   const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
   const opts = {
