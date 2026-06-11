@@ -1,19 +1,32 @@
 # AidiPanel .gitignore
 
 # Credentials — NEVER commit these
-aidipanel-app/storage/db/*.sqlite
 credentials.conf
 .my.cnf
+.env
 *.key
 *.pem
+panel-app/storage/db/*.sqlite
 
-# Test loop — secrets (config.env berisi DO API token; JANGAN pernah commit)
-tests/config.env
+# Private / internal working files (kept local, never published)
+_private/
+docs/plans/
+docs/handoffs/
+docs/internal/
+docs/prompts/
+*.handoff.md
+*.prompt.md
+
+# Local tooling config (not part of the project)
+.claude/
+
+# Runtime storage
+panel-app/storage/
+panel-app/storage/logs/
 tests/logs/
 
 # Logs
 *.log
-aidipanel-app/storage/logs/
 
 # OS
 .DS_Store
@@ -29,6 +42,3 @@ Thumbs.db
 *.tar.gz
 *.zip
 dist/
-
-# local session/resume notes — keep out of the repo
-docs/handoffs/

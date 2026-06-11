@@ -1,8 +1,15 @@
-*.sh text eol=lf
-aidipanel text eol=lf
-*.php text eol=lf
-*.md text eol=lf
+# Normalize all text files to LF in the repository and on checkout,
+# regardless of core.autocrlf on the contributor's machine.
+* text=auto eol=lf
+
+# Explicit rules for the main file types (documentation / belt-and-suspenders)
+*.sh   text eol=lf
+*.php  text eol=lf
+*.md   text eol=lf
 *.html text eol=lf
-*.css text eol=lf
-*.js text eol=lf
-*.env text eol=lf
+*.css  text eol=lf
+*.js   text eol=lf
+*.yml  text eol=lf
+*.env  text eol=lf
+*.svg  text eol=lf
+aidipanel text eol=lf
