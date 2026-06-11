@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master, main]
   pull_request:
-    branches: [main]
+    branches: [master, main]
 
 jobs:
   lint-installer:
@@ -28,6 +28,9 @@ jobs:
       - name: Check bash syntax — aidipanel
         run: bash -n aidipanel
 
+      - name: Check bash syntax — deploy-panel.sh
+        run: bash -n panel-app/deploy-panel.sh
+
   lint-php:
     name: Lint PHP Files
     runs-on: ubuntu-latest
@@ -37,7 +40,7 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.3'
+          php-version: '8.4'
 
       - name: PHP syntax check (all files)
         run: find panel-app -name "*.php" -exec php -l {} \; | grep -v "No syntax errors" || true
@@ -45,7 +48,7 @@ jobs:
   release:
     name: Create Release Archive
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/master'
     needs: [lint-installer, lint-php]
     steps:
       - uses: actions/checkout@v4

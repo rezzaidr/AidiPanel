@@ -17,7 +17,6 @@ IFS=$'\n\t'
 # ---------------------------------------------------------------------------
 readonly CLI_VERSION="1.2.0-rc1"
 readonly PANEL_DIR="/opt/aidipanel"
-readonly SITES_DIR="/var/www"
 readonly HOME_BASE="/home"
 readonly RESERVED_SITE_USERS=(root www-data ubuntu debian nginx mysql mariadb postgres redis aidipanel daemon bin sys sync games man lp mail news uucp proxy backup list irc gnats nobody systemd-network systemd-resolve)
 readonly NGINX_CONF_DIR="/etc/nginx/sites-available"
@@ -65,7 +64,7 @@ info()   { echo -e "${DIM}$*${RESET}"; }
 # ---------------------------------------------------------------------------
 _require_root() {
   if [[ "$(id -u)" -ne 0 ]]; then
-    # Auto re-exec dengan sudo jika tersedia
+    # Auto re-exec with sudo if available
     if command -v sudo &>/dev/null && sudo -n true 2>/dev/null; then
       exec sudo "$0" "$@"
     fi
@@ -275,16 +274,16 @@ _remove_fpm_pool() {
 
 _load_credentials() {
   [[ -f "$CREDENTIALS_FILE" ]] || die "Credentials file not found: ${CREDENTIALS_FILE}\nIs AidiPanel installed?"
-  # Parse safely line by line (tidak pakai source agar special chars di password tidak rusak bash)
+  # Parse safely line by line (do not use source so special chars in the password do not break bash)
   while IFS= read -r line || [[ -n "$line" ]]; do
-    # Skip comments dan blank lines
+    # Skip comments and blank lines
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
     [[ -z "${line// }" ]] && continue
-    # Hanya export VAR=VALUE yang valid
+    # Only export valid VAR=VALUE pairs
     if [[ "$line" =~ ^([A-Z_]+)=(.*)$ ]]; then
       local var="${BASH_REMATCH[1]}"
       local val="${BASH_REMATCH[2]}"
-      # Hapus quotes jika ada
+      # Strip surrounding quotes if present
       val="${val%\"}"
       val="${val#\"}"
       val="${val%\'}"
@@ -389,7 +388,7 @@ _usage() {
   echo "  service:stop    Stop a service"
 
   echo -e "\n${BOLD}${BLUE}User Management${RESET}"
-  echo "  user:add        Add a system user for SSH/FTP access"
+  echo "  user:add        Add a no-login site user (file ownership only)"
   echo "  user:delete     Delete a system user"
   echo "  user:list       List all AidiPanel site users"
   echo "  user:passwd     Change password for a user"
@@ -400,7 +399,7 @@ _usage() {
   echo "  self:update     Update AidiPanel CLI to latest version"
 
   echo -e "\n${BOLD}Examples:${RESET}"
-  echo "  aidipanel site:add --domain example.com --user example --type wordpress --php 8.3"
+  echo "  aidipanel site:add --domain example.com --user example --type wordpress"
   echo "  aidipanel cache:purge --domain example.com"
   echo "  aidipanel db:add --name mydb --user myuser"
   echo "  aidipanel ssl:install --domain example.com"
@@ -457,7 +456,7 @@ _site_add() {
   domain=$(_opt "domain"); php_ver=$(_opt "php" "${PHP_DEFAULT_VERSION}"); site_type=$(_opt "type" "php")
   site_user=$(_opt "user" "")
 
-  _require_arg "domain" "$domain" "site:add --domain example.com --user example --type wordpress --php 8.3"
+  _require_arg "domain" "$domain" "site:add --domain example.com --user example --type wordpress"
 
   # Validate
   _domain_valid "$domain" || die "Invalid domain name: ${domain}"
@@ -818,7 +817,7 @@ _site_info() {
   local site_type; site_type=$(grep -oP '# Type: \K\w+' "$conf" 2>/dev/null || echo "php")
   local webroot; webroot=$(grep -oP 'root \K[^;]+' "$conf" 2>/dev/null | head -1 || echo "-")
   local enabled; enabled=$([[ -L "${NGINX_ENABLED_DIR}/${domain}.conf" ]] && echo "yes" || echo "no")
-  local disk_usage; disk_usage=$(du -sh "${SITES_DIR}/${domain}" 2>/dev/null | cut -f1 || echo "-")
+  local disk_usage; disk_usage=$(du -sh "$webroot" 2>/dev/null | cut -f1 || echo "-")
 
   local ssl_type="self-signed"
   local ssl_expiry="-"
@@ -971,8 +970,9 @@ _cache_install_wp_plugins() {
   local domain="$1" install_nginx_helper="$2" install_redis_plugin="$3"
   [[ "$install_nginx_helper" == "true" || "$install_redis_plugin" == "true" ]] || return 0
 
-  local webroot="${SITES_DIR}/${domain}/htdocs"
-  if [[ ! -f "${webroot}/wp-config.php" ]]; then
+  local conf="${NGINX_CONF_DIR}/${domain}.conf"
+  local webroot; webroot=$(grep -oP 'root \K[^;]+' "$conf" 2>/dev/null | head -1)
+  if [[ -z "$webroot" || ! -f "${webroot}/wp-config.php" ]]; then
     warn "WordPress not detected in ${webroot}; skipping WordPress cache plugin installation."
     return 0
   fi
@@ -981,13 +981,14 @@ _cache_install_wp_plugins() {
     return 0
   fi
 
+  local site_user; site_user=$(stat -c '%U' "$webroot" 2>/dev/null || echo "")
   mkdir -p /tmp/aidipanel-wp-cli-cache
-  chown www-data:www-data /tmp/aidipanel-wp-cli-cache 2>/dev/null || true
+  chown "${site_user:-www-data}":"${site_user:-www-data}" /tmp/aidipanel-wp-cli-cache 2>/dev/null || true
 
   local wp_base=(env WP_CLI_CACHE_DIR=/tmp/aidipanel-wp-cli-cache wp --path="$webroot")
   local runner=("${wp_base[@]}")
-  if command -v sudo >/dev/null 2>&1; then
-    runner=(sudo -u www-data "${wp_base[@]}")
+  if [[ -n "$site_user" ]] && command -v sudo >/dev/null 2>&1; then
+    runner=(sudo -u "$site_user" "${wp_base[@]}")
   else
     runner=("${wp_base[@]}" --allow-root)
   fi
@@ -1350,7 +1351,7 @@ _php_restart() {
 
 _php_info() {
   _parse_opts "$@"
-  local ver; ver=$(_opt "version" "8.3")
+  local ver; ver=$(_opt "version" "${PHP_DEFAULT_VERSION}")
   _php_version_valid "$ver" || die "Invalid PHP version: ${ver}"
   command -v "php${ver}" &>/dev/null || die "PHP ${ver} not installed"
 
@@ -1637,7 +1638,7 @@ _service_action() {
 
   # Aliases
   [[ "$service_name" == "redis" ]] && service_name="redis-server"
-  [[ "$service_name" == "php" ]]   && service_name="php${PHP_DEFAULT_VERSION:-8.3}-fpm"
+  [[ "$service_name" == "php" ]]   && service_name="php${PHP_DEFAULT_VERSION}-fpm"
   [[ "$service_name" =~ ^php[0-9]+\.[0-9]+$ ]] && service_name="${service_name}-fpm"
 
   case "$service_name" in
@@ -1659,44 +1660,31 @@ _user_add() {
   _require_root "user:add"
   _parse_opts "$@"
   local username; username=$(_opt "user")
-  local domain; domain=$(_opt "domain" "")
-  _require_arg "user" "$username" "user:add --user john --domain example.com"
+  _require_arg "user" "$username" "user:add --user example"
 
-  [[ "$username" =~ ^[a-z_][a-z0-9_-]*$ ]] \
-    || die "Username must be lowercase letters, numbers, underscores, hyphens"
-  [[ -z "$domain" ]] || _domain_valid "$domain" || die "Invalid domain name: ${domain}"
-
+  _validate_site_user "$username"
   id "$username" &>/dev/null && die "User already exists: ${username}"
 
-  local home_dir="${SITES_DIR}/${domain:-$username}"
-  useradd \
-    --create-home \
-    --home-dir "$home_dir" \
-    --shell /bin/bash \
-    --groups www-data \
-    "$username"
-
-  # Generate random password
-  local pass; pass=$(openssl rand -base64 16 | tr -dc 'A-Za-z0-9' | head -c 16)
-  echo "${username}:${pass}" | chpasswd
+  # Create a dedicated no-login user (file ownership / PHP isolation only).
+  # Login is disabled by default; this mirrors the per-site user model.
+  _ensure_site_user "$username" || die "Could not create user '${username}'."
 
   ok "User created: ${username}"
   _table_row "Username:"  "$username"
-  _table_row "Password:"  "$pass"
-  _table_row "Home dir:"  "$home_dir"
-  warn "Save the password — it will not be shown again."
+  _table_row "Home dir:"  "${HOME_BASE}/${username}"
+  _table_row "Shell:"     "/usr/sbin/nologin (login disabled)"
 }
 
 _user_delete() {
   _require_root "user:delete"
   _parse_opts "$@"
   local username; username=$(_opt "user")
-  _require_arg "user" "$username" "user:delete --user john"
+  _require_arg "user" "$username" "user:delete --user example"
 
   id "$username" &>/dev/null || die "User not found: ${username}"
-  _confirm "Delete user '${username}'?" || { log "Cancelled."; return 0; }
+  _confirm "Delete user '${username}' and its home directory?" || { log "Cancelled."; return 0; }
 
-  userdel --remove "$username" 2>/dev/null || userdel "$username"
+  _remove_site_user "$username"
   ok "User deleted: ${username}"
 }
 
@@ -1705,9 +1693,9 @@ _user_list() {
   echo ""
   echo -e "  ${BOLD}Site Users${RESET}"
   _hr
-  # List users with home under SITES_DIR
-  while IFS=: read -r user _ uid _ _ home _; do
-    [[ "$home" == "${SITES_DIR}/"* ]] || continue
+  # List regular users whose home is under HOME_BASE (the per-site user model).
+  while IFS=: read -r user _ uid _ _ home shell; do
+    [[ "$home" == "${HOME_BASE}/"* ]] || continue
     (( uid >= 1000 )) || continue
     printf "  %-20s %s\n" "$user" "$home"
   done < /etc/passwd
@@ -1719,21 +1707,13 @@ _user_passwd() {
   _require_root "user:passwd"
   _parse_opts "$@"
   local username; username=$(_opt "user")
-  local new_pass; new_pass=$(_opt "pass" "")
-  _require_arg "user" "$username" "user:passwd --user john"
+  _require_arg "user" "$username" "user:passwd --user example"
 
   id "$username" &>/dev/null || die "User not found: ${username}"
 
-  if [[ -z "$new_pass" ]]; then
-    new_pass=$(openssl rand -base64 16 | tr -dc 'A-Za-z0-9' | head -c 16)
-    echo "${username}:${new_pass}" | chpasswd
-    ok "Password changed for: ${username}"
-    _table_row "New password:" "$new_pass"
-    warn "Save the password — it will not be shown again."
-  else
-    echo "${username}:${new_pass}" | chpasswd
-    ok "Password changed for: ${username}"
-  fi
+  # Site users are no-login by default. Setting an interactive password would
+  # re-enable login, which the per-site isolation model intentionally disables.
+  die "Site users are no-login by default; interactive passwords are not set. SFTP/SSH access is a planned, opt-in feature."
 }
 
 # ===========================================================================

@@ -6,7 +6,7 @@ class SiteController extends BaseController
 {
     public function index(array $params = []): void
     {
-        // Sync: tambah ke DB jika ada di Nginx tapi belum di DB
+        // Sync: add to the DB if present in Nginx but not yet in the DB
         $this->syncSitesFromFilesystem();
 
         $sites = $this->db->rows('SELECT * FROM sites ORDER BY created_at DESC');
@@ -55,7 +55,7 @@ class SiteController extends BaseController
             $this->error('Invalid site user: lowercase, start with a letter, [a-z0-9_-], max 32 chars.');
         }
 
-        // Cek di DB DAN filesystem — keduanya harus tidak ada
+        // Check the DB AND the filesystem - neither may already exist
         $inDb   = $this->db->row('SELECT id FROM sites WHERE domain = ?', [$domain]);
         $inFs   = file_exists("/etc/nginx/sites-available/{$domain}.conf");
 
@@ -63,10 +63,10 @@ class SiteController extends BaseController
             $this->error("Site already exists: {$domain}");
         }
 
-        // Jika ada di filesystem tapi tidak di DB — sync dulu, anggap sudah ada
+        // If present on the filesystem but not in the DB - sync first, then treat as existing
         if ($inFs && !$inDb) {
             $this->syncOneSite($domain, $type, $phpVer);
-            $this->error("Site {$domain} sudah ada di server tapi belum terdaftar di panel. Sudah disinkronkan — silakan refresh halaman Sites.");
+            $this->error("Site {$domain} already exists on the server but was not registered in the panel. It has now been synced - please refresh the Sites page.");
         }
 
         // Build CLI args
@@ -150,7 +150,7 @@ class SiteController extends BaseController
         $domain = $params['domain'] ?? '';
         $site   = $this->db->row('SELECT id FROM sites WHERE domain = ?', [$domain]);
         if (!$site) {
-            // Coba hapus dari filesystem juga walau tidak di DB
+            // Try to remove it from the filesystem too, even if not in the DB
             if (!file_exists("/etc/nginx/sites-available/{$domain}.conf")) {
                 $this->error("Site not found: {$domain}");
             }
@@ -508,8 +508,8 @@ class SiteController extends BaseController
     }
 
     /**
-     * Sync semua site dari Nginx filesystem ke SQLite panel DB
-     * Dipanggil saat halaman Sites dibuka
+     * Sync all sites from the Nginx filesystem into the SQLite panel DB
+     * Called when the Sites page is opened
      */
     private function syncSitesFromFilesystem(): void
     {
@@ -526,13 +526,13 @@ class SiteController extends BaseController
             $domain = $basename;
             if (!is_valid_domain($domain)) continue;
 
-            // Hanya sync yang benar-benar aktif (ada di sites-enabled)
+            // Only sync those that are actually active (present in sites-enabled)
             if (!file_exists("{$enabledDir}/{$domain}.conf")) continue;
 
-            // Sudah ada di DB, skip
+            // Already in the DB, skip
             if ($this->db->row('SELECT id FROM sites WHERE domain = ?', [$domain])) continue;
 
-            // Deteksi type dari isi config
+            // Detect the type from the config contents
             $content  = (string) file_get_contents($confFile);
             $type     = 'php';
             if (preg_match('/^\s*#\s*Type:\s*(wordpress|laravel|php|static|proxy)\b/m', $content, $typeMatch)) {
@@ -547,7 +547,7 @@ class SiteController extends BaseController
                 $type = 'proxy';
             }
 
-            // Deteksi PHP version
+            // Detect the PHP version
             preg_match('/php(\d+\.\d+)-fpm\.sock/', $content, $m);
             $phpVer = $m[1] ?? php_policy()['default'];
 
@@ -556,7 +556,7 @@ class SiteController extends BaseController
     }
 
     /**
-     * Insert satu site ke DB (INSERT OR IGNORE)
+     * Insert a single site into the DB (INSERT OR IGNORE)
      */
     private function syncOneSite(string $domain, string $type, string $phpVer): void
     {
@@ -565,9 +565,9 @@ class SiteController extends BaseController
 
         // Source of truth = the vhost the CLI wrote. Read the active web root, and
         // derive the site_user when it lives under /home/<user>/.
-        $webroot  = "/var/www/{$domain}/htdocs";                 // legacy fallback
+        $siteUser = preg_replace('/[^a-z0-9_-].*$/', '', strtolower($domain));
+        $webroot  = "/home/{$siteUser}/htdocs/{$domain}";        // fallback if vhost has no root line
         if ($type === 'laravel') { $webroot .= '/public'; }
-        $siteUser = null;
         if (preg_match('~^\s*root\s+([^;]+);~m', $conf, $m)) {
             $webroot = trim($m[1]);
             if (preg_match('~^/home/([a-z][a-z0-9_-]*)/~', $webroot, $mu)) {

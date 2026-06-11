@@ -285,7 +285,7 @@ function php_versions_status(): array
 }
 
 /**
- * Safe CLI runner — pakai sudo jika dijalankan dari web (www-data)
+ * Safe CLI runner - use sudo when invoked from the web (www-data)
  */
 function run_cli(string $command, array $args = []): array
 {
@@ -298,13 +298,13 @@ function run_cli(string $command, array $args = []): array
         return ['success' => false, 'output' => 'Command not allowed from web panel.', 'code' => 126];
     }
 
-    // Pastikan log dir bisa ditulis
+    // Make sure the log dir is writable
     $logDir = '/opt/aidipanel/storage/logs';
     if (!is_dir($logDir)) {
         @mkdir($logDir, 0770, true);
     }
 
-    // Build safe command — set NO_COLOR agar output tidak ada ANSI escape codes
+    // Build safe command - set NO_COLOR so the output has no ANSI escape codes
     $safeArgs = array_map('escapeshellarg', $args);
     $cmdParts = [escapeshellcmd($binary), escapeshellarg($command), ...$safeArgs];
     $cmd      = 'NO_COLOR=1 ' . implode(' ', $cmdParts) . ' 2>&1';
@@ -322,7 +322,7 @@ function run_cli(string $command, array $args = []): array
     $exitCode = 0;
     exec($cmd, $output, $exitCode);
 
-    // Strip ANSI escape codes dari output (fallback jika NO_COLOR tidak diterapkan)
+    // Strip ANSI escape codes from the output (fallback if NO_COLOR is not honored)
     $cleanOutput = preg_replace('/\x1B\[[0-9;]*[A-Za-z]/', '', implode("\n", $output));
 
     return [

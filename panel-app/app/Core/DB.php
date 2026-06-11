@@ -99,16 +99,16 @@ class DB
         // Additive migrations (CREATE TABLE IF NOT EXISTS won't alter an existing table).
         $this->addColumnIfMissing('sites', 'site_user', 'TEXT');
 
-        // Seed admin HANYA jika belum ada user sama sekali
-        // Password hash sudah ditulis oleh deploy-panel.sh via CLI —
-        // TIDAK dibaca dari file saat runtime untuk menghindari permission issues
+        // Seed admin ONLY if there is no user at all yet
+        // Password hash is written by deploy-panel.sh via the CLI -
+        // NOT read from a file at runtime, to avoid permission issues
         $count = (int) $this->pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
         if ($count === 0) {
-            // Fallback: jika dipanggil tanpa deploy-panel.sh
-            // Baca dari env var yang di-set oleh Nginx fastcgi_param
+            // Fallback: if called without deploy-panel.sh
+            // Read from the env var set by Nginx fastcgi_param
             $hash = getenv('AIDIPANEL_ADMIN_HASH') ?: '';
             if (empty($hash)) {
-                // Last resort: password random, tulis ke /tmp agar bisa dibaca admin
+                // Last resort: random password, written to /tmp so the admin can read it
                 $random = bin2hex(random_bytes(10));
                 $hash   = password_hash($random, PASSWORD_BCRYPT, ['cost' => 12]);
                 $fallbackFile = '/tmp/aidipanel-fallback-pass.txt';

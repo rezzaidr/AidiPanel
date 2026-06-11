@@ -442,8 +442,8 @@ _pkg_installed() {
 # ---------------------------------------------------------------------------
 _install_base_packages() {
   log "Installing base system packages..."
-  # Tahan gagal saat apt boot-time masih memegang lock (mis. unattended-upgrades
-  # tepat setelah boot): minta apt menunggu lock hingga 5 menit, bukan langsung gagal.
+  # Tolerate failure while apt still holds the lock at boot time (e.g. unattended-upgrades
+  # right after boot): ask apt to wait for the lock up to 5 minutes instead of failing immediately.
   mkdir -p /etc/apt/apt.conf.d
   echo 'DPkg::Lock::Timeout "300";' > /etc/apt/apt.conf.d/99aidipanel-lock-timeout
   _apt_install \
@@ -1078,7 +1078,7 @@ _install_certbot() {
 }
 
 # ---------------------------------------------------------------------------
-# 14. PROFTPD
+# 14. PROFTPD (opt-in; NOT installed by default — see the call site in main())
 # ---------------------------------------------------------------------------
 _install_proftpd() {
   log "Installing ProFTPD..."
@@ -1776,7 +1776,7 @@ _print_summary() {
 }
 
 # ---------------------------------------------------------------------------
-# 24. AUTO-CLEANUP — hapus direktori installer setelah selesai
+# 24. AUTO-CLEANUP - remove the installer directory after completion
 # ---------------------------------------------------------------------------
 _cleanup_installer() {
   log "Cleaning up installer files..."
@@ -1785,12 +1785,12 @@ _cleanup_installer() {
   local script_path; script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   local script_name; script_name="$(basename "$script_path")"
 
-  # Hanya hapus jika folder bernama aidipanel-* di /root atau /home
+  # Only remove if the folder is named aidipanel-* under /root or /home
   if [[ "$script_path" =~ ^(/root|/home/[^/]+)/aidipanel-v[0-9] ]]; then
-    # Hapus ZIP juga jika ada di parent dir
+    # Also remove the ZIP if present in the parent dir
     local parent; parent="$(dirname "$script_path")"
     rm -f "${parent}/aidipanel-v"*.zip 2>/dev/null || true
-    # Hapus folder installer
+    # Remove the installer folder
     rm -rf "$script_path"
     ok "Installer directory removed: ${script_path}"
   else
@@ -1875,7 +1875,8 @@ main() {
 
   ui_section "Control Plane"; ui_note "Deploying AidiPanel web UI and CLI"; printf '\n'
   t=$SECONDS
-  _install_proftpd;       ui_ok "SFTP (ProFTPD) ready"
+  # SFTP is disabled by default (per-site users are no-login). ProFTPD setup
+  # is retained as _install_proftpd() for a future opt-in SFTP feature.
   _create_panel_user;     ui_ok "System user created: aidipanel"
   _create_panel_scaffold; ui_ok "Panel directory prepared: ${PANEL_DIR}"
   _setup_panel_fpm;       ui_ok "Panel PHP-FPM service: aidipanel-fpm (www-data, transitional)"

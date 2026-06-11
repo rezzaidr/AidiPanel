@@ -11,6 +11,14 @@ PANEL_DIR="/opt/aidipanel"
 PANEL_USER="aidipanel"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Resolve the default PHP version from the installed policy file, fallback 8.4.
+PHP_DEFAULT_VERSION="8.4"
+if [[ -r /etc/aidipanel/php.conf ]]; then
+  # shellcheck source=/dev/null
+  source /etc/aidipanel/php.conf
+fi
+PHP_BIN="php${PHP_DEFAULT_VERSION}"
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'
 YELLOW='\033[1;33m'; BOLD='\033[1m'; RESET='\033[0m'
 
@@ -75,13 +83,13 @@ chmod 770 "${PANEL_DIR}/storage/backups"
 ok "Permissions set"
 
 # --------------------------------------------------------------------------
-# 4. Tulis password hash LANGSUNG ke SQLite (tidak baca file saat runtime)
-#    Ini menghindari permission issues antara root vs www-data
+# 4. Write the password hash directly into SQLite (not read from a file at
+#    runtime). This avoids permission issues between root and www-data.
 # --------------------------------------------------------------------------
 SQLITE_DB="${PANEL_DIR}/storage/db/aidipanel.sqlite"
 
-# Buat SQLite DB schema dulu jika belum ada (jalankan sebagai www-data)
-sudo -u www-data php8.3 -r "
+# Initialize the SQLite DB schema first if absent (run as www-data)
+sudo -u www-data "$PHP_BIN" -r "
 define('PANEL_DIR', '${PANEL_DIR}');
 define('APP_ROOT', '${PANEL_DIR}/app');
 define('PANEL_VERSION', '1.2.0-rc1');
@@ -91,8 +99,8 @@ require '${PANEL_DIR}/app/Core/DB.php';
 echo 'DB initialized' . PHP_EOL;
 " 2>/dev/null || true
 
-# Sekarang tulis password hash langsung via sqlite3 (kita masih root)
-HASH=$(php8.3 -r "echo password_hash('${PANEL_ADMIN_PASS}', PASSWORD_BCRYPT, ['cost'=>12]);")
+# Now write the password hash directly via sqlite3 (still running as root)
+HASH=$("$PHP_BIN" -r "echo password_hash('${PANEL_ADMIN_PASS}', PASSWORD_BCRYPT, ['cost'=>12]);")
 
 if [[ -f "$SQLITE_DB" ]]; then
     sqlite3 "$SQLITE_DB" "
@@ -105,7 +113,7 @@ if [[ -f "$SQLITE_DB" ]]; then
     ok "Admin password written to database"
 else
     warn "SQLite DB not created yet — will be initialized on first page load"
-    warn "After first load, run: sqlite3 ${SQLITE_DB} \"UPDATE users SET password_hash='\$(php8.3 -r \\\"echo password_hash('${PANEL_ADMIN_PASS}', PASSWORD_BCRYPT);\\\")' WHERE username='admin';\""
+    warn "After first load, run: sqlite3 ${SQLITE_DB} \"UPDATE users SET password_hash='\$(${PHP_BIN} -r \\\"echo password_hash('${PANEL_ADMIN_PASS}', PASSWORD_BCRYPT);\\\")' WHERE username='admin';\""
 fi
 
 # --------------------------------------------------------------------------
@@ -132,8 +140,8 @@ case "$cmd" in
   site:add|site:delete|site:list|vhost:save|\
   cache:status|cache:purge|cache:enable|cache:disable|\
   db:add|db:delete|db:list|db:backup|\
-  php:list|php:version|php:restart|\
-  ssl:install|ssl:renew|ssl:status|\
+  php:list|php:version|php:restart|php:install|\
+  ssl:install|ssl:renew|ssl:status|ssl:import|\
   service:status|service:start|service:stop|service:restart|\
   system:info)
     ;;
@@ -171,7 +179,7 @@ visudo -c -f "$SUDOERS_FILE" >> /var/log/aidipanel-install.log 2>&1 \
 # 7. Nginx test & reload
 # --------------------------------------------------------------------------
 # --------------------------------------------------------------------------
-# Update CLI binary juga (bukan hanya panel app)
+# Update the CLI binary too (not just the panel app)
 # --------------------------------------------------------------------------
 SCRIPT_PARENT="$(dirname "$SCRIPT_DIR")"
 if [[ -f "${SCRIPT_PARENT}/aidipanel" ]]; then
