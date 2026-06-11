@@ -28,24 +28,25 @@ class AuthController extends BaseController
             redirect('/login');
         }
 
-        // Brute-force throttle (simple: track failed attempts in session)
-        $attempts = Session::get('_login_attempts', 0);
-        $lastAt   = Session::get('_login_last_attempt', 0);
-
-        if ($attempts >= 5 && (time() - $lastAt) < 300) {
-            flash('error', 'Too many failed attempts. Please wait 5 minutes.');
+        // Brute-force throttle (persistent: per-IP and per-username, in SQLite)
+        $ip = $this->request->ip();
+        $counts = \Core\DB::failedLoginCounts($username, $ip);
+        if ($counts['ip'] >= 5) {
+            flash('error', 'Too many failed attempts from your address. Please wait 5 minutes.');
+            redirect('/login');
+        }
+        if ($counts['user'] >= 10) {
+            flash('error', 'Too many failed attempts for this account. Please wait 15 minutes.');
             redirect('/login');
         }
 
         if (Auth::attempt($username, $password)) {
-            Session::remove('_login_attempts');
-            Session::remove('_login_last_attempt');
+            \Core\DB::clearFailedLogins($ip, $username);
             \Core\DB::log('login', "User {$username} logged in");
             redirect('/dashboard');
         }
 
-        Session::set('_login_attempts', $attempts + 1);
-        Session::set('_login_last_attempt', time());
+        \Core\DB::recordFailedLogin($username, $ip);
         flash('error', 'Invalid username or password.');
         redirect('/login');
     }

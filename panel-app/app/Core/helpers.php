@@ -14,6 +14,28 @@ function e(mixed $value): string
 }
 
 /**
+ * Safe internal redirect target derived from the Referer header.
+ * Returns only a same-origin path (single leading slash). The host is
+ * discarded and leading slashes are collapsed so the result can never be a
+ * protocol-relative URL (//host) that browsers would follow off-site.
+ */
+function safe_back_url(string $fallback = '/dashboard'): string
+{
+    $ref = $_SERVER['HTTP_REFERER'] ?? '';
+    if ($ref === '') {
+        return $fallback;
+    }
+    $path = parse_url($ref, PHP_URL_PATH);
+    if (!is_string($path) || !str_starts_with($path, '/')) {
+        return $fallback;
+    }
+    // Collapse leading slashes so "//evil.com" cannot become a protocol-relative URL.
+    $path = '/' . ltrim($path, '/');
+    $query = parse_url($ref, PHP_URL_QUERY);
+    return is_string($query) && $query !== '' ? $path . '?' . $query : $path;
+}
+
+/**
  * Active UI locale. Defaults to English; PANEL_LOCALE may be defined in the
  * bootstrap (later: read from panel settings / user preference).
  */

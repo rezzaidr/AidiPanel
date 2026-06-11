@@ -40,19 +40,18 @@ abstract class BaseController
 
     protected function back(): never
     {
-        $ref = $_SERVER['HTTP_REFERER'] ?? '/dashboard';
-        redirect($ref);
+        redirect(safe_back_url());
     }
 
     protected function success(string $message, string $redirect = ''): never
     {
         flash('success', $message);
-        redirect($redirect ?: ($_SERVER['HTTP_REFERER'] ?? '/dashboard'));
+        redirect($redirect ?: safe_back_url());
     }
 
     protected function error(string $message, string $redirect = ''): never
     {
         flash('error', $message);
-        redirect($redirect ?: ($_SERVER['HTTP_REFERER'] ?? '/dashboard'));
+        redirect($redirect ?: safe_back_url());
     }
 }

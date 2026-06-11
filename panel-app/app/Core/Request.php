@@ -45,15 +45,22 @@ class Request
 
     public function ip(): string
     {
-        $forwardedFor = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? '';
-        if ($forwardedFor !== '') {
-            $firstIp = trim(explode(',', $forwardedFor)[0]);
-            if (filter_var($firstIp, FILTER_VALIDATE_IP)) {
-                return $firstIp;
+        $remote = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+
+        // Only trust X-Forwarded-For when the immediate peer is a trusted proxy
+        // (the panel sits behind the local Nginx on the same host).
+        $trustedProxies = ['127.0.0.1', '::1'];
+        if (in_array($remote, $trustedProxies, true)) {
+            $forwardedFor = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? '';
+            if ($forwardedFor !== '') {
+                $firstIp = trim(explode(',', $forwardedFor)[0]);
+                if (filter_var($firstIp, FILTER_VALIDATE_IP)) {
+                    return $firstIp;
+                }
             }
         }
 
-        return $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+        return $remote;
     }
 
     private function jsonBody(): array

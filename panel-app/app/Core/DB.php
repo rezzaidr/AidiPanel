@@ -59,7 +59,7 @@ class DB
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
                 domain        TEXT    NOT NULL UNIQUE,
                 type          TEXT    NOT NULL DEFAULT 'php',
-                php_version   TEXT    NOT NULL DEFAULT '8.3',
+                php_version   TEXT    NOT NULL DEFAULT '8.4',
                 webroot       TEXT    NOT NULL,
                 site_user     TEXT,
                 ssl_type      TEXT    NOT NULL DEFAULT 'self-signed',
@@ -80,6 +80,16 @@ class DB
                 key   TEXT PRIMARY KEY,
                 value TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS failed_logins (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                username     TEXT,
+                ip           TEXT,
+                attempted_at INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_failed_logins_ip ON failed_logins(ip, attempted_at);
+            CREATE INDEX IF NOT EXISTS idx_failed_logins_user ON failed_logins(username, attempted_at);
 
             CREATE TABLE IF NOT EXISTS metrics (
                 ts     INTEGER PRIMARY KEY,   -- unix epoch (one sample per minute via cron)
@@ -169,5 +179,46 @@ class DB
             'INSERT INTO activity_log (user_id, action, detail, ip) VALUES (?, ?, ?, ?)',
             [$userId, $action, $detail, $ip]
         );
+    }
+
+    /**
+     * Count recent failed logins for an IP and a username within their windows.
+     * Returns ['ip' => int, 'user' => int].
+     */
+    public static function failedLoginCounts(string $username, string $ip): array
+    {
+        $db  = self::instance();
+        $now = time();
+        $ipCount = (int) $db->value(
+            'SELECT COUNT(*) FROM failed_logins WHERE ip = ? AND attempted_at > ?',
+            [$ip, $now - 300]            // 5 minutes
+        );
+        $userCount = (int) $db->value(
+            'SELECT COUNT(*) FROM failed_logins WHERE username = ? AND attempted_at > ?',
+            [$username, $now - 900]      // 15 minutes
+        );
+        return ['ip' => $ipCount, 'user' => $userCount];
+    }
+
+    /** Record one failed login attempt (and prune old rows). */
+    public static function recordFailedLogin(string $username, string $ip): void
+    {
+        $db = self::instance();
+        $db->run(
+            'INSERT INTO failed_logins (username, ip, attempted_at) VALUES (?, ?, ?)',
+            [$username, $ip, time()]
+        );
+        $db->run('DELETE FROM failed_logins WHERE attempted_at < ?', [time() - 900]);
+    }
+
+    /** Clear an IP's (and optionally a username's) failed attempts; prune old rows. */
+    public static function clearFailedLogins(string $ip, string $username = ''): void
+    {
+        $db = self::instance();
+        $db->run('DELETE FROM failed_logins WHERE ip = ?', [$ip]);
+        if ($username !== '') {
+            $db->run('DELETE FROM failed_logins WHERE username = ?', [$username]);
+        }
+        $db->run('DELETE FROM failed_logins WHERE attempted_at < ?', [time() - 900]);
     }
 }
