@@ -1,4 +1,4 @@
-# AidiPanel Web Panel App v1.2.0
+# AidiPanel Web Panel App
 
 This is the web panel application for AidiPanel. It is deployed automatically by `install.sh`.
 

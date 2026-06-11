@@ -6,7 +6,7 @@
   <title>AidiPanel — Nginx Server Panel with FastCGI Cache</title>
   <meta name="description" content="A free, lightweight server control panel built on Nginx + FastCGI Cache + PHP-FPM + Redis. Install in minutes via SSH.">
   <meta property="og:title" content="AidiPanel — Nginx Server Panel">
-  <meta property="og:description" content="Lighter than CloudPanel. No Varnish. Pure Nginx FastCGI Cache.">
+  <meta property="og:description" content="A lightweight Nginx control panel with built-in FastCGI Cache, per-site isolation, and Redis.">
   <meta property="og:url" content="https://rezzaid.github.io/aidipanel">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -659,8 +659,8 @@
       <li><a href="#architecture">Architecture</a></li>
       <li><a href="#install">Install</a></li>
       <li><a href="#cli">CLI</a></li>
-      <li><a href="https://github.com/rezzaid/aidipanel" target="_blank">GitHub</a></li>
-      <li><a href="https://github.com/rezzaid/aidipanel/tree/main/docs" class="nav-cta">Docs →</a></li>
+      <li><a href="https://github.com/rezzaidr/aidipanel" target="_blank">GitHub</a></li>
+      <li><a href="https://github.com/rezzaidr/aidipanel/tree/master/docs" class="nav-cta">Docs →</a></li>
     </ul>
   </div>
 </nav>
@@ -674,18 +674,18 @@
     </div>
 
     <h1>
-      Server panel.<br>
-      <span class="accent">No Varnish.</span><br>
-      Pure FastCGI.
+      Nginx panel.<br>
+      <span class="accent">FastCGI Cache</span><br>
+      built in.
     </h1>
 
     <p class="hero-sub">
-      A lightweight Nginx control panel with <strong>FastCGI Cache + Redis</strong>.<br>
-      Simpler stack, fewer services, faster response.
+      A lightweight server control panel on <strong>Nginx + PHP-FPM + Redis</strong>.<br>
+      Per-site isolation, page caching inside Nginx, fast by default.
     </p>
 
     <div class="hero-actions">
-      <a href="https://github.com/rezzaid/aidipanel" class="btn btn-primary" target="_blank">
+      <a href="https://github.com/rezzaidr/aidipanel" class="btn btn-primary" target="_blank">
         ★ GitHub
       </a>
       <a href="#install" class="btn btn-ghost">
@@ -707,53 +707,50 @@
 <section class="arch-section" id="architecture">
   <div class="container">
     <div class="section-label">// architecture</div>
-    <h2 class="section-title">One less service.<br>Zero compromise.</h2>
-    <p class="section-desc">CloudPanel routes traffic through Varnish before Nginx. AidiPanel removes that layer entirely — FastCGI Cache lives inside Nginx itself.</p>
+    <h2 class="section-title">Caching inside Nginx.<br>Isolation per site.</h2>
+    <p class="section-desc">Page caching is handled by Nginx FastCGI Cache — no separate caching daemon to run. Each site gets its own Linux user and PHP-FPM pool, so sites stay isolated from one another.</p>
 
     <div class="arch-grid">
       <div>
         <div class="arch-vs">
-          <span class="arch-vs-badge badge-old">CloudPanel</span>
+          <span class="arch-vs-badge badge-new">Request flow</span>
         </div>
         <div class="arch-diagram">
-          <div class="arch-title">Request flow</div>
+          <div class="arch-title">A page request</div>
           <div class="arch-flow">
             <div class="arch-node"><span class="arch-dot" style="background:#6B7280"></span>Browser</div>
             <div class="arch-arrow">↓</div>
-            <div class="arch-node"><span class="arch-dot" style="background:#3B82F6"></span>Nginx (port 80)</div>
+            <div class="arch-node highlight"><span class="arch-dot" style="background:var(--brand)"></span>Nginx + FastCGI Cache ← hit? serve instantly</div>
+            <div class="arch-arrow">↓ miss only</div>
+            <div class="arch-node"><span class="arch-dot" style="background:#8B5CF6"></span>PHP-FPM (per-site pool)</div>
             <div class="arch-arrow">↓</div>
-            <div class="arch-node" style="color:var(--amber)"><span class="arch-dot" style="background:var(--amber)"></span>Varnish (extra service)</div>
-            <div class="arch-arrow">↓</div>
-            <div class="arch-node"><span class="arch-dot" style="background:#8B5CF6"></span>PHP-FPM</div>
-            <div class="arch-arrow">↓</div>
-            <div class="arch-node"><span class="arch-dot" style="background:#F59E0B"></span>MySQL + Redis</div>
+            <div class="arch-node"><span class="arch-dot" style="background:#F59E0B"></span>MariaDB + Redis</div>
           </div>
         </div>
       </div>
 
       <div>
         <div class="arch-vs">
-          <span class="arch-vs-badge badge-new">AidiPanel</span>
+          <span class="arch-vs-badge badge-new">Per-site isolation</span>
         </div>
         <div class="arch-diagram">
-          <div class="arch-title">Request flow</div>
+          <div class="arch-title">How sites are kept apart</div>
           <div class="arch-flow">
-            <div class="arch-node"><span class="arch-dot" style="background:#6B7280"></span>Browser</div>
-            <div class="arch-arrow">↓</div>
-            <div class="arch-node highlight"><span class="arch-dot" style="background:var(--brand)"></span>Nginx + FastCGI Cache ← hit? serve instantly</div>
-            <div class="arch-arrow">↓ miss only</div>
-            <div class="arch-node"><span class="arch-dot" style="background:#8B5CF6"></span>PHP-FPM</div>
-            <div class="arch-arrow">↓</div>
-            <div class="arch-node"><span class="arch-dot" style="background:#F59E0B"></span>MariaDB + Redis</div>
+            <div class="arch-node"><span class="arch-dot" style="background:var(--brand)"></span>example.com → user <span style="color:#A5A0FF">example</span></div>
+            <div class="arch-node" style="padding-left:30px"><span class="arch-dot" style="background:#3B82F6"></span>/home/example/htdocs/example.com</div>
+            <div class="arch-node" style="padding-left:30px"><span class="arch-dot" style="background:#8B5CF6"></span>own PHP-FPM pool (runs as example)</div>
+            <div class="arch-arrow">—</div>
+            <div class="arch-node"><span class="arch-dot" style="background:var(--green)"></span>shop.com → user <span style="color:#A5A0FF">shop</span></div>
+            <div class="arch-node" style="padding-left:30px"><span class="arch-dot" style="background:#3B82F6"></span>/home/shop/htdocs/shop.com</div>
+            <div class="arch-node" style="padding-left:30px"><span class="arch-dot" style="background:#8B5CF6"></span>own PHP-FPM pool (runs as shop)</div>
           </div>
         </div>
 
         <div class="arch-compare-text">
-          <span class="good">✓</span> No Varnish daemon to manage<br>
+          <span class="good">✓</span> Page caching inside Nginx — no extra daemon<br>
           <span class="good">✓</span> Cache config is standard Nginx directives<br>
-          <span class="good">✓</span> Lower RAM usage (~50MB saved)<br>
-          <span class="good">✓</span> Simpler troubleshooting<br>
-          <span class="good">✓</span> Redis still handles object cache
+          <span class="good">✓</span> One Linux user + PHP-FPM pool per site<br>
+          <span class="good">✓</span> Redis handles object cache &amp; sessions
         </div>
       </div>
     </div>
@@ -782,7 +779,7 @@
       <div class="feat-card">
         <div class="feat-icon" style="background:rgba(139,92,246,0.1)">🐘</div>
         <div class="feat-name">Multi-PHP</div>
-        <div class="feat-desc">PHP 8.1, 8.2, and 8.3 installed simultaneously. Switch per site from the panel or CLI in seconds.</div>
+        <div class="feat-desc">PHP 8.4 by default, with 8.2 / 8.3 / 8.4 / 8.5 available on-demand. Switch per site from the panel or CLI in seconds.</div>
       </div>
       <div class="feat-card">
         <div class="feat-icon" style="background:rgba(245,158,11,0.1)">🗄️</div>
@@ -807,7 +804,7 @@
       <div class="feat-card">
         <div class="feat-icon" style="background:rgba(20,184,166,0.1)">⌨️</div>
         <div class="feat-name">CLI Tool</div>
-        <div class="feat-desc">25 commands to manage sites, cache, databases, PHP, SSL, services, and users from SSH.</div>
+        <div class="feat-desc">30+ commands to manage sites, cache, databases, PHP, SSL, services, and users from SSH.</div>
       </div>
       <div class="feat-card">
         <div class="feat-icon" style="background:rgba(249,115,22,0.1)">💾</div>
@@ -891,8 +888,8 @@ https://&lt;your-server-ip&gt;:8443
         <div class="step-title">Add your first site</div>
         <pre class="step-code">aidipanel site:add \
   --domain example.com \
-  --type wordpress \
-  --php 8.3</pre>
+  --user example \
+  --type wordpress</pre>
         <div class="step-note">Then install SSL: <code style="color:var(--brand)">aidipanel ssl:install --domain example.com</code></div>
       </div>
     </div>
@@ -906,7 +903,7 @@ https://&lt;your-server-ip&gt;:8443
   <div class="container">
     <div class="section-label">// cli tool</div>
     <h2 class="section-title">Manage everything<br>from SSH.</h2>
-    <p class="section-desc">25 commands covering sites, cache, databases, PHP, SSL, services, and users.</p>
+    <p class="section-desc">30+ commands covering sites, cache, databases, PHP, SSL, services, and users.</p>
 
     <div class="cli-window">
       <div class="cli-titlebar">
@@ -916,12 +913,12 @@ https://&lt;your-server-ip&gt;:8443
         <span class="cli-title">root@vps-prod-01 ~</span>
       </div>
       <div class="cli-body">
-<span class="cli-prompt">$</span> <span class="cli-cmd">aidipanel site:add --domain tokoonline.id --type wordpress --php 8.3</span>
+<span class="cli-prompt">$</span> <span class="cli-cmd">aidipanel site:add --domain tokoonline.id --user tokoonline --type wordpress</span>
 <span class="cli-ok">[OK]    Site created: tokoonline.id</span>
 <span class="cli-out">        Domain:   tokoonline.id</span>
 <span class="cli-out">        Type:     wordpress</span>
-<span class="cli-out">        PHP:      8.3</span>
-<span class="cli-out">        Webroot:  /var/www/tokoonline.id/htdocs</span>
+<span class="cli-out">        PHP:      8.4</span>
+<span class="cli-out">        Webroot:  /home/tokoonline/htdocs/tokoonline.id</span>
 
 <span class="cli-prompt">$</span> <span class="cli-cmd">aidipanel ssl:install --domain <span class="cli-domain">tokoonline.id</span> --email admin@tokoonline.id</span>
 <span class="cli-ok">[OK]    SSL certificate installed for: tokoonline.id</span>
@@ -940,7 +937,7 @@ https://&lt;your-server-ip&gt;:8443
 <span class="cli-out">  nginx          <span class="cli-ok">● running</span></span>
 <span class="cli-out">  mariadb        <span class="cli-ok">● running</span></span>
 <span class="cli-out">  redis-server   <span class="cli-ok">● running</span></span>
-<span class="cli-out">  php8.3-fpm     <span class="cli-ok">● running</span></span>
+<span class="cli-out">  php8.4-fpm     <span class="cli-ok">● running</span></span>
       </div>
     </div>
   </div>
@@ -953,10 +950,10 @@ https://&lt;your-server-ip&gt;:8443
       <h2>Ready to install?</h2>
       <p>Fresh VPS → working panel → your first WordPress site in under 15 minutes.</p>
       <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
-        <a href="https://github.com/rezzaid/aidipanel" class="btn btn-primary" target="_blank">
+        <a href="https://github.com/rezzaidr/aidipanel" class="btn btn-primary" target="_blank">
           ★ Star on GitHub
         </a>
-        <a href="https://github.com/rezzaid/aidipanel/tree/main/docs" class="btn btn-ghost" target="_blank">
+        <a href="https://github.com/rezzaidr/aidipanel/tree/master/docs" class="btn btn-ghost" target="_blank">
           Read the Docs →
         </a>
       </div>
@@ -968,14 +965,14 @@ https://&lt;your-server-ip&gt;:8443
 <footer>
   <div class="footer-inner">
     <div class="footer-left">
-      © 2026 <a href="https://github.com/rezzaid" style="color:inherit;text-decoration:none">rezzaid</a>
+      © 2026 <a href="https://github.com/rezzaidr" style="color:inherit;text-decoration:none">rezzaid</a>
       · AidiPanel is MIT licensed
     </div>
     <ul class="footer-links">
-      <li><a href="https://github.com/rezzaid/aidipanel" target="_blank">GitHub</a></li>
-      <li><a href="https://github.com/rezzaid/aidipanel/tree/main/docs" target="_blank">Docs</a></li>
-      <li><a href="https://github.com/rezzaid/aidipanel/issues" target="_blank">Issues</a></li>
-      <li><a href="https://github.com/rezzaid/aidipanel/releases" target="_blank">Releases</a></li>
+      <li><a href="https://github.com/rezzaidr/aidipanel" target="_blank">GitHub</a></li>
+      <li><a href="https://github.com/rezzaidr/aidipanel/tree/master/docs" target="_blank">Docs</a></li>
+      <li><a href="https://github.com/rezzaidr/aidipanel/issues" target="_blank">Issues</a></li>
+      <li><a href="https://github.com/rezzaidr/aidipanel/releases" target="_blank">Releases</a></li>
     </ul>
   </div>
 </footer>

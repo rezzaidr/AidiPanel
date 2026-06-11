@@ -1,8 +1,6 @@
 # FastCGI Cache Guide
 
-> **by rezzaid** — AidiPanel v1.2.0
-
-AidiPanel uses **Nginx FastCGI Cache** — a built-in Nginx feature that caches PHP responses as files on disk. This eliminates the need for Varnish while achieving equivalent (often better) performance.
+AidiPanel uses **Nginx FastCGI Cache** — a built-in Nginx feature that caches PHP responses as files on disk, so a separate caching daemon is not needed.
 
 ---
 
@@ -122,7 +120,7 @@ aidipanel cache:enable --domain example.com
 ## Managing Cache via Web Panel
 
 1. Log into the panel at `https://<server-ip>:8443`
-2. Go to **Cache** in the sidebar
+2. Go to **Cache** in the panel
 3. View hit rate, total cached files, and per-domain status
 4. Use **Purge** to clear cache for a domain or all domains
 

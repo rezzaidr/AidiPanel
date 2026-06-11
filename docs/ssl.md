@@ -1,7 +1,5 @@
 # SSL / TLS Guide
 
-> **by rezzaid** — AidiPanel v1.2.0
-
 AidiPanel uses **Let's Encrypt** (via Certbot) for free SSL certificates with automatic renewal.
 
 ---
@@ -54,7 +52,7 @@ This:
 
 ### Via Web Panel
 
-1. Go to **SSL** in the sidebar
+1. Go to **SSL** in the panel
 2. Select your domain
 3. Enter your email
 4. Click **Install Certificate**

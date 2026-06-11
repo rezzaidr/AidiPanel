@@ -1,17 +1,6 @@
 # AidiPanel CLI Reference
 
-> **by rezzaid** — AidiPanel v1.2.0
-
-The `aidipanel` CLI lets you manage your entire server stack from SSH — no web UI needed.
-
-## Installation
-
-The CLI is installed automatically by `install.sh`. To install manually:
-
-```bash
-cp aidipanel /usr/local/bin/aidipanel
-chmod +x /usr/local/bin/aidipanel
-```
+The `aidipanel` CLI manages the entire server stack from SSH.
 
 ## Usage
 
@@ -19,59 +8,41 @@ chmod +x /usr/local/bin/aidipanel
 aidipanel <command> [options]
 ```
 
+The CLI is installed automatically by `install.sh` at `/usr/local/bin/aidipanel`.
+
 ---
 
 ## Site Management
 
 ### `site:add`
 
-Add a new website/domain.
+Add a new site with a dedicated Linux user and per-site PHP-FPM pool.
 
 ```bash
-aidipanel site:add --domain example.com --type wordpress --php 8.3
+aidipanel site:add --domain example.com --user example --type wordpress
 ```
-
-**Options:**
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--domain` | *(required)* | Domain name |
-| `--type` | `php` | Site type: `wordpress`, `laravel`, `php`, `static`, `proxy` |
-| `--php` | `8.3` | PHP version: `8.1`, `8.2`, `8.3` |
+| `--user` | *(derived from domain)* | Dedicated no-login Linux user for the site |
+| `--type` | `php` | `wordpress`, `laravel`, `php`, `static`, `proxy` |
+| `--php` | `8.4` | PHP version (must be installed) |
 
-**What it does:**
-- Creates `/var/www/<domain>/htdocs/`
-- Generates Nginx vhost with FastCGI cache directives disabled by default
-- Leaves cache off until the user enables it per domain
-- Registers site in the panel database
-
----
+Creates `/home/<user>/htdocs/<domain>`, a PHP-FPM pool running as `<user>`, and the Nginx vhost. The default PHP version (8.4) is used when `--php` is omitted.
 
 ### `site:delete`
-
-Delete a site and optionally its files.
 
 ```bash
 aidipanel site:delete --domain example.com
 ```
 
----
+CLI default keeps the site's home directory. Add `--purge --yes --user <user>` to also remove the Linux user and home (guarded by the `.aidipanel-managed` marker).
 
-### `site:list`
-
-List all managed sites.
+### `site:list` / `site:info`
 
 ```bash
 aidipanel site:list
-```
-
----
-
-### `site:info`
-
-Show detailed info for a site.
-
-```bash
 aidipanel site:info --domain example.com
 ```
 
@@ -79,34 +50,13 @@ aidipanel site:info --domain example.com
 
 ## Cache Management
 
-AidiPanel uses **Nginx FastCGI Cache** — no Varnish, no Redis for page caching.
-
-### `cache:status`
-
-Show cache zone stats and per-domain status.
+AidiPanel uses **Nginx FastCGI Cache**. Caching is off by default per site and enabled explicitly.
 
 ```bash
 aidipanel cache:status
-```
-
-### `cache:purge`
-
-Purge cache for all sites or a specific domain.
-
-```bash
-# Purge all
-aidipanel cache:purge
-
-# Purge one domain
-aidipanel cache:purge --domain example.com
-```
-
-### `cache:enable` / `cache:disable`
-
-Toggle FastCGI cache for a specific domain.
-
-```bash
-aidipanel cache:enable  --domain example.com
+aidipanel cache:purge                      # purge all
+aidipanel cache:purge  --domain example.com
+aidipanel cache:enable --domain example.com
 aidipanel cache:disable --domain example.com
 
 # Optional WordPress helper plugins when enabling cache
@@ -117,35 +67,10 @@ aidipanel cache:enable --domain example.com --install-nginx-helper --install-red
 
 ## Database Management
 
-### `db:add`
-
-Create a new database and user.
-
 ```bash
-aidipanel db:add --name mydb --user myuser
-```
-
-### `db:delete`
-
-Delete a database and its user.
-
-```bash
+aidipanel db:add    --name mydb --user myuser
 aidipanel db:delete --name mydb
-```
-
-### `db:list`
-
-List all databases (excluding system DBs).
-
-```bash
 aidipanel db:list
-```
-
-### `db:backup`
-
-Backup a database to a `.sql.gz` file.
-
-```bash
 aidipanel db:backup --name mydb
 # Output: /opt/aidipanel/storage/backups/mydb-<timestamp>.sql.gz
 ```
@@ -154,166 +79,89 @@ aidipanel db:backup --name mydb
 
 ## PHP Management
 
-### `php:list`
+PHP 8.4 is installed by default. 8.2, 8.3, and 8.5 are available on-demand.
 
-List installed PHP versions and their FPM status.
+### `php:list`
 
 ```bash
 aidipanel php:list
 ```
 
+Shows each available version with its status (installed / default / available).
+
+### `php:install`
+
+Install an available version on-demand.
+
+```bash
+aidipanel php:install --version 8.5
+```
+
 ### `php:version`
 
-Get or set PHP version for a domain.
+Get or set the PHP version for a domain (the version must already be installed).
 
 ```bash
-# Get
 aidipanel php:version --domain example.com
-
-# Set
-aidipanel php:version --domain example.com --php 8.2
+aidipanel php:version --domain example.com --set 8.3
 ```
 
-### `php:restart`
-
-Restart PHP-FPM for all or a specific version.
+### `php:restart` / `php:info`
 
 ```bash
-# All versions
-aidipanel php:restart
-
-# Specific version
-aidipanel php:restart --version 8.3
-```
-
-### `php:info`
-
-Show PHP info for a version.
-
-```bash
-aidipanel php:info --version 8.3
+aidipanel php:restart                 # all installed versions
+aidipanel php:restart --version 8.4   # one version
+aidipanel php:info    --version 8.4
 ```
 
 ---
 
 ## SSL / TLS Management
 
-See [ssl.md](ssl.md) for full SSL documentation.
-
-### `ssl:install`
-
-Install a Let's Encrypt certificate.
+See [ssl.md](ssl.md) for full documentation.
 
 ```bash
 aidipanel ssl:install --domain example.com --email admin@example.com
-```
-
-### `ssl:renew`
-
-Renew certificates.
-
-```bash
 aidipanel ssl:renew
-```
-
-### `ssl:status`
-
-Show certificate expiry status for all domains.
-
-```bash
 aidipanel ssl:status
+aidipanel ssl:import  --domain example.com   # import an existing cert
 ```
 
 ---
 
 ## Service Management
 
-### `service:status`
-
-Show status of all AidiPanel services.
-
 ```bash
 aidipanel service:status
-```
-
-### `service:restart` / `service:start` / `service:stop`
-
-Manage individual services.
-
-```bash
 aidipanel service:restart nginx
-aidipanel service:restart php8.3-fpm
+aidipanel service:restart php8.4-fpm
 aidipanel service:restart redis
 aidipanel service:restart mariadb
+aidipanel service:reload  nginx
+aidipanel service:start   <service>
+aidipanel service:stop    <service>
 ```
+
+The `php` alias resolves to the default PHP version's FPM service.
 
 ---
 
 ## User Management
 
-### `user:add`
-
-Add a system user for SSH/SFTP access.
+> Site users are created and managed automatically by `site:add` / `site:delete` as no-login accounts. The `user:*` commands are low-level helpers for managing those system accounts directly; most workflows do not need them.
 
 ```bash
-aidipanel user:add --user john --domain example.com
-```
-
-### `user:delete`
-
-Delete a system user.
-
-```bash
-aidipanel user:delete --user john
-```
-
-### `user:list`
-
-List all site users.
-
-```bash
-aidipanel user:list
-```
-
-### `user:passwd`
-
-Change or reset user password.
-
-```bash
-# Generate random password
-aidipanel user:passwd --user john
-
-# Set specific password
-aidipanel user:passwd --user john --pass NewPass123
+aidipanel user:list                       # list managed site users
+aidipanel user:delete --user example
 ```
 
 ---
 
 ## System
 
-### `system:info`
-
-Show server and panel information.
-
 ```bash
 aidipanel system:info
-```
-
-### `log:tail`
-
-Tail Nginx or PHP logs.
-
-```bash
-aidipanel log:tail --domain example.com --type access
-aidipanel log:tail --domain example.com --type error
-aidipanel log:tail --domain example.com --type php
-```
-
-### `self:update`
-
-Update the AidiPanel CLI to latest version.
-
-```bash
+aidipanel log:tail --domain example.com --type access   # access | error | php
 aidipanel self:update
 ```
 
@@ -322,12 +170,12 @@ aidipanel self:update
 ## Quick Reference
 
 ```
-SITE     site:add  site:delete  site:list  site:info
+SITE     site:add  site:delete  site:list  site:info  vhost:save
 CACHE    cache:status  cache:purge  cache:enable  cache:disable
 DB       db:add  db:delete  db:list  db:backup
-PHP      php:list  php:version  php:restart  php:info
-SSL      ssl:install  ssl:renew  ssl:status
-SERVICE  service:status  service:restart  service:start  service:stop
-USER     user:add  user:delete  user:list  user:passwd
+PHP      php:install  php:list  php:version  php:restart  php:info
+SSL      ssl:install  ssl:renew  ssl:status  ssl:import
+SERVICE  service:status  service:restart  service:reload  service:start  service:stop
+USER     user:list  user:delete
 SYSTEM   system:info  log:tail  self:update
 ```
