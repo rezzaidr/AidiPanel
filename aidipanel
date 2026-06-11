@@ -363,7 +363,7 @@ _usage() {
 
   echo -e "\n${BOLD}${BLUE}Database Management${RESET}"
   echo "  db:add          Create a new database and user"
-  echo "  db:delete       Delete a database and its user"
+  echo "  db:delete       Delete a database and its user (--name; optional --user)"
   echo "  db:list         List all databases"
   echo "  db:backup       Backup a database to file"
 
@@ -928,10 +928,25 @@ _cache_status() {
 _cache_purge_domain() {
   local domain="$1"
   local cache_path="${NGINX_CACHE_DIR}"
-  if [[ -d "$cache_path" ]]; then
-    find "$cache_path" -type f -delete 2>/dev/null || true
-    ok "Cache purged for: ${domain} (all zones cleared)"
+  [[ -d "$cache_path" ]] || { warn "Cache directory not found: ${cache_path}"; return 0; }
+
+  # FastCGI cache files store their key (e.g. "KEY: httpsGET<host>/uri").
+  # Match files whose KEY line contains this host and delete only those, so one
+  # site can be purged without flushing the shared cache. Dots are escaped and
+  # the host is anchored to the URI's leading "/" (or end-of-line) so that
+  # "site.com" does not also match "siteXcom" or "site.com.au".
+  local escaped="${domain//./\\.}"
+  local matches; matches=$(grep -rlE "^KEY: .*${escaped}(/|\$)" "$cache_path" 2>/dev/null || true)
+  if [[ -z "$matches" ]]; then
+    ok "No cached entries for: ${domain}"
+    return 0
   fi
+  local count=0
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    rm -f "$f" && count=$((count + 1))
+  done <<< "$matches"
+  ok "Purged ${count} cached entries for: ${domain}"
 }
 
 _cache_purge() {
@@ -1099,17 +1114,20 @@ _db_delete() {
   _require_root "db:delete"
   _parse_opts "$@"
   local db_name; db_name=$(_opt "name")
-  _require_arg "name" "$db_name" "db:delete --name mydb"
+  _require_arg "name" "$db_name" "db:delete --name mydb [--user myuser]"
   [[ "$db_name" =~ ^[a-zA-Z0-9_]+$ ]] \
     || die "Database name must contain only letters, numbers, underscores"
+  local db_user; db_user=$(_opt "user" "$db_name")
+  [[ "$db_user" =~ ^[a-zA-Z0-9_]+$ ]] \
+    || die "Database user must contain only letters, numbers, underscores"
   local force; force=$(_opt "force" "false")
 
-  [[ "$force" == "true" ]] || _confirm "Delete database '${db_name}' and its user '${db_name}'?" || { log "Cancelled."; return 0; }
+  [[ "$force" == "true" ]] || _confirm "Delete database '${db_name}' and its user '${db_user}'?" || { log "Cancelled."; return 0; }
 
   _mysql_exec "DROP DATABASE IF EXISTS \`${db_name}\`;"
-  _mysql_exec "DROP USER IF EXISTS '${db_name}'@'localhost';"
+  _mysql_exec "DROP USER IF EXISTS '${db_user}'@'localhost';"
   _mysql_exec "FLUSH PRIVILEGES;"
-  ok "Database deleted: ${db_name}"
+  ok "Database deleted: ${db_name} (user: ${db_user})"
 }
 
 _db_list() {
@@ -1778,7 +1796,13 @@ _log_tail() {
 _self_update() {
   _require_root "self:update"
   log "Checking for AidiPanel CLI updates..."
-  local install_url="https://raw.githubusercontent.com/aidipanel/aidipanel/main/aidipanel"
+  local install_url="https://raw.githubusercontent.com/rezzaidr/AidiPanel/master/aidipanel"
+  # Optional override: /etc/aidipanel/update.conf may set UPDATE_URL=...
+  if [[ -r /etc/aidipanel/update.conf ]]; then
+    # shellcheck disable=SC1091
+    source /etc/aidipanel/update.conf
+    [[ -n "${UPDATE_URL:-}" ]] && install_url="$UPDATE_URL"
+  fi
   local tmp_file; tmp_file=$(mktemp /tmp/aidipanel-cli.XXXXXX)
 
   curl -fsSL "$install_url" -o "$tmp_file" 2>/dev/null \
