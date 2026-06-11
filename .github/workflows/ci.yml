@@ -22,6 +22,9 @@ jobs:
       - name: Lint aidipanel CLI
         run: shellcheck -S warning aidipanel
 
+      - name: Lint deploy-panel.sh
+        run: shellcheck -S warning panel-app/deploy-panel.sh
+
       - name: Check bash syntax — install.sh
         run: bash -n install.sh
 
@@ -43,7 +46,7 @@ jobs:
           php-version: '8.4'
 
       - name: PHP syntax check (all files)
-        run: find panel-app -name "*.php" -exec php -l {} \; | grep -v "No syntax errors" || true
+        run: find panel-app -name "*.php" -print0 | xargs -0 -n1 php -l
 
   release:
     name: Create Release Archive
