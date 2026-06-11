@@ -7,7 +7,7 @@ AidiPanel is a server control panel for Ubuntu/Debian VPS, built on Nginx + Fast
 ## Quick Install
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/rezzaidr/aidipanel/master/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/rezzaidr/AidiPanel/master/install.sh)
 ```
 
 One command installs the full stack **and** deploys the web panel. A random admin password is printed at the end and saved to `/opt/aidipanel/credentials.conf`.

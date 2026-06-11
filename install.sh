@@ -5,7 +5,7 @@
 #  Supported OS: Debian 11/12, Ubuntu 22.04/24.04 (x86_64 & arm64)
 #
 #  One-command install (installs stack + deploys panel app automatically):
-#    bash <(curl -fsSL https://raw.githubusercontent.com/rezzaidr/aidipanel/master/install.sh)
+#    bash <(curl -fsSL https://raw.githubusercontent.com/rezzaidr/AidiPanel/master/install.sh)
 #
 #  Options:
 #    --port PORT           Panel HTTPS port (default: 8443)
@@ -1408,7 +1408,7 @@ _install_cli() {
     # Download from GitHub
     log "Downloading AidiPanel CLI from GitHub..."
     cli_src="/tmp/aidipanel-cli-$$"
-    curl -fsSL "https://raw.githubusercontent.com/rezzaidr/aidipanel/master/aidipanel" \
+    curl -fsSL "https://raw.githubusercontent.com/rezzaidr/AidiPanel/master/aidipanel" \
       -o "$cli_src" 2>>"$PANEL_LOG" || { warn "Could not download CLI — install manually"; return 0; }
   fi
 
@@ -1444,7 +1444,7 @@ _deploy_panel_app() {
   local tmp_dir downloaded_app
   tmp_dir="$(mktemp -d)"
   curl -fsSL --retry 3 --connect-timeout 15 \
-    "https://github.com/rezzaidr/aidipanel/archive/refs/heads/master.tar.gz" \
+    "https://github.com/rezzaidr/AidiPanel/archive/refs/heads/master.tar.gz" \
     -o "${tmp_dir}/aidipanel.tar.gz" \
     || { rm -rf "$tmp_dir"; die "Failed to download AidiPanel repository archive."; }
   tar -xzf "${tmp_dir}/aidipanel.tar.gz" -C "$tmp_dir" \

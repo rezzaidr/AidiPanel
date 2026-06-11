@@ -15,7 +15,7 @@
 ## One-Command Install
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/rezzaidr/aidipanel/master/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/rezzaidr/AidiPanel/master/install.sh)
 ```
 
 This installs the full stack and deploys the web panel automatically:
