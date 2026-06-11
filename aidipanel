@@ -769,7 +769,6 @@ _site_delete() {
 
 _site_list() {
   _parse_opts "$@"
-  local sites=()
   local found=0
 
   echo ""
@@ -861,7 +860,7 @@ _vhost_save() {
   [[ -f "$src_file" && -s "$src_file" && -r "$src_file" ]] || die "Config file is not readable: ${src_file}"
 
   local conf="${NGINX_CONF_DIR}/${domain}.conf"
-  local backup="${conf}.bak.$(date +%Y%m%d%H%M%S)"
+  local backup; backup="${conf}.bak.$(date +%Y%m%d%H%M%S)"
   cp -p "$conf" "$backup"
 
   cp "$src_file" "$conf"
@@ -1148,7 +1147,7 @@ _db_backup() {
   _load_credentials
   mkdir -p "$output_dir"
 
-  local backup_file="${output_dir}/${db_name}_$(date +%Y%m%d_%H%M%S).sql.gz"
+  local backup_file; backup_file="${output_dir}/${db_name}_$(date +%Y%m%d_%H%M%S).sql.gz"
   log "Backing up database: ${db_name} → ${backup_file}"
 
   mysqldump \
@@ -1694,7 +1693,7 @@ _user_list() {
   echo -e "  ${BOLD}Site Users${RESET}"
   _hr
   # List regular users whose home is under HOME_BASE (the per-site user model).
-  while IFS=: read -r user _ uid _ _ home shell; do
+  while IFS=: read -r user _ uid _ _ home _; do
     [[ "$home" == "${HOME_BASE}/"* ]] || continue
     (( uid >= 1000 )) || continue
     printf "  %-20s %s\n" "$user" "$home"

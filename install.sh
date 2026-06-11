@@ -33,8 +33,6 @@ readonly PANEL_LOG="/var/log/aidipanel-install.log"
 readonly PANEL_LOCK="/var/run/aidipanel-install.lock"
 readonly NGINX_CACHE_DIR="/var/cache/nginx/fastcgi"
 readonly NGINX_CACHE_ZONE="aidipanel_fcgi"
-readonly NGINX_CACHE_SIZE="10g"
-readonly NGINX_CACHE_KEYS_ZONE="200m"
 readonly SITES_DIR="/var/www"
 readonly DB_NAME="aidipanel"
 PHP_DEFAULT_VERSION="8.4"
@@ -64,8 +62,7 @@ NEEDRESTART_SUSPEND=1
 export NEEDRESTART_MODE NEEDRESTART_SUSPEND
 
 # Colors
-RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
-CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
+RED='\033[0;31m'; RESET='\033[0m'
 
 # ---------------------------------------------------------------------------
 # 1. LOGGING HELPERS
@@ -1783,7 +1780,6 @@ _cleanup_installer() {
   [[ "$DRY_RUN" == "true" ]] && return 0
 
   local script_path; script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  local script_name; script_name="$(basename "$script_path")"
 
   # Only remove if the folder is named aidipanel-* under /root or /home
   if [[ "$script_path" =~ ^(/root|/home/[^/]+)/aidipanel-v[0-9] ]]; then
