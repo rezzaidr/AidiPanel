@@ -361,6 +361,7 @@ _usage() {
   echo "  cache:enable    Enable FastCGI cache for a domain (--install-nginx-helper, --install-redis-plugin optional)"
   echo "  cache:disable   Disable FastCGI cache for a domain"
   echo "  cache:config    Get or set per-site cache config (--domain; --ttl, --exclude-urls, --bypass-cookies, --bypass-query)"
+  echo "  cache:migrate   Migrate existing sites from shared to per-site cache snippet [--dry-run]"
 
   echo -e "\n${BOLD}${BLUE}Database Management${RESET}"
   echo "  db:add          Create a new database and user"
@@ -1287,6 +1288,77 @@ _cache_toggle() {
   _nginx_test_reload
 }
 
+_cache_migrate() {
+  _require_root "cache:migrate"
+  _parse_opts "$@"
+  local dry_run; dry_run=$(_opt "dry-run" "false")
+
+  local migrated=0 skipped=0
+  local changed_confs=()
+
+  for conf in "${NGINX_CONF_DIR}"/*.conf; do
+    [[ -f "$conf" ]] || continue
+    local domain; domain=$(basename "$conf" .conf)
+    [[ "$domain" == "aidipanel-ui" ]] && continue
+
+    if grep -qF "include ${NGINX_SNIPPET_DIR}/fastcgi-cache.conf;" "$conf"; then
+      local snippet; snippet=$(_cache_snippet_path "$domain")
+
+      if [[ "$dry_run" == "true" ]]; then
+        log "[dry-run] Would migrate: ${domain}"
+        migrated=$((migrated + 1))
+        continue
+      fi
+
+      if [[ ! -f "$snippet" ]]; then
+        _cache_snippet_write "$domain" "1h" \
+          "/wp-admin/,/wp-login.php,/checkout/,/cart/,/my-account/,/?wc-ajax=" \
+          "wordpress_logged_in,woocommerce_session,comment_author,laravel_session,PHPSESSID" \
+          "off"
+      fi
+
+      local backup="${conf}.migrate-bak"
+      cp "$conf" "$backup"
+      changed_confs+=("$conf" "$backup")
+
+      sed -i "s|include ${NGINX_SNIPPET_DIR}/fastcgi-cache.conf;|include ${NGINX_SNIPPET_DIR}/cache-${domain}.conf;|g" "$conf"
+      log "Migrated: ${domain}"
+      migrated=$((migrated + 1))
+    else
+      log "Skip: ${domain} (already per-site or no shared include)"
+      skipped=$((skipped + 1))
+    fi
+  done
+
+  if [[ "$dry_run" == "true" ]]; then
+    ok "Dry-run done. Would migrate: ${migrated} sites. Run without --dry-run to apply."
+    return 0
+  fi
+
+  if [[ "$migrated" -eq 0 ]]; then
+    ok "Nothing to migrate — all sites already use per-site snippets."
+    return 0
+  fi
+
+  if ! nginx -t >> "$CLI_LOG" 2>&1; then
+    warn "Nginx test failed — rolling back all migrated vhosts..."
+    local i
+    for (( i = 0; i < ${#changed_confs[@]}; i += 2 )); do
+      cp "${changed_confs[$((i+1))]}" "${changed_confs[$i]}"
+      rm -f "${changed_confs[$((i+1))]}"
+    done
+    die "Migration rolled back. Check: nginx -t"
+  fi
+
+  local i
+  for (( i = 1; i < ${#changed_confs[@]}; i += 2 )); do
+    rm -f "${changed_confs[$i]}"
+  done
+
+  nginx -s reload >> "$CLI_LOG" 2>&1
+  ok "Migration complete. Sites migrated: ${migrated}. Skipped: ${skipped}."
+}
+
 # ===========================================================================
 # DATABASE COMMANDS
 # ===========================================================================
@@ -2068,6 +2140,7 @@ main() {
     cache:enable)   _cache_toggle enable "$@" ;;
     cache:disable)  _cache_toggle disable "$@" ;;
     cache:config)   _cache_config "$@" ;;
+    cache:migrate)  _cache_migrate "$@" ;;
 
     # Database
     db:add)         _db_add "$@" ;;
