@@ -360,6 +360,7 @@ _usage() {
   echo "  cache:purge     Purge FastCGI cache (all or per domain)"
   echo "  cache:enable    Enable FastCGI cache for a domain (--install-nginx-helper, --install-redis-plugin optional)"
   echo "  cache:disable   Disable FastCGI cache for a domain"
+  echo "  cache:config    Get or set per-site cache config (--domain; --ttl, --exclude-urls, --bypass-cookies, --bypass-query)"
 
   echo -e "\n${BOLD}${BLUE}Database Management${RESET}"
   echo "  db:add          Create a new database and user"
@@ -965,6 +966,114 @@ if (\$http_cookie ~* "(${cookie_regex})") {
 SNIP
 
   chmod 644 "$file"
+}
+
+_cache_config() {
+  _parse_opts "$@"
+  local domain; domain=$(_opt "domain")
+  _require_arg "domain" "$domain" "cache:config --domain example.com [--ttl 1h] [--exclude-urls \"/path/\"] [--bypass-cookies \"name\"] [--bypass-query on|off]"
+  _domain_valid "$domain"   || die "Invalid domain name: ${domain}"
+  _domain_exists "$domain"  || die "Site not found: ${domain}"
+
+  local snippet; snippet=$(_cache_snippet_path "$domain")
+
+  # ---- SET mode: any --set flag present ----
+  local set_ttl;      set_ttl=$(_opt "ttl" "")
+  local set_exclude;  set_exclude=$(_opt "exclude-urls" "")
+  local set_cookies;  set_cookies=$(_opt "bypass-cookies" "")
+  local set_bypass_q; set_bypass_q=$(_opt "bypass-query" "")
+
+  local has_set=0
+  [[ -n "$set_ttl" || -n "$set_exclude" || -n "$set_cookies" || -n "$set_bypass_q" ]] && has_set=1
+
+  if [[ "$has_set" == 1 ]]; then
+    _require_root "cache:config --set"
+    [[ -f "$snippet" ]] || die "No per-site cache config for ${domain}. Run: aidipanel cache:enable --domain ${domain}"
+
+    # Validate inputs before touching any file
+    if [[ -n "$set_ttl" ]]; then
+      [[ "$set_ttl" =~ ^[0-9]+[smhd]$ ]] || die "Invalid TTL '${set_ttl}'. Use format: 30m, 1h, 2d"
+    fi
+    if [[ -n "$set_exclude" ]]; then
+      local _excl_parts=()
+      IFS=',' read -ra _excl_parts <<< "$set_exclude"
+      local u
+      for u in "${_excl_parts[@]}"; do
+        u="${u## }"; u="${u%% }"
+        [[ "$u" == /* ]] || die "Each exclude URL must start with '/': got '${u}'"
+        [[ "$u" =~ [';''\`''$'$'\n'] ]] && die "Exclude URL contains unsafe characters: '${u}'"
+      done
+      [[ "${#_excl_parts[@]}" -le 50 ]] || die "Too many exclude URLs (max 50)."
+      [[ "${#set_exclude}" -le 2000 ]] || die "Exclude URLs string too long (max 2000 chars)."
+    fi
+    if [[ -n "$set_cookies" ]]; then
+      local _ck_parts=()
+      IFS=',' read -ra _ck_parts <<< "$set_cookies"
+      local ck
+      for ck in "${_ck_parts[@]}"; do
+        ck="${ck## }"; ck="${ck%% }"
+        [[ "$ck" =~ ^[a-zA-Z0-9_-]+$ ]] || die "Invalid cookie name '${ck}': use alphanumeric, underscore, dash only."
+      done
+      [[ "${#_ck_parts[@]}" -le 30 ]] || die "Too many bypass cookies (max 30)."
+    fi
+    if [[ -n "$set_bypass_q" ]]; then
+      [[ "$set_bypass_q" == "on" || "$set_bypass_q" == "off" ]] || die "bypass-query must be 'on' or 'off'."
+    fi
+
+    # Read current values, merge with new
+    local cur_ttl;     cur_ttl=$(_cache_snippet_read "$domain" "TTL")
+    local cur_excl;    cur_excl=$(_cache_snippet_read "$domain" "EXCLUDE_URLS")
+    local cur_cookies; cur_cookies=$(_cache_snippet_read "$domain" "BYPASS_COOKIES")
+    local cur_bq;      cur_bq=$(_cache_snippet_read "$domain" "BYPASS_QUERY")
+
+    local final_ttl="${set_ttl:-${cur_ttl:-1h}}"
+    local final_excl="${set_exclude:-${cur_excl:-/wp-admin/,/wp-login.php,/checkout/,/cart/,/my-account/,/?wc-ajax=}}"
+    local final_cookies="${set_cookies:-${cur_cookies:-wordpress_logged_in,woocommerce_session,comment_author,laravel_session,PHPSESSID}}"
+    local final_bq="${set_bypass_q:-${cur_bq:-off}}"
+
+    # Backup snippet in case nginx -t fails
+    local backup; backup=$(mktemp)
+    cp "$snippet" "$backup"
+
+    _cache_snippet_write "$domain" "$final_ttl" "$final_excl" "$final_cookies" "$final_bq"
+
+    # If TTL changed, update fastcgi_cache_valid in the vhost (both commented + uncommented)
+    if [[ -n "$set_ttl" ]]; then
+      local conf="${NGINX_CONF_DIR}/${domain}.conf"
+      sed -i -E "s|(#?\s*fastcgi_cache_valid\s+200 301 302 )[0-9]+[smhd]|\1${final_ttl}|g" "$conf"
+    fi
+
+    if ! nginx -t >> "$CLI_LOG" 2>&1; then
+      cp "$backup" "$snippet"
+      rm -f "$backup"
+      die "Nginx config test failed after cache:config update — reverted snippet. Check: nginx -t"
+    fi
+    rm -f "$backup"
+    nginx -s reload >> "$CLI_LOG" 2>&1
+    ok "Cache config updated for: ${domain}"
+    return 0
+  fi
+
+  # ---- GET mode ----
+  if [[ ! -f "$snippet" ]]; then
+    warn "No per-site cache config for ${domain}. Run: aidipanel cache:enable --domain ${domain}"
+    return 0
+  fi
+
+  local cur_ttl;     cur_ttl=$(_cache_snippet_read "$domain" "TTL")
+  local cur_excl;    cur_excl=$(_cache_snippet_read "$domain" "EXCLUDE_URLS")
+  local cur_cookies; cur_cookies=$(_cache_snippet_read "$domain" "BYPASS_COOKIES")
+  local cur_bq;      cur_bq=$(_cache_snippet_read "$domain" "BYPASS_QUERY")
+
+  echo ""
+  echo -e "  ${BOLD}Cache config: ${domain}${RESET}"
+  _hr
+  _table_row "TTL"            "${cur_ttl:--}"
+  _table_row "Exclude URLs"   "${cur_excl:--}"
+  _table_row "Bypass cookies" "${cur_cookies:--}"
+  _table_row "Bypass query"   "${cur_bq:--}"
+  _hr
+  echo ""
 }
 
 _cache_status() {
@@ -1935,6 +2044,7 @@ main() {
     cache:purge)    _cache_purge "$@" ;;
     cache:enable)   _cache_toggle enable "$@" ;;
     cache:disable)  _cache_toggle disable "$@" ;;
+    cache:config)   _cache_config "$@" ;;
 
     # Database
     db:add)         _db_add "$@" ;;
