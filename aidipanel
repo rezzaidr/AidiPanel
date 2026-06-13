@@ -361,7 +361,11 @@ _usage() {
   echo "  cache:enable    Enable FastCGI cache for a domain (--install-nginx-helper, --install-redis-plugin optional)"
   echo "  cache:disable   Disable FastCGI cache for a domain"
   echo "  cache:config    Get or set per-site cache config (--domain; --ttl, --exclude-urls, --bypass-cookies, --bypass-query)"
-  echo "  cache:migrate   Migrate existing sites from shared to per-site cache snippet [--dry-run]"
+  echo "  cache:migrate        Migrate existing sites from shared to per-site cache snippet [--dry-run]"
+  echo "  cache:redis-status   Show Redis service status and ping"
+  echo "  cache:redis-enable   Enable and start Redis"
+  echo "  cache:redis-disable  Stop and disable Redis"
+  echo "  cache:redis-flush    Flush all Redis data (FLUSHALL)"
 
   echo -e "\n${BOLD}${BLUE}Database Management${RESET}"
   echo "  db:add          Create a new database and user"
@@ -1377,6 +1381,48 @@ _cache_migrate() {
   ok "Migration complete. Sites migrated: ${migrated}. Skipped: ${skipped}."
 }
 
+# ---------------------------------------------------------------------------
+# REDIS COMMANDS (standalone — independent of WordPress plugin)
+# ---------------------------------------------------------------------------
+
+_cache_redis_status() {
+  local svc_active; svc_active=$(systemctl is-active redis-server 2>/dev/null || echo "unknown")
+  local svc_enabled; svc_enabled=$(systemctl is-enabled redis-server 2>/dev/null || echo "unknown")
+  local ping; ping=$(redis-cli ping 2>/dev/null || echo "FAIL")
+  echo ""
+  echo -e "  ${BOLD}Redis Status${RESET}"
+  _hr
+  _table_row "Service:"  "$svc_active"
+  _table_row "Enabled:"  "$svc_enabled"
+  _table_row "Ping:"     "$ping"
+  _hr
+  echo ""
+}
+
+_cache_redis_enable() {
+  _require_root "cache:redis-enable"
+  command -v redis-server >/dev/null 2>&1 || die "redis-server not installed."
+  systemctl enable --now redis-server >> "$CLI_LOG" 2>&1 \
+    && ok "Redis enabled and started." \
+    || die "Failed to enable Redis. Check: systemctl status redis-server"
+}
+
+_cache_redis_disable() {
+  _require_root "cache:redis-disable"
+  systemctl stop redis-server >> "$CLI_LOG" 2>&1 || true
+  systemctl disable redis-server >> "$CLI_LOG" 2>&1 \
+    && ok "Redis stopped and disabled." \
+    || warn "Redis disable returned non-zero — check manually."
+}
+
+_cache_redis_flush() {
+  _require_root "cache:redis-flush"
+  command -v redis-cli >/dev/null 2>&1 || die "redis-cli not installed."
+  redis-cli FLUSHALL >> "$CLI_LOG" 2>&1 \
+    && ok "Redis flushed (FLUSHALL)." \
+    || die "Redis flush failed. Is Redis running? Check: aidipanel cache:redis-status"
+}
+
 # ===========================================================================
 # DATABASE COMMANDS
 # ===========================================================================
@@ -2158,7 +2204,11 @@ main() {
     cache:enable)   _cache_toggle enable "$@" ;;
     cache:disable)  _cache_toggle disable "$@" ;;
     cache:config)   _cache_config "$@" ;;
-    cache:migrate)  _cache_migrate "$@" ;;
+    cache:migrate)       _cache_migrate "$@" ;;
+    cache:redis-status)  _cache_redis_status "$@" ;;
+    cache:redis-enable)  _cache_redis_enable "$@" ;;
+    cache:redis-disable) _cache_redis_disable "$@" ;;
+    cache:redis-flush)   _cache_redis_flush "$@" ;;
 
     # Database
     db:add)         _db_add "$@" ;;
