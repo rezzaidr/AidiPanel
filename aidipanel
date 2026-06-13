@@ -1240,12 +1240,35 @@ _cache_toggle() {
       warn "FastCGI cache is already enabled for: ${domain}"
       return 0
     fi
-    # Uncomment cache directives (if they are commented) or add them
+
+    # 1. Create per-site snippet if absent
+    local snippet; snippet=$(_cache_snippet_path "$domain")
+    if [[ ! -f "$snippet" ]]; then
+      _cache_snippet_write "$domain" "1h" \
+        "/wp-admin/,/wp-login.php,/checkout/,/cart/,/my-account/,/?wc-ajax=" \
+        "wordpress_logged_in,woocommerce_session,comment_author,laravel_session,PHPSESSID" \
+        "off"
+      log "Per-site cache snippet created: ${snippet}"
+    fi
+
+    # 2. Migrate vhost include from shared snippet to per-site (idempotent)
+    if grep -qF "include ${NGINX_SNIPPET_DIR}/fastcgi-cache.conf;" "$conf"; then
+      sed -i "s|include ${NGINX_SNIPPET_DIR}/fastcgi-cache.conf;|include ${NGINX_SNIPPET_DIR}/cache-${domain}.conf;|g" "$conf"
+      log "Vhost include migrated to per-site snippet: ${domain}"
+    fi
+
+    # 3. Uncomment cache directives
     _sed_inplace "$conf" \
       's|#\s*fastcgi_cache\s\+|fastcgi_cache |g' \
       's|#\s*fastcgi_cache_valid|fastcgi_cache_valid|g' \
       's|#\s*fastcgi_cache_bypass|fastcgi_cache_bypass|g' \
       's|#\s*fastcgi_no_cache|fastcgi_no_cache|g'
+
+    # 4. Apply TTL from snippet to vhost (in case it differs from the 1h default)
+    local saved_ttl; saved_ttl=$(_cache_snippet_read "$domain" "TTL")
+    if [[ -n "$saved_ttl" && "$saved_ttl" != "1h" ]]; then
+      sed -i -E "s|(fastcgi_cache_valid\s+200 301 302 )[0-9]+[smhd]|\1${saved_ttl}|g" "$conf"
+    fi
 
     ok "FastCGI cache enabled for: ${domain}"
     _cache_install_wp_plugins "$domain" "$install_nginx_helper" "$install_redis_plugin"
