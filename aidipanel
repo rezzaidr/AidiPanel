@@ -487,11 +487,12 @@ _site_add() {
 
   # Rollback ledger
   DID_CREATE_USER=0
-  local created_home=0 wrote_pool=0 wrote_vhost=0 enabled=0
+  local created_home=0 wrote_pool=0 wrote_vhost=0 enabled=0 wrote_snippet=0
   _site_add_rollback() {
-    [[ "$enabled"     == 1 ]] && rm -f "${NGINX_ENABLED_DIR}/${domain}.conf"
-    [[ "$wrote_vhost" == 1 ]] && rm -f "${NGINX_CONF_DIR}/${domain}.conf"
-    [[ "$wrote_pool"  == 1 ]] && _remove_fpm_pool "$site_user" "$php_ver"
+    [[ "$enabled"      == 1 ]] && rm -f "${NGINX_ENABLED_DIR}/${domain}.conf"
+    [[ "$wrote_vhost"  == 1 ]] && rm -f "${NGINX_CONF_DIR}/${domain}.conf"
+    [[ "$wrote_snippet" == 1 ]] && rm -f "$(_cache_snippet_path "$domain")"
+    [[ "$wrote_pool"   == 1 ]] && _remove_fpm_pool "$site_user" "$php_ver"
     if [[ "$DID_CREATE_USER" == 1 ]]; then
       _remove_site_user "$site_user"   # user + home + its (otherwise-orphan) group
     elif [[ "$created_home" == 1 ]]; then
@@ -506,6 +507,14 @@ _site_add() {
   _write_fpm_pool "$site_user" "$php_ver"   || { _site_add_rollback; die "PHP-FPM pool creation failed."; }
   wrote_pool=1
   _site_write_vhost "$domain" "$php_ver" "$webroot" "$site_type" "$site_user"; wrote_vhost=1
+
+  # Create per-site cache snippet (cache OFF by default; enables on cache:enable)
+  _cache_snippet_write "$domain" "1h" \
+    "/wp-admin/,/wp-login.php,/checkout/,/cart/,/my-account/,/?wc-ajax=" \
+    "wordpress_logged_in,woocommerce_session,comment_author,laravel_session,PHPSESSID" \
+    "off"
+  wrote_snippet=1
+
   ln -sf "${NGINX_CONF_DIR}/${domain}.conf" "${NGINX_ENABLED_DIR}/${domain}.conf"; enabled=1
 
   # nginx -t validates ALL enabled vhosts; on failure roll back THIS site so one
@@ -556,7 +565,7 @@ _site_write_vhost() {
     php_location=$(cat <<PHPLOC
 
     # FastCGI cache bypass rules
-    include ${NGINX_SNIPPET_DIR}/fastcgi-cache.conf;
+    include ${NGINX_SNIPPET_DIR}/cache-${domain}.conf;
 
     # PHP handler with FastCGI cache
     location ~ \.php\$ {
