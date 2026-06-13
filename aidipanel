@@ -365,7 +365,8 @@ _usage() {
   echo "  cache:redis-status   Show Redis service status and ping"
   echo "  cache:redis-enable   Enable and start Redis"
   echo "  cache:redis-disable  Stop and disable Redis"
-  echo "  cache:redis-flush    Flush all Redis data (FLUSHALL)"
+  echo "  cache:redis-flush        Flush all Redis data (FLUSHALL)"
+  echo "  cache:opcache-restart    Restart PHP-FPM to flush OPcache [--php 8.4]"
 
   echo -e "\n${BOLD}${BLUE}Database Management${RESET}"
   echo "  db:add          Create a new database and user"
@@ -1423,6 +1424,35 @@ _cache_redis_flush() {
     || die "Redis flush failed. Is Redis running? Check: aidipanel cache:redis-status"
 }
 
+_cache_opcache_restart() {
+  _require_root "cache:opcache-restart"
+  _parse_opts "$@"
+  local target_ver; target_ver=$(_opt "php" "")
+
+  local versions=()
+  if [[ -n "$target_ver" ]]; then
+    versions=("$target_ver")
+  else
+    while IFS= read -r svc; do
+      local ver; ver=$(echo "$svc" | grep -oP '\d+\.\d+(?=-fpm)')
+      [[ -n "$ver" ]] && versions+=("$ver")
+    done < <(systemctl list-units --type=service --state=active --no-legend 2>/dev/null \
+      | grep -oP 'php\d+\.\d+-fpm\.service' | sort -u)
+  fi
+
+  if [[ "${#versions[@]}" -eq 0 ]]; then
+    warn "No active PHP-FPM found."
+    return 0
+  fi
+
+  local ver
+  for ver in "${versions[@]}"; do
+    systemctl reload "php${ver}-fpm" >> "$CLI_LOG" 2>&1 \
+      && ok "OPcache restarted (PHP ${ver})" \
+      || warn "Failed to reload php${ver}-fpm — try: systemctl restart php${ver}-fpm"
+  done
+}
+
 # ===========================================================================
 # DATABASE COMMANDS
 # ===========================================================================
@@ -2208,7 +2238,8 @@ main() {
     cache:redis-status)  _cache_redis_status "$@" ;;
     cache:redis-enable)  _cache_redis_enable "$@" ;;
     cache:redis-disable) _cache_redis_disable "$@" ;;
-    cache:redis-flush)   _cache_redis_flush "$@" ;;
+    cache:redis-flush)      _cache_redis_flush "$@" ;;
+    cache:opcache-restart)  _cache_opcache_restart "$@" ;;
 
     # Database
     db:add)         _db_add "$@" ;;
