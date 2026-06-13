@@ -1212,9 +1212,18 @@ _cache_install_wp_plugins() {
 
   if [[ "$install_nginx_helper" == "true" ]]; then
     log "Installing WordPress plugin: Nginx Helper (${domain})..."
-    "${runner[@]}" plugin install nginx-helper --activate >> "$CLI_LOG" 2>&1 \
-      && ok "Nginx Helper plugin installed for: ${domain}" \
-      || warn "Failed to install Nginx Helper plugin for: ${domain}"
+    if "${runner[@]}" plugin install nginx-helper --activate >> "$CLI_LOG" 2>&1; then
+      ok "Nginx Helper plugin installed for: ${domain}"
+      local nh_options
+      nh_options=$(printf '{"enable_purge":"1","cache_method":"enable_fastcgi","purge_method":"unlink_files","cache_path":"%s"}' \
+        "$NGINX_CACHE_DIR")
+      "${runner[@]}" option update rt_wp_nginx_helper_options "$nh_options" --format=json \
+        >> "$CLI_LOG" 2>&1 \
+        && ok "Nginx Helper configured (cache path: ${NGINX_CACHE_DIR})" \
+        || warn "Nginx Helper installed but WP option set failed — configure manually in WP Admin > Settings > Nginx Helper"
+    else
+      warn "Failed to install Nginx Helper plugin for: ${domain}"
+    fi
   fi
 
   if [[ "$install_redis_plugin" == "true" ]]; then
