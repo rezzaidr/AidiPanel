@@ -883,6 +883,90 @@ _vhost_save() {
 # CACHE COMMANDS
 # ===========================================================================
 
+# ---------------------------------------------------------------------------
+# CACHE ENGINE HELPERS
+# ---------------------------------------------------------------------------
+
+_cache_snippet_path() { echo "${NGINX_SNIPPET_DIR}/cache-${1}.conf"; }
+
+# Read one AIDIPANEL_CACHE_* field from a per-site snippet.
+# Usage: _cache_snippet_read <domain> <FIELD>  (FIELD = TTL, EXCLUDE_URLS, etc.)
+_cache_snippet_read() {
+  local file; file=$(_cache_snippet_path "$1")
+  [[ -f "$file" ]] || { echo ""; return; }
+  grep -oP "(?<=# AIDIPANEL_CACHE_${2}=).*" "$file" | head -1
+}
+
+# Build nginx URI regex from comma-separated URL list.
+# Returns: /wp-admin/|/wp-login\.php|...   (no outer parens)
+_cache_build_uri_regex() {
+  local urls="$1"
+  local parts=()
+  IFS=',' read -ra parts <<< "$urls"
+  local regex="" p
+  for p in "${parts[@]}"; do
+    p="${p## }"; p="${p%% }"
+    p="${p//./\\.}"
+    p="${p//\?/\\?}"
+    [[ -z "$p" ]] && continue
+    [[ -n "$regex" ]] && regex+="|"
+    regex+="$p"
+  done
+  echo "$regex"
+}
+
+# Build nginx cookie regex from comma-separated cookie-name list.
+# Returns: wordpress_logged_in|woocommerce_session|...   (no outer parens)
+_cache_build_cookie_regex() {
+  local cookies="$1"
+  local parts=()
+  IFS=',' read -ra parts <<< "$cookies"
+  local regex="" c
+  for c in "${parts[@]}"; do
+    c="${c## }"; c="${c%% }"
+    [[ -z "$c" ]] && continue
+    [[ -n "$regex" ]] && regex+="|"
+    regex+="$c"
+  done
+  echo "$regex"
+}
+
+# Write (or overwrite) a per-site cache snippet from config values.
+# Usage: _cache_snippet_write <domain> <ttl> <exclude_urls> <bypass_cookies> <bypass_query>
+_cache_snippet_write() {
+  local domain="$1" ttl="$2" exclude_urls="$3" bypass_cookies="$4" bypass_query="$5"
+  local file; file=$(_cache_snippet_path "$domain")
+
+  local uri_regex; uri_regex=$(_cache_build_uri_regex "$exclude_urls")
+  local cookie_regex; cookie_regex=$(_cache_build_cookie_regex "$bypass_cookies")
+
+  local query_block=""
+  [[ "$bypass_query" == "on" ]] && \
+    query_block='if ($query_string != "")             { set $skip_cache 1; }'
+
+  cat > "$file" <<SNIP
+# AidiPanel — FastCGI cache config for ${domain}
+# AIDIPANEL_CACHE_TTL=${ttl}
+# AIDIPANEL_CACHE_EXCLUDE_URLS=${exclude_urls}
+# AIDIPANEL_CACHE_BYPASS_COOKIES=${bypass_cookies}
+# AIDIPANEL_CACHE_BYPASS_QUERY=${bypass_query}
+
+set \$skip_cache 0;
+
+if (\$request_method = POST)          { set \$skip_cache 1; }
+${query_block}
+if (\$request_uri ~* "(${uri_regex})") {
+    set \$skip_cache 1;
+}
+
+if (\$http_cookie ~* "(${cookie_regex})") {
+    set \$skip_cache 1;
+}
+SNIP
+
+  chmod 644 "$file"
+}
+
 _cache_status() {
   _parse_opts "$@"
   local cache_size="-"
