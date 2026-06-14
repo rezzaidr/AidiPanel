@@ -73,6 +73,7 @@ $router->post('/cache/purge',  'CacheController@purge');
 $router->post('/cache/toggle',          'CacheController@toggle');
 $router->post('/cache/config',          'CacheController@config');
 $router->post('/cache/redis',           'CacheController@redis');
+$router->post('/cache/object',          'CacheController@objectCache');
 $router->post('/cache/opcache-restart', 'CacheController@opcacheRestart');
 
 // Databases

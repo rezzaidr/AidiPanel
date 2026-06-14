@@ -692,16 +692,38 @@ $tabs = [
       <p class="text-[11px] text-amber-800">This site's Redis prefix was not set by AidiPanel. Cache management actions are unavailable to avoid affecting manually-configured data.</p>
     </div>
     <?php endif; ?>
-    <div class="px-5 py-3.5 bg-zinc-50/60 border-t border-zinc-100 flex items-center justify-between">
-      <p class="text-[11px] text-zinc-400">Enable/disable actions available in a future update.</p>
-      <div class="flex items-center gap-2">
-        <button type="button" disabled class="btn btn-ghost btn-sm opacity-50 cursor-not-allowed">
-          <i class="ti ti-power-off text-sm"></i> Disable
-        </button>
-        <button type="button" disabled class="btn btn-secondary btn-sm opacity-50 cursor-not-allowed">
-          <i class="ti ti-trash text-sm"></i> Flush cache
-        </button>
+    <div class="px-5 py-3.5 bg-zinc-50/60 border-t border-zinc-100">
+      <?php if ($ocManaged): ?>
+      <form method="POST" action="/cache/object" data-op-stream>
+        <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+        <input type="hidden" name="domain" value="<?= e($domain) ?>">
+        <input type="hidden" name="action" value="disable">
+        <div data-op-fields class="flex items-center justify-between">
+          <p class="text-[11px] text-zinc-400">Disconnects this site's object cache. Redis keeps running; cached data is kept.</p>
+          <div class="flex items-center gap-2 shrink-0">
+            <button type="submit" class="btn btn-ghost btn-sm">
+              <i class="ti ti-power-off text-sm"></i> Disable
+            </button>
+            <button type="button" disabled class="btn btn-secondary btn-sm opacity-50 cursor-not-allowed" title="Available in a later update">
+              <i class="ti ti-trash text-sm"></i> Flush cache
+            </button>
+          </div>
+        </div>
+        <?php include APP_ROOT . '/Views/partials/op-progress.php'; ?>
+      </form>
+      <?php else: ?>
+      <div class="flex items-center justify-between">
+        <p class="text-[11px] text-zinc-400">Managed outside AidiPanel — actions unavailable.</p>
+        <div class="flex items-center gap-2">
+          <button type="button" disabled class="btn btn-ghost btn-sm opacity-50 cursor-not-allowed">
+            <i class="ti ti-power-off text-sm"></i> Disable
+          </button>
+          <button type="button" disabled class="btn btn-secondary btn-sm opacity-50 cursor-not-allowed">
+            <i class="ti ti-trash text-sm"></i> Flush cache
+          </button>
+        </div>
       </div>
+      <?php endif; ?>
     </div>
 
     <?php else: ?>
@@ -741,12 +763,27 @@ $tabs = [
         <p class="text-[11px] text-amber-800 leading-relaxed">WP-CLI is not installed on this server. It is required for safe object cache management.</p>
       </div>
       <?php endif; ?>
+      <?php if ($ocWpCli): ?>
       <div class="pt-1 border-t border-zinc-100 flex items-center justify-between">
-        <p class="text-[11px] text-zinc-400">Enable actions available in a future update.</p>
+        <p class="text-[11px] text-zinc-400">WP-CLI is required to manage object cache.</p>
         <button type="button" disabled class="btn btn-primary opacity-50 cursor-not-allowed">
           <i class="ti ti-bolt text-sm"></i> Enable Object Cache
         </button>
       </div>
+      <?php else: ?>
+      <form method="POST" action="/cache/object" data-op-stream class="pt-1 border-t border-zinc-100">
+        <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+        <input type="hidden" name="domain" value="<?= e($domain) ?>">
+        <input type="hidden" name="action" value="enable">
+        <div data-op-fields class="flex items-center justify-between">
+          <p class="text-[11px] text-zinc-400">Installs the Redis Object Cache plugin and connects this site (~30–60s).</p>
+          <button type="submit" class="btn btn-primary shrink-0">
+            <i class="ti ti-bolt text-sm"></i> Enable Object Cache
+          </button>
+        </div>
+        <?php include APP_ROOT . '/Views/partials/op-progress.php'; ?>
+      </form>
+      <?php endif; ?>
     </div>
     <?php endif; ?>
   </div>

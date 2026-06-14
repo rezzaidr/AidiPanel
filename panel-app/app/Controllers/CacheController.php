@@ -170,6 +170,71 @@ class CacheController extends BaseController
         $this->success("Redis {$action} done.", $back);
     }
 
+    /**
+     * Per-site WordPress Object Cache (Redis) enable/disable — Phase 2.
+     * Calls the new per-site `cache:redis --action enable|disable --domain` (NOT the
+     * legacy global `cache:redis-*`). Streamed (progress bar) when stream=1.
+     */
+    public function objectCache(array $params = []): void
+    {
+        $domain = strtolower(trim((string) $this->request->post('domain', '')));
+        $action = (string) $this->request->post('action', '');
+
+        if (!in_array($action, ['enable', 'disable'], true)) {
+            $this->error('Invalid action.');
+        }
+        if (!is_valid_domain($domain)) {
+            $this->error('Invalid domain name.');
+        }
+        if (!$this->db->row('SELECT id FROM sites WHERE domain = ?', [$domain])) {
+            $this->error("Site not found: {$domain}");
+        }
+
+        $args = ['--action', $action, '--domain', $domain];
+        $tab  = "/sites/{$domain}?tab=performance";
+        $okMsg = $action === 'enable'
+            ? "Object cache enabled for {$domain}."
+            : "Object cache disabled for {$domain}.";
+
+        if ($this->request->post('stream') === '1') {
+            $this->streamCli(
+                'cache:redis',
+                $args,
+                function (array $r) use ($domain, $action, $tab, $okMsg): array {
+                    \Core\DB::log("cache:redis:{$action}", "Object cache {$action} for: {$domain}");
+                    return ['redirect' => $tab, 'message' => $okMsg];
+                },
+                fn(string $out): string => $this->objectCacheError($out)
+            );
+        }
+
+        $result = run_cli('cache:redis', $args);
+        if (!$result['success']) {
+            $this->error($this->objectCacheError($result['output']), $tab);
+        }
+        \Core\DB::log("cache:redis:{$action}", "Object cache {$action} for: {$domain}");
+        $this->success($okMsg, $tab);
+    }
+
+    /** Map a `cache:redis` enable/disable `error=<code>` line to a friendly message. */
+    private function objectCacheError(string $output): string
+    {
+        $code = preg_match('/^error=(\S+)/m', $output, $m) ? $m[1] : '';
+        return match ($code) {
+            'object_cache_unmanaged' => "This site's object cache was set up outside AidiPanel (different Redis prefix), so AidiPanel won't change it. Turn it off in WordPress first if you want AidiPanel to manage it.",
+            'redis_service_down'     => "Redis isn't running. Start it in Admin Area → Services, then try again.",
+            'wp_cli_missing'         => "WP-CLI isn't installed on this server, so object cache can't be managed.",
+            'not_wordpress'          => "Object cache is a WordPress feature; this site isn't WordPress.",
+            'wp_config_not_safe'     => "wp-config.php can't be edited safely (it's a symlink or sits outside the site). No changes were made.",
+            'wp_config_not_writable' => "wp-config.php isn't writable. No changes were made.",
+            'plugin_install_failed'  => "Couldn't install the Redis Object Cache plugin — check the server's network connection.",
+            'plugin_activate_failed' => "Couldn't activate the Redis Object Cache plugin.",
+            'dropin_enable_failed'   => "Couldn't enable the object cache; the changes were rolled back.",
+            'domain_not_found'       => "Site not found.",
+            default                  => "Object cache operation failed. Please try again.",
+        };
+    }
+
     public function opcacheRestart(array $params = []): void
     {
         $php    = (string) $this->request->post('php', '');

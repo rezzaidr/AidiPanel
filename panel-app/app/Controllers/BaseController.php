@@ -70,7 +70,7 @@ abstract class BaseController
      * ['redirect','message'] for the done frame. On failure the CLI's last line
      * becomes the error message. Never returns (the stream ends the request).
      */
-    protected function streamCli(string $command, array $args, callable $onSuccess): never
+    protected function streamCli(string $command, array $args, callable $onSuccess, ?callable $onError = null): never
     {
         stream_begin();
 
@@ -79,10 +79,16 @@ abstract class BaseController
         });
 
         if (!$result['success']) {
-            $lines = array_values(array_filter(array_map('trim', explode("\n", $result['output'])), fn($l) => $l !== ''));
-            $tail  = $lines ? (string) end($lines) : '';
-            $tail  = preg_replace('/^\[(ERROR|WARN|INFO|OK)\]\s*/', '', $tail);
-            stream_send(['t' => 'done', 'ok' => false, 'message' => ($tail !== '' ? $tail : 'Operation failed.')]);
+            if ($onError !== null) {
+                $msg = $onError($result['output']);
+            } else {
+                // Default: the CLI's last line, minus any [ERROR]/[INFO] tag.
+                $lines = array_values(array_filter(array_map('trim', explode("\n", $result['output'])), fn($l) => $l !== ''));
+                $tail  = $lines ? (string) end($lines) : '';
+                $tail  = preg_replace('/^\[(ERROR|WARN|INFO|OK)\]\s*/', '', $tail);
+                $msg   = $tail !== '' ? $tail : 'Operation failed.';
+            }
+            stream_send(['t' => 'done', 'ok' => false, 'message' => $msg]);
             exit;
         }
 
