@@ -3,6 +3,12 @@
 **Version:** 1.0
 **Status:** Approved for Phase 1
 
+> **Implementation status (2026-06-15):** Phase 1 (read-only status, both layers) and
+> Page Cache per-site enable / disable / config / purge are complete. Object Cache
+> (per-site Redis) **enable / disable is now implemented**; Phase 3 (per-site flush and
+> metrics) remains pending. Page Cache custom purge-by-URL and the cache-status check
+> are also pending.
+
 ---
 
 ## Overview

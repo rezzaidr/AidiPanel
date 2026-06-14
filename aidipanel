@@ -1183,7 +1183,7 @@ _cache_redis_site_status() {
 
   # Redis service check (2-second timeout)
   local service_ok=0 redis_host="127.0.0.1" redis_port="6379"
-  local ping; ping=$(redis-cli -h "$redis_host" -p "$redis_port" -t 2 PING 2>/dev/null || echo "FAIL")
+  local ping; ping=$(timeout 2 redis-cli -h "$redis_host" -p "$redis_port" PING 2>/dev/null || echo "FAIL")
   [[ "$ping" == "PONG" ]] && service_ok=1
   echo "service_ok=${service_ok}"
   echo "redis_host=${redis_host}"
@@ -1272,12 +1272,163 @@ _cache_redis_site_status() {
   echo "error="
 }
 
+# Resolve a domain's per-site object-cache context. Sets OC_* globals + OC_RUNNER.
+# Prints "error=domain_not_found" and exits on an unknown/invalid domain.
+_cache_redis_resolve() {
+  local domain="$1"
+  _domain_valid "$domain" || { echo "error=domain_not_found"; exit 1; }
+  OC_CONF="${NGINX_CONF_DIR}/${domain}.conf"
+  [[ -f "$OC_CONF" ]] || { echo "error=domain_not_found"; exit 1; }
+  OC_DOMAIN="$domain"
+  OC_SITE_USER=$(grep -oP '^\s*root\s+/home/\K[^/;]+' "$OC_CONF" 2>/dev/null | head -1 || echo "")
+  OC_WEBROOT=$(_vhost_webroot "$OC_CONF")
+  OC_SITE_TYPE=$(grep -oP '# Type: \K\w+' "$OC_CONF" 2>/dev/null | head -1 || echo "php")
+  OC_WPCONFIG="${OC_WEBROOT}/wp-config.php"
+  OC_EXPECTED_PREFIX="aidipanel:${OC_SITE_USER}:"
+  # WP-CLI runs as the SITE USER (per-site-user model) — never www-data/root/--allow-root.
+  OC_RUNNER=(sudo -u "$OC_SITE_USER" -- env "WP_CLI_CACHE_DIR=/tmp/aidipanel-wp-cli-cache" wp --path="$OC_WEBROOT")
+}
+
+# Read WP_REDIS_PREFIX from a wp-config.php (empty if unset). Read-only.
+_cache_redis_cfg_prefix() {
+  grep -oP "define\s*\(\s*['\"]WP_REDIS_PREFIX['\"]\s*,\s*['\"]\K[^'\"]+(?=['\"])" \
+    "$1" 2>/dev/null | head -1 || echo ""
+}
+
+# cache:redis --action enable --domain <domain>
+# Install/activate the per-site WordPress Redis Object Cache, managed by AidiPanel.
+# Idempotent; refuses to overwrite an unmanaged cache; full ledger-based rollback.
+_cache_redis_enable_site() {
+  _require_root "cache:redis enable"
+  _parse_opts "$@"
+  local domain; domain=$(_opt "domain")
+  _require_arg "domain" "$domain" "cache:redis --action enable --domain example.com"
+  _cache_redis_resolve "$domain"
+
+  _progress 10 oc_check "Checking site and Redis"
+  [[ "$OC_SITE_TYPE" == "wordpress" && -f "$OC_WPCONFIG" ]] || { echo "error=not_wordpress"; exit 1; }
+  [[ "$(timeout 2 redis-cli -h 127.0.0.1 -p 6379 PING 2>/dev/null || echo FAIL)" == "PONG" ]] \
+    || { echo "error=redis_service_down"; exit 1; }
+  command -v wp &>/dev/null || { echo "error=wp_cli_missing"; exit 1; }
+
+  local dropin="${OC_WEBROOT}/wp-content/object-cache.php"
+  local cur_prefix; cur_prefix=$(_cache_redis_cfg_prefix "$OC_WPCONFIG")
+
+  # Already active (drop-in present)? Managed → idempotent success; unmanaged → refuse.
+  if [[ -f "$dropin" ]]; then
+    if [[ "$cur_prefix" == "$OC_EXPECTED_PREFIX" ]]; then
+      _progress 100 done "Already active"
+      ok "Object cache already active (managed): ${domain}"
+      _cache_redis_site_status --domain "$domain"
+      return 0
+    fi
+    echo "error=object_cache_unmanaged"; exit 1
+  fi
+
+  # wp-config safety: a regular file, NOT a symlink, resolving inside the managed webroot.
+  _progress 20 oc_wpconfig "Checking wp-config"
+  local real; real=$(realpath -e "$OC_WPCONFIG" 2>/dev/null || echo "")
+  [[ -n "$real" && -f "$real" && ! -L "$OC_WPCONFIG" && "$real" == "${OC_WEBROOT}/wp-config.php" ]] \
+    || { echo "error=wp_config_not_safe"; exit 1; }
+  sudo -u "$OC_SITE_USER" -- test -w "$OC_WPCONFIG" || { echo "error=wp_config_not_writable"; exit 1; }
+
+  # Rollback ledger (parent locals; visible to the nested rollback via dynamic scope).
+  local wp_config_backup_path="" plugin_installed_this_run=0 plugin_activated_this_run=0
+  local config_modified_this_run=0 dropin_enabled_this_run=0
+  _oc_enable_rollback() {
+    if [[ "$dropin_enabled_this_run" == 1 ]]; then "${OC_RUNNER[@]}" redis disable >> "$CLI_LOG" 2>&1 || true; fi
+    if [[ "$plugin_activated_this_run" == 1 ]]; then "${OC_RUNNER[@]}" plugin deactivate redis-cache >> "$CLI_LOG" 2>&1 || true; fi
+    if [[ "$config_modified_this_run" == 1 && -f "$wp_config_backup_path" ]]; then
+      sudo -u "$OC_SITE_USER" -- cp -f "$wp_config_backup_path" "$OC_WPCONFIG" >> "$CLI_LOG" 2>&1 || true
+    fi
+    if [[ "$plugin_installed_this_run" == 1 ]]; then "${OC_RUNNER[@]}" plugin uninstall redis-cache --deactivate >> "$CLI_LOG" 2>&1 || true; fi
+  }
+
+  # Timestamped backup (written by the site user, in their own webroot).
+  wp_config_backup_path="${OC_WPCONFIG}.aidipanel-bak-$(date +%Y%m%d-%H%M%S)"
+  sudo -u "$OC_SITE_USER" -- cp -f "$OC_WPCONFIG" "$wp_config_backup_path" >> "$CLI_LOG" 2>&1 \
+    || { echo "error=wp_config_not_writable"; exit 1; }
+
+  # Install the plugin only if it is not already installed.
+  _progress 35 oc_install "Installing Redis Object Cache plugin"
+  if ! "${OC_RUNNER[@]}" plugin is-installed redis-cache >> "$CLI_LOG" 2>&1; then
+    if ! "${OC_RUNNER[@]}" plugin install redis-cache >> "$CLI_LOG" 2>&1; then
+      _oc_enable_rollback; echo "error=plugin_install_failed"; exit 1
+    fi
+    plugin_installed_this_run=1
+  fi
+
+  # Constants via `wp config set` (never sed).
+  _progress 60 oc_config "Writing wp-config constants"
+  config_modified_this_run=1
+  if ! "${OC_RUNNER[@]}" config set WP_REDIS_HOST 127.0.0.1 --type=constant >> "$CLI_LOG" 2>&1 \
+     || ! "${OC_RUNNER[@]}" config set WP_REDIS_PORT 6379 --raw --type=constant >> "$CLI_LOG" 2>&1 \
+     || ! "${OC_RUNNER[@]}" config set WP_REDIS_PREFIX "$OC_EXPECTED_PREFIX" --type=constant >> "$CLI_LOG" 2>&1; then
+    _oc_enable_rollback; echo "error=wp_config_not_writable"; exit 1
+  fi
+  "${OC_RUNNER[@]}" config set WP_REDIS_TIMEOUT 1 --raw --type=constant >> "$CLI_LOG" 2>&1 || true
+  "${OC_RUNNER[@]}" config set WP_REDIS_READ_TIMEOUT 1 --raw --type=constant >> "$CLI_LOG" 2>&1 || true
+  "${OC_RUNNER[@]}" config set WP_CACHE true --raw --type=constant >> "$CLI_LOG" 2>&1 || true
+
+  # Activate only if not already WP-active (so rollback won't deactivate a pre-active plugin).
+  _progress 80 oc_activate "Activating plugin"
+  if ! "${OC_RUNNER[@]}" plugin is-active redis-cache >> "$CLI_LOG" 2>&1; then
+    if ! "${OC_RUNNER[@]}" plugin activate redis-cache >> "$CLI_LOG" 2>&1; then
+      _oc_enable_rollback; echo "error=plugin_activate_failed"; exit 1
+    fi
+    plugin_activated_this_run=1
+  fi
+
+  # Enable the object-cache drop-in.
+  _progress 90 oc_dropin "Enabling object cache"
+  if ! "${OC_RUNNER[@]}" redis enable >> "$CLI_LOG" 2>&1; then
+    _oc_enable_rollback; echo "error=dropin_enable_failed"; exit 1
+  fi
+  dropin_enabled_this_run=1
+
+  # Final validation: drop-in present AND our prefix in place.
+  local v_prefix; v_prefix=$(_cache_redis_cfg_prefix "$OC_WPCONFIG")
+  if [[ ! -f "$dropin" || "$v_prefix" != "$OC_EXPECTED_PREFIX" ]]; then
+    _oc_enable_rollback; echo "error=dropin_enable_failed"; exit 1
+  fi
+
+  _progress 100 done "Object cache enabled"
+  ok "Object cache enabled: ${domain}"
+  _cache_redis_site_status --domain "$domain"
+}
+
+# cache:redis --action disable --domain <domain>
+# Disable only an AidiPanel-managed object cache (prefix match). Refuse unmanaged.
+# Does NOT stop Redis, remove constants, delete keys, or touch other sites.
+_cache_redis_disable_site() {
+  _require_root "cache:redis disable"
+  _parse_opts "$@"
+  local domain; domain=$(_opt "domain")
+  _require_arg "domain" "$domain" "cache:redis --action disable --domain example.com"
+  _cache_redis_resolve "$domain"
+
+  [[ "$OC_SITE_TYPE" == "wordpress" && -f "$OC_WPCONFIG" ]] || { echo "error=not_wordpress"; exit 1; }
+
+  local cur_prefix; cur_prefix=$(_cache_redis_cfg_prefix "$OC_WPCONFIG")
+  [[ "$cur_prefix" == "$OC_EXPECTED_PREFIX" ]] || { echo "error=object_cache_unmanaged"; exit 1; }
+
+  _progress 30 oc_dropin "Disabling object cache"
+  "${OC_RUNNER[@]}" redis disable >> "$CLI_LOG" 2>&1 || true
+  _progress 70 oc_deactivate "Deactivating plugin"
+  "${OC_RUNNER[@]}" plugin deactivate redis-cache >> "$CLI_LOG" 2>&1 || true
+  _progress 100 done "Object cache disabled"
+  ok "Object cache disabled: ${domain}"
+  _cache_redis_site_status --domain "$domain"
+}
+
 _cache_redis_per_site() {
   _parse_opts "$@"
   local action; action=$(_opt "action" "status")
   case "$action" in
-    status) _cache_redis_site_status "$@" ;;
-    *) die "cache:redis: unknown action '${action}'. Supported: status" ;;
+    status)  _cache_redis_site_status "$@" ;;
+    enable)  _cache_redis_enable_site "$@" ;;
+    disable) _cache_redis_disable_site "$@" ;;
+    *) die "cache:redis: unknown action '${action}'. Supported: status, enable, disable" ;;
   esac
 }
 
