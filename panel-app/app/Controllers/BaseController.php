@@ -23,8 +23,10 @@ abstract class BaseController
         $data['_user']       = Auth::user();
         $data['_is_admin']   = Auth::isAdmin();
         $data['_csrf_token'] = Session::csrfToken();
-        $data['_flash_error']   = flash('error');
-        $data['_flash_success'] = flash('success');
+        $data['_flash_error']        = flash('error');
+        $data['_flash_warning']      = flash('warning');
+        $data['_flash_success']      = flash('success');
+        $data['_flash_success_warn'] = flash('success_warn');
         layout($template, $data);
     }
 
@@ -52,6 +54,12 @@ abstract class BaseController
     protected function error(string $message, string $redirect = ''): never
     {
         flash('error', $message);
+        redirect($redirect ?: safe_back_url());
+    }
+
+    protected function warning(string $message, string $redirect = ''): never
+    {
+        flash('warning', $message);
         redirect($redirect ?: safe_back_url());
     }
 }

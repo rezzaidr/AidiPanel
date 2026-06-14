@@ -181,3 +181,4 @@ select.inp {
 }
 .toast-ok    { color: #047857; border-color: #a7f3d0; background: #ecfdf5; }
 .toast-error { color: #dc2626; border-color: #fecaca; background: #fef2f2; }
+.toast-warn  { color: #b45309; border-color: #fde68a; background: #fffbeb; }

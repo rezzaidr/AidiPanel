@@ -53,7 +53,6 @@ class CacheController extends BaseController
         $domain = (string) $this->request->post('domain', '');
         $action = (string) $this->request->post('action', 'enable'); // enable|disable
         $installNginxHelper = $this->request->post('install_nginx_helper', '') === '1';
-        $installRedisPlugin = $this->request->post('install_redis_plugin', '') === '1';
 
         if (!in_array($action, ['enable', 'disable'], true)) {
             $this->error('Invalid action.');
@@ -69,21 +68,15 @@ class CacheController extends BaseController
 
         if ($action === 'disable') {
             $installNginxHelper = false;
-            $installRedisPlugin = false;
         }
 
-        if (($installNginxHelper || $installRedisPlugin) && ($site['type'] ?? '') !== 'wordpress') {
-            $this->error('WordPress helper plugins can only be installed for WordPress sites.');
+        if ($installNginxHelper && ($site['type'] ?? '') !== 'wordpress') {
+            $this->error('Nginx Helper can only be installed for WordPress sites.');
         }
 
         $args = ['--domain', $domain];
-        if ($action === 'enable') {
-            if ($installNginxHelper) {
-                $args[] = '--install-nginx-helper';
-            }
-            if ($installRedisPlugin) {
-                $args[] = '--install-redis-plugin';
-            }
+        if ($action === 'enable' && $installNginxHelper) {
+            $args[] = '--install-nginx-helper';
         }
 
         $result = run_cli("cache:{$action}", $args);
@@ -94,7 +87,99 @@ class CacheController extends BaseController
         $enabled = $action === 'enable' ? 1 : 0;
         $this->db->run('UPDATE sites SET cache_enabled = ? WHERE domain = ?', [$enabled, $domain]);
         \Core\DB::log("cache:{$action}", "Cache {$action}d for: {$domain}");
-        $this->success("FastCGI cache {$action}d for {$domain}.");
+
+        $msg = "FastCGI cache {$action}d for {$domain}.";
+        if ($action === 'enable' && $installNginxHelper) {
+            $nh = parse_kv_output($result['output'])['nginx_helper'] ?? '';
+            // Positive outcomes stay in the green message; problems become an amber
+            // sub-line (flash 'success_warn') rendered inside the same success toast.
+            $msg .= match ($nh) {
+                'configured'               => ' Nginx Helper installed and configured.',
+                'installed_not_configured' => ' Nginx Helper installed.',
+                default                    => '',
+            };
+            $warn = match ($nh) {
+                'installed_not_configured' => 'Finish Nginx Helper setup in WP Admin → Nginx Helper.',
+                'install_failed'           => 'Nginx Helper could not be installed (check WP-CLI and network).',
+                'skipped_no_wordpress'     => 'Nginx Helper skipped: WordPress is not installed at the web root yet.',
+                'skipped_no_wpcli'         => 'Nginx Helper skipped: WP-CLI is not installed on the server.',
+                default                    => '',
+            };
+            if ($warn !== '') {
+                flash('success_warn', $warn);
+            }
+        }
+        $this->success($msg);
+    }
+
+    public function config(array $params = []): void
+    {
+        $domain      = (string) $this->request->post('domain', '');
+        $ttl         = (string) $this->request->post('ttl', '');
+        $excludeRaw  = (string) $this->request->post('exclude_urls', '');
+        $cookies     = (string) $this->request->post('bypass_cookies', '');
+        $bypassQ     = $this->request->post('bypass_query', '')     === '1' ? 'on' : 'off';
+        $staleReval  = $this->request->post('stale_revalidate', '') === '1' ? 'on' : 'off';
+        $debugHeader = $this->request->post('debug_header', '')     === '1' ? 'on' : 'off';
+
+        if (!is_valid_domain($domain)) {
+            $this->error('Invalid domain.');
+        }
+
+        // Textarea (newline-separated) → comma-separated for CLI
+        $excludeUrls = implode(',', array_filter(array_map('trim', explode("\n", $excludeRaw))));
+
+        $args = ['--domain', $domain];
+        if ($ttl !== '')         { $args[] = '--ttl';           $args[] = $ttl; }
+        if ($excludeUrls !== '') { $args[] = '--exclude-urls';  $args[] = $excludeUrls; }
+        if ($cookies !== '')     { $args[] = '--bypass-cookies'; $args[] = $cookies; }
+        $args[] = '--bypass-query';     $args[] = $bypassQ;
+        $args[] = '--stale-revalidate'; $args[] = $staleReval;
+        $args[] = '--debug-header';     $args[] = $debugHeader;
+
+        $result = run_cli('cache:config', $args);
+        if (!$result['success']) {
+            $this->error('Failed to save cache config: ' . $result['output']);
+        }
+
+        \Core\DB::log('cache:config', "Cache config updated for: {$domain}");
+        $this->success('Cache config saved.', "/sites/{$domain}?tab=performance");
+    }
+
+    public function redis(array $params = []): void
+    {
+        $action = (string) $this->request->post('action', '');
+        if (!in_array($action, ['enable', 'disable', 'flush'], true)) {
+            $this->error('Invalid action.');
+        }
+
+        $cmd    = "cache:redis-{$action}";
+        $result = run_cli($cmd, []);
+        if (!$result['success']) {
+            $this->error("Redis {$action} failed: " . $result['output']);
+        }
+
+        \Core\DB::log($cmd, "Redis {$action}");
+
+        $referer = (string) ($_SERVER['HTTP_REFERER'] ?? '');
+        $back    = $referer !== '' ? $referer : '/';
+        $this->success("Redis {$action} done.", $back);
+    }
+
+    public function opcacheRestart(array $params = []): void
+    {
+        $php    = (string) $this->request->post('php', '');
+        $args   = ($php !== '') ? ['--php', $php] : [];
+        $result = run_cli('cache:opcache-restart', $args);
+        if (!$result['success']) {
+            $this->error('OPcache restart failed: ' . $result['output']);
+        }
+
+        \Core\DB::log('cache:opcache-restart', $php !== '' ? "PHP {$php}" : 'all versions');
+
+        $referer = (string) ($_SERVER['HTTP_REFERER'] ?? '');
+        $back    = $referer !== '' ? $referer : '/';
+        $this->success('OPcache restarted.', $back);
     }
 
     private function getCacheStats(): array

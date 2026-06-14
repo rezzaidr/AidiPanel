@@ -119,11 +119,24 @@ $_hostname = gethostname() ?: 'server';
 <!-- ===== TOASTS (flash messages) ===== -->
 <div class="fixed top-4 right-4 z-[60] flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)]">
   <?php if (!empty($_flash_success ?? '')): ?>
-    <div x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 4000)" x-transition
+    <div x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 8000)" x-transition
          class="toast toast-ok">
-      <i class="ti ti-circle-check text-base"></i>
-      <span class="flex-1"><?= e($_flash_success) ?></span>
-      <button type="button" @click="show = false" class="text-emerald-700/60 hover:text-emerald-700"><i class="ti ti-x text-sm"></i></button>
+      <i class="ti ti-circle-check text-base shrink-0"></i>
+      <span class="flex-1">
+        <?= e($_flash_success) ?>
+        <?php if (!empty($_flash_success_warn ?? '')): ?>
+          <span class="block text-amber-700 mt-0.5"><?= e($_flash_success_warn) ?></span>
+        <?php endif; ?>
+      </span>
+      <button type="button" @click="show = false" class="text-emerald-700/60 hover:text-emerald-700 shrink-0"><i class="ti ti-x text-sm"></i></button>
+    </div>
+  <?php endif; ?>
+  <?php if (!empty($_flash_warning ?? '')): ?>
+    <div x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 10000)" x-transition
+         class="toast toast-warn">
+      <i class="ti ti-alert-triangle text-base"></i>
+      <span class="flex-1"><?= e($_flash_warning) ?></span>
+      <button type="button" @click="show = false" class="text-amber-700/60 hover:text-amber-700"><i class="ti ti-x text-sm"></i></button>
     </div>
   <?php endif; ?>
   <?php if (!empty($_flash_error ?? '')): ?>
