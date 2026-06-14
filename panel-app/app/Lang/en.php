@@ -395,7 +395,7 @@ return [
 
     // Add Site wizard — per-type form headers
     'site.add.wp.title'      => 'Add WordPress Site',
-    'site.add.wp.desc'       => 'Creates a cache-tuned vhost. Auto-install fields arrive with the WP installer.',
+    'site.add.wp.desc'       => 'Installs a fresh WordPress — core, database, and admin account — on a cache-tuned vhost.',
     'site.add.php.title'     => 'Add PHP Site',
     'site.add.php.desc'      => 'Generic & Laravel work now. Other app installers arrive later.',
     'site.add.static.title'  => 'Add Static HTML Site',
@@ -426,6 +426,7 @@ return [
     'site.add.f.admin_pass'     => 'Admin Password',
     'site.add.f.admin_email'    => 'Admin Email',
     'site.add.f.multisite'      => 'Multisite',
+    'site.add.f.multisite_note' => 'Subdomain multisite needs wildcard SSL (DNS-01) and will arrive in a later release.',
     'site.add.f.node_version'   => 'Node.js Version',
     'site.add.f.python_version' => 'Python Version',
     'site.add.f.app_port'       => 'App Port',

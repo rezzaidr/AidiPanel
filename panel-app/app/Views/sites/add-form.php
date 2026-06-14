@@ -40,7 +40,14 @@ $renderField = function (array $f): void {
         case 'select':
             echo '<select name="' . e($f['key']) . '" class="' . $inCls . '"' . $da . '>';
             foreach ($f['options'] as $opt) {
-                echo '<option value="' . e($opt) . '">' . e($opt) . '</option>';
+                if (is_array($opt)) {   // structured: value/label, optional disabled/selected
+                    $od = !empty($opt['disabled']) ? ' disabled' : '';
+                    $os = !empty($opt['selected']) ? ' selected' : '';
+                    echo '<option value="' . e((string) $opt['value']) . '"' . $od . $os . '>'
+                       . e((string) ($opt['label'] ?? $opt['value'])) . '</option>';
+                } else {                // plain string: value == label
+                    echo '<option value="' . e($opt) . '">' . e($opt) . '</option>';
+                }
             }
             echo '</select>';
             break;
@@ -63,7 +70,7 @@ $renderField = function (array $f): void {
             echo '<input type="text" name="' . e($f['key']) . '" class="' . $inCls . '"' . $val . $ph . $da . '>';
             if (!empty($f['generate'])) {
                 $gc = $dis ? 'text-zinc-300 cursor-not-allowed' : 'text-ink hover:underline';
-                echo '<button type="button" class="text-[11px] ' . $gc . ' mt-1 inline-flex items-center gap-1"' . $da . '>'
+                echo '<button type="button" data-gen-pass="' . e($f['key']) . '" class="text-[11px] ' . $gc . ' mt-1 inline-flex items-center gap-1"' . $da . '>'
                    . '<i class="ti ti-refresh text-xs"></i> ' . e(t('site.add.generate')) . '</button>';
             }
     }
@@ -172,6 +179,20 @@ $renderField = function (array $f): void {
     u.value = base.slice(0, 32);
   });
 })();
+
+// Wire each "Generate" button to refill its password field with a fresh random
+// value (the field also carries a server-random default on first render).
+document.querySelectorAll('[data-gen-pass]').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    var input = document.querySelector('input[name="' + btn.getAttribute('data-gen-pass') + '"]');
+    if (!input || input.disabled) return;
+    var bytes = new Uint8Array(12);
+    (window.crypto || window.msCrypto).getRandomValues(bytes);
+    input.value = Array.prototype.map.call(bytes, function (b) {
+      return ('0' + b.toString(16)).slice(-2);
+    }).join('');
+  });
+});
 </script>
 <script>
 function phpCreateForm() {

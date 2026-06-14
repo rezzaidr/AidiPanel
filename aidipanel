@@ -407,6 +407,8 @@ _usage() {
 
   echo -e "\n${BOLD}Examples:${RESET}"
   echo "  aidipanel site:add --domain example.com --user example --type wordpress"
+  echo "  aidipanel site:add --domain blog.com --type wordpress --wp-title 'My Blog' \\"
+  echo "            --wp-admin-user admin --wp-admin-pass 'S3cret' --wp-admin-email you@blog.com [--wp-multisite subdir]"
   echo "  aidipanel cache:purge --domain example.com"
   echo "  aidipanel db:add --name mydb --user myuser"
   echo "  aidipanel ssl:install --domain example.com"
@@ -463,6 +465,12 @@ _site_add() {
   domain=$(_opt "domain"); php_ver=$(_opt "php" "${PHP_DEFAULT_VERSION}"); site_type=$(_opt "type" "php")
   site_user=$(_opt "user" "")
 
+  # WordPress provisioning options (only used for --type wordpress)
+  local wp_title wp_admin_user wp_admin_pass wp_admin_email wp_multisite
+  wp_title=$(_opt "wp-title" ""); wp_admin_user=$(_opt "wp-admin-user" "admin")
+  wp_admin_pass=$(_opt "wp-admin-pass" ""); wp_admin_email=$(_opt "wp-admin-email" "")
+  wp_multisite=$(_opt "wp-multisite" "off")
+
   _require_arg "domain" "$domain" "site:add --domain example.com --user example --type wordpress"
 
   # Validate
@@ -472,6 +480,26 @@ _site_add() {
 
   [[ "$site_type" =~ ^(wordpress|php|laravel|static|proxy)$ ]] \
     || die "Invalid site type: ${site_type}. Supported: wordpress, php, laravel, static, proxy"
+
+  # WordPress: validate multisite mode (subdomain deferred — needs wildcard SSL), and
+  # when admin details are supplied, validate the install fields + WP-CLI availability.
+  local wp_do_install=0
+  if [[ "$site_type" == "wordpress" ]]; then
+    case "$wp_multisite" in
+      off|subdir) ;;
+      subdomain) die "Subdomain multisite needs wildcard SSL (DNS-01), not supported yet. Use --wp-multisite subdir." ;;
+      *) die "Invalid --wp-multisite '${wp_multisite}'. Use: off or subdir." ;;
+    esac
+    if [[ -n "$wp_admin_email" ]]; then
+      wp_do_install=1
+      [[ -n "$wp_title" ]]      || die "WordPress install requires --wp-title."
+      [[ -n "$wp_admin_user" ]] || die "WordPress install requires --wp-admin-user."
+      [[ -n "$wp_admin_pass" ]] || die "WordPress install requires --wp-admin-pass."
+      [[ "$wp_admin_email" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]] \
+        || die "Invalid --wp-admin-email: ${wp_admin_email}"
+      command -v wp >/dev/null 2>&1 || die "WP-CLI not installed; cannot install WordPress (install.sh installs it)."
+    fi
+  fi
 
   # --user is optional; derive a unique suggestion from the domain when absent.
   [[ -z "$site_user" ]] && site_user=$(_unique_site_user "$(_suggest_site_user "$domain")")
@@ -492,8 +520,10 @@ _site_add() {
 
   # Rollback ledger
   DID_CREATE_USER=0
-  local created_home=0 wrote_pool=0 wrote_vhost=0 enabled=0 wrote_snippet=0
+  local created_home=0 wrote_pool=0 wrote_vhost=0 enabled=0 wrote_snippet=0 wrote_db=0
+  local db_name="" db_user="" db_pass=""
   _site_add_rollback() {
+    [[ "$wrote_db"     == 1 ]] && _db_deprovision "$db_name" "$db_user"
     [[ "$enabled"      == 1 ]] && rm -f "${NGINX_ENABLED_DIR}/${domain}.conf"
     [[ "$wrote_vhost"  == 1 ]] && rm -f "${NGINX_CONF_DIR}/${domain}.conf"
     [[ "$wrote_snippet" == 1 ]] && rm -f "$(_cache_snippet_path "$domain")"
@@ -511,7 +541,7 @@ _site_add() {
   _site_grant_web_access "$site_user"       || { _site_add_rollback; die "Could not grant web access for '${site_user}'."; }
   _write_fpm_pool "$site_user" "$php_ver"   || { _site_add_rollback; die "PHP-FPM pool creation failed."; }
   wrote_pool=1
-  _site_write_vhost "$domain" "$php_ver" "$webroot" "$site_type" "$site_user"; wrote_vhost=1
+  _site_write_vhost "$domain" "$php_ver" "$webroot" "$site_type" "$site_user" "$wp_multisite"; wrote_vhost=1
 
   # Create per-site cache snippet (cache OFF by default; enables on cache:enable)
   _cache_snippet_write "$domain" "1h" \
@@ -531,6 +561,28 @@ _site_add() {
   systemctl reload nginx >> "$CLI_LOG" 2>&1
   ok "Site created: ${domain}"
 
+  # --- WordPress provisioning (only when admin details were supplied) ---
+  local wp_installed=0
+  if [[ "$wp_do_install" == 1 ]]; then
+    # Derive a shell/SQL-safe DB identity from the (unique) site user.
+    local _s; _s=$(printf '%s' "$site_user" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_' '_')
+    db_user="${_s:0:32}"; db_name="wp_${_s:0:60}"
+    db_pass=$(openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 24)
+    log "Provisioning database for WordPress: ${db_name} (user: ${db_user})..."
+    _db_provision "$db_name" "$db_user" "$db_pass" \
+      || { _site_add_rollback; die "Database provisioning failed for ${domain}."; }
+    wrote_db=1
+    log "Installing WordPress (${domain}, multisite=${wp_multisite})..."
+    if ! _site_install_wordpress "$domain" "$site_user" "$webroot" "$wp_multisite" \
+         "$wp_title" "$wp_admin_user" "$wp_admin_pass" "$wp_admin_email" \
+         "$db_name" "$db_user" "$db_pass"; then
+      _site_add_rollback
+      die "WordPress installation failed for ${domain} — rolled back. See ${CLI_LOG}."
+    fi
+    wp_installed=1
+    ok "WordPress installed: ${domain}"
+  fi
+
   # Machine-readable summary for the Panel (Patch 2). The CLI writes NO DB state.
   local sock; sock=$(_site_php_sock "$php_ver" "$site_user")
   echo "site_user=${site_user}"
@@ -538,10 +590,17 @@ _site_add() {
   echo "pool=${site_user}"
   echo "socket=${sock}"
   echo "php_version=${php_ver}"
+  if [[ "$wp_installed" == 1 ]]; then
+    echo "wp_installed=1"
+    echo "wp_multisite=${wp_multisite}"
+    echo "db_name=${db_name}"
+    echo "db_user=${db_user}"
+    echo "admin_url=https://${domain}/wp-admin"
+  fi
 }
 
 _site_write_vhost() {
-  local domain="$1" php_ver="$2" webroot="$3" site_type="$4" site_user="$5"
+  local domain="$1" php_ver="$2" webroot="$3" site_type="$4" site_user="$5" wp_multisite="${6:-off}"
   local sock; sock=$(_site_php_sock "$php_ver" "$site_user")
   local conf_file="${NGINX_CONF_DIR}/${domain}.conf"
 
@@ -656,6 +715,22 @@ WPDENY
 )
   fi
 
+  # WordPress subdirectory-multisite network rewrites (server scope). Subdomain mode is
+  # intentionally NOT emitted — it needs wildcard SSL (deferred).
+  local wp_multisite_block=""
+  if [[ "$site_type" == "wordpress" && "$wp_multisite" == "subdir" ]]; then
+    wp_multisite_block=$(cat <<'WPMS'
+
+    # WordPress subdirectory multisite
+    if (!-e $request_filename) {
+        rewrite /wp-admin$ $scheme://$host$uri/ permanent;
+        rewrite ^(/[^/]+)?(/wp-.*) $2 last;
+        rewrite ^(/[^/]+)?(/.*\.php) $2 last;
+    }
+WPMS
+)
+  fi
+
   cat > "$conf_file" <<VHOST
 # AidiPanel — ${domain}
 # Type: ${site_type} | PHP: ${php_ver}
@@ -711,6 +786,7 @@ server {
     }
 ${wp_deny_block}
 ${main_location}
+${wp_multisite_block}
 ${php_location}
 ${proxy_block}
 
@@ -719,6 +795,49 @@ ${proxy_block}
     error_log  /var/log/nginx/${domain}-error.log warn;
 }
 VHOST
+}
+
+# Install WordPress into an already-created site, run as the site user via WP-CLI.
+# Passwords are fed over stdin (--prompt) so they never appear in the process list.
+# Returns non-zero on any failure so the caller can roll back; detail goes to CLI_LOG.
+_site_install_wordpress() {
+  local domain="$1" site_user="$2" webroot="$3" multisite="$4"
+  local wp_title="$5" wp_admin_user="$6" wp_admin_pass="$7" wp_admin_email="$8"
+  local db_name="$9" db_user="${10}" db_pass="${11}"
+
+  local cache_dir="/tmp/aidipanel-wp-cli-cache"
+  mkdir -p "$cache_dir"
+  chown "${site_user}:${site_user}" "$cache_dir" 2>/dev/null || true
+  local wp=(sudo -u "$site_user" -- env "WP_CLI_CACHE_DIR=${cache_dir}" wp --path="$webroot")
+
+  # 1. Download core (idempotent)
+  if [[ ! -f "${webroot}/wp-load.php" ]]; then
+    "${wp[@]}" core download --version=latest >> "$CLI_LOG" 2>&1 \
+      || { warn "wp core download failed"; return 1; }
+  fi
+
+  # 2. wp-config.php — salts auto-generated; DB password via stdin, not argv.
+  printf '%s\n' "$db_pass" | "${wp[@]}" config create \
+    --dbname="$db_name" --dbuser="$db_user" --dbhost=localhost --force --prompt=dbpass \
+    >> "$CLI_LOG" 2>&1 || { warn "wp config create failed"; return 1; }
+
+  # 3. Install (single or subdirectory network). Admin password via stdin.
+  local -a subcmd checkargs
+  if [[ "$multisite" == "subdir" ]]; then
+    subcmd=(core multisite-install); checkargs=(core is-installed --network)
+  else
+    subcmd=(core install);           checkargs=(core is-installed)
+  fi
+  printf '%s\n' "$wp_admin_pass" | "${wp[@]}" "${subcmd[@]}" \
+    --url="https://${domain}" --title="$wp_title" --admin_user="$wp_admin_user" \
+    --admin_email="$wp_admin_email" --skip-email --prompt=admin_password \
+    >> "$CLI_LOG" 2>&1 || { warn "wp ${subcmd[*]} failed"; return 1; }
+
+  # 4. Verify
+  "${wp[@]}" "${checkargs[@]}" >> "$CLI_LOG" 2>&1 \
+    || { warn "WordPress not installed after setup"; return 1; }
+
+  return 0
 }
 
 # Validate the .aidipanel-managed marker before a destructive purge. return 1 to refuse.
@@ -1799,13 +1918,32 @@ _cache_opcache_restart() {
 # DATABASE COMMANDS
 # ===========================================================================
 
+# Provision / deprovision a MySQL database + user. Shared by db:add and WordPress
+# provisioning so both go through one code path.
+_db_provision() {
+  local db_name="$1" db_user="$2" db_pass="$3"
+  local db_pass_sql; db_pass_sql=$(_sql_escape_literal "$db_pass")
+  # `|| return 1` on each step so a failure surfaces even when this runs in a `||`
+  # context (errexit suppressed), e.g. the site:add WordPress rollback path.
+  _mysql_exec "CREATE DATABASE IF NOT EXISTS \`${db_name}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" || return 1
+  _mysql_exec "CREATE USER IF NOT EXISTS '${db_user}'@'localhost' IDENTIFIED BY '${db_pass_sql}';" || return 1
+  _mysql_exec "GRANT ALL PRIVILEGES ON \`${db_name}\`.* TO '${db_user}'@'localhost';" || return 1
+  _mysql_exec "FLUSH PRIVILEGES;" || return 1
+}
+
+_db_deprovision() {
+  local db_name="$1" db_user="$2"
+  _mysql_exec "DROP DATABASE IF EXISTS \`${db_name}\`;"
+  _mysql_exec "DROP USER IF EXISTS '${db_user}'@'localhost';"
+  _mysql_exec "FLUSH PRIVILEGES;"
+}
+
 _db_add() {
   _require_root "db:add"
   _parse_opts "$@"
   local db_name; db_name=$(_opt "name")
   local db_user; db_user=$(_opt "user" "$db_name")
   local db_pass; db_pass=$(_opt "pass" "$(openssl rand -base64 16 | tr -dc 'A-Za-z0-9' | head -c 16)")
-  local db_pass_sql; db_pass_sql=$(_sql_escape_literal "$db_pass")
 
   _require_arg "name" "$db_name" "db:add --name mydb --user myuser"
 
@@ -1819,10 +1957,7 @@ _db_add() {
 
   log "Creating database: ${db_name} (user: ${db_user})..."
 
-  _mysql_exec "CREATE DATABASE IF NOT EXISTS \`${db_name}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-  _mysql_exec "CREATE USER IF NOT EXISTS '${db_user}'@'localhost' IDENTIFIED BY '${db_pass_sql}';"
-  _mysql_exec "GRANT ALL PRIVILEGES ON \`${db_name}\`.* TO '${db_user}'@'localhost';"
-  _mysql_exec "FLUSH PRIVILEGES;"
+  _db_provision "$db_name" "$db_user" "$db_pass"
 
   ok "Database created: ${db_name}"
   echo ""
@@ -1848,9 +1983,7 @@ _db_delete() {
 
   [[ "$force" == "true" ]] || _confirm "Delete database '${db_name}' and its user '${db_user}'?" || { log "Cancelled."; return 0; }
 
-  _mysql_exec "DROP DATABASE IF EXISTS \`${db_name}\`;"
-  _mysql_exec "DROP USER IF EXISTS '${db_user}'@'localhost';"
-  _mysql_exec "FLUSH PRIVILEGES;"
+  _db_deprovision "$db_name" "$db_user"
   ok "Database deleted: ${db_name} (user: ${db_user})"
 }
 

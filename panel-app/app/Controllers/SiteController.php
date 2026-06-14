@@ -37,6 +37,13 @@ class SiteController extends BaseController
         $proxyPass = (string) $this->request->post('proxy_pass', 'http://127.0.0.1:3000');
         $siteUser  = strtolower(trim((string) $this->request->post('site_user', '')));
 
+        // WordPress provisioning fields (only read/validated for --type wordpress).
+        $wpTitle = trim((string) $this->request->post('site_title', ''));
+        $wpUser  = trim((string) $this->request->post('admin_user', ''));
+        $wpPass  = (string) $this->request->post('admin_pass', '');
+        $wpEmail = trim((string) $this->request->post('admin_email', ''));
+        $wpMulti = (string) $this->request->post('multisite', 'off');
+
         if (!is_valid_domain($domain)) {
             $this->error('Invalid domain name.');
         }
@@ -53,6 +60,29 @@ class SiteController extends BaseController
         }
         if ($siteUser !== '' && !preg_match('/^[a-z][a-z0-9_-]{0,31}$/', $siteUser)) {
             $this->error('Invalid site user: lowercase, start with a letter, [a-z0-9_-], max 32 chars.');
+        }
+
+        // WordPress fields: a thin pre-check for friendly errors; the CLI validates
+        // again and is the real gatekeeper before it installs anything.
+        if ($type === 'wordpress') {
+            if ($wpTitle === '' || mb_strlen($wpTitle) > 200) {
+                $this->error('WordPress site title is required (max 200 characters).');
+            }
+            if ($wpUser === '' || strlen($wpUser) > 60 || preg_match('/[\r\n]/', $wpUser)) {
+                $this->error('WordPress admin username is required (max 60 characters, no line breaks).');
+            }
+            if (strlen($wpPass) < 8 || preg_match('/[\r\n]/', $wpPass)) {
+                $this->error('WordPress admin password must be at least 8 characters with no line breaks.');
+            }
+            if (!filter_var($wpEmail, FILTER_VALIDATE_EMAIL)) {
+                $this->error('A valid WordPress admin email is required.');
+            }
+            if ($wpMulti === 'subdomain') {
+                $this->error('Subdomain multisite needs wildcard SSL and is not available yet — choose Disabled or Subdirectory.');
+            }
+            if (!in_array($wpMulti, ['off', 'subdir'], true)) {
+                $wpMulti = 'off';
+            }
         }
 
         // Check the DB AND the filesystem - neither may already exist
@@ -79,6 +109,26 @@ class SiteController extends BaseController
             $args[] = '--proxy-pass';
             $args[] = $proxyPass;
         }
+        if ($type === 'wordpress') {
+            // The CLI installs real WordPress when --wp-admin-email is present;
+            // it re-validates these and feeds the passwords to WP-CLI over stdin.
+            array_push(
+                $args,
+                '--wp-title',       $wpTitle,
+                '--wp-admin-user',  $wpUser,
+                '--wp-admin-pass',  $wpPass,
+                '--wp-admin-email', $wpEmail,
+                '--wp-multisite',   $wpMulti
+            );
+        }
+
+        // A WordPress create downloads core + installs WP (~1 min), on top of any
+        // PHP install below. Keep the request alive past a tab close so the
+        // DB-write still runs (php_install_begin() does the same when it fires).
+        if ($type === 'wordpress') {
+            @ignore_user_abort(true);
+            @set_time_limit(0);
+        }
 
         // Patch C+: when the chosen version isn't installed, the CLI auto-installs
         // it (~1–2 min). Guard that single long op: keep the request alive past a
@@ -102,8 +152,14 @@ class SiteController extends BaseController
 
         // Persist to panel DB
         $this->syncOneSite($domain, $type, $phpVer);
-
         \Core\DB::log('site:add', "Added site: {$domain} ({$type}, PHP {$phpVer})");
+
+        if ($type === 'wordpress') {
+            $kv       = parse_kv_output($result['output']);
+            $adminUrl = $kv['admin_url'] ?? "https://{$domain}/wp-admin";
+            $this->success("WordPress site {$domain} created. Admin login: {$adminUrl}", "/sites/{$domain}");
+        }
+
         $this->success("Site {$domain} created successfully.", "/sites/{$domain}");
     }
 
@@ -370,13 +426,20 @@ class SiteController extends BaseController
                 'type' => 'wordpress', 'icon' => 'ti-brand-wordpress',
                 'title' => 'site.add.wp.title', 'desc' => 'site.add.wp.desc', 'creatable' => true,
                 'fields' => [
-                    ['key' => 'domain',      'label' => 'site.add.f.domain',      'input' => 'text',     'required' => true,  'enabled' => true,  'placeholder' => 'example.com'],
-                    ['key' => 'site_title',  'label' => 'site.add.f.site_title',  'input' => 'text',     'required' => true,  'enabled' => false, 'placeholder' => 'My WordPress Site'],
+                    ['key' => 'domain',      'label' => 'site.add.f.domain',      'input' => 'text',     'required' => true,  'enabled' => true, 'placeholder' => 'example.com'],
+                    ['key' => 'site_title',  'label' => 'site.add.f.site_title',  'input' => 'text',     'required' => true,  'enabled' => true, 'placeholder' => 'My WordPress Site'],
                     $userField,
-                    ['key' => 'admin_user',  'label' => 'site.add.f.admin_user',  'input' => 'text',     'required' => true,  'enabled' => false, 'placeholder' => 'admin'],
-                    ['key' => 'admin_pass',  'label' => 'site.add.f.admin_pass',  'input' => 'password', 'required' => true,  'enabled' => false, 'value' => $adminPass, 'generate' => true],
-                    ['key' => 'admin_email', 'label' => 'site.add.f.admin_email', 'input' => 'text',     'required' => true,  'enabled' => false, 'placeholder' => 'you@example.com'],
-                    ['key' => 'multisite',   'label' => 'site.add.f.multisite',   'input' => 'select',   'required' => false, 'enabled' => false, 'options' => ['Disabled', 'Subdomain', 'Subdirectory']],
+                    ['key' => 'admin_user',  'label' => 'site.add.f.admin_user',  'input' => 'text',     'required' => true,  'enabled' => true, 'placeholder' => 'admin'],
+                    ['key' => 'admin_pass',  'label' => 'site.add.f.admin_pass',  'input' => 'password', 'required' => true,  'enabled' => true, 'value' => $adminPass, 'generate' => true],
+                    ['key' => 'admin_email', 'label' => 'site.add.f.admin_email', 'input' => 'text',     'required' => true,  'enabled' => true, 'placeholder' => 'you@example.com'],
+                    // CLI --wp-multisite takes off|subdir; subdomain needs wildcard SSL (DNS-01) → shown disabled.
+                    ['key' => 'multisite',   'label' => 'site.add.f.multisite',   'input' => 'select',   'required' => false, 'enabled' => true,
+                     'options' => [
+                         ['value' => 'off',       'label' => 'Disabled'],
+                         ['value' => 'subdir',    'label' => 'Subdirectory'],
+                         ['value' => 'subdomain', 'label' => 'Subdomain (needs wildcard SSL)', 'disabled' => true],
+                     ],
+                     'note' => 'site.add.f.multisite_note'],
                     $phpField,
                 ],
             ],
