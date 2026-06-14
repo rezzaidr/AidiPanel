@@ -217,7 +217,9 @@ function web_cli_allowed_commands(): array
     return [
         'site:add', 'site:delete', 'site:list',
         'vhost:save',
+        'cache:page', 'cache:redis',
         'cache:status', 'cache:purge', 'cache:enable', 'cache:disable',
+        'cache:config', 'cache:redis-enable', 'cache:redis-disable', 'cache:redis-flush', 'cache:opcache-restart',
         'db:add', 'db:delete', 'db:list', 'db:backup',
         'php:list', 'php:version', 'php:restart', 'php:install',
         'ssl:install', 'ssl:renew', 'ssl:status', 'ssl:import',
@@ -352,6 +354,24 @@ function run_cli(string $command, array $args = []): array
         'output'  => $cleanOutput,
         'code'    => $exitCode,
     ];
+}
+
+/**
+ * Parse key=value CLI output into an associative array.
+ * Lines that don't contain '=' are skipped. Values may be empty.
+ */
+function parse_kv_output(string $output): array
+{
+    $result = [];
+    foreach (explode("\n", $output) as $line) {
+        $line = trim($line);
+        if ($line === '' || !str_contains($line, '=')) {
+            continue;
+        }
+        [$key, $value] = array_pad(explode('=', $line, 2), 2, '');
+        $result[trim($key)] = trim($value);
+    }
+    return $result;
 }
 
 /**

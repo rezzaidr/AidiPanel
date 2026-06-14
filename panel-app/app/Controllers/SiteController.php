@@ -135,13 +135,53 @@ class SiteController extends BaseController
             ["%{$domain}%"]
         );
 
-        $diskSize  = $this->getSiteDiskUsage((string) ($site['webroot'] ?? ''));
-        $opcache   = $activeTab === 'performance' ? $this->getOpcacheStatus() : [];
-        $redisInfo = $activeTab === 'performance' ? $this->getRedisInfo()    : [];
+        $type          = (string) ($site['type'] ?? 'php');
+        $phpVer        = (string) ($site['php_version'] ?? '');
+        $diskSize      = $this->getSiteDiskUsage((string) ($site['webroot'] ?? ''));
+        $pageCacheInfo = [];
+        $objectCacheInfo = [];
+        $opcacheInfo   = [];
+        $protocolInfo  = [];
+        $cacheConfig   = [];
+        $lastPurge     = null;
+        $cacheZoneSize = null;
+
+        if ($activeTab === 'performance') {
+            $pageCacheInfo   = $this->getPageCacheInfo($domain);
+            $objectCacheInfo = $this->getObjectCacheInfo($domain, $type);
+            $opcacheInfo     = $this->buildOpcacheInfo($this->getOpcacheStatus(), $phpVer);
+            $protocolInfo    = $this->getProtocolInfo($domain);
+
+            $snippetFile = "/etc/nginx/snippets/cache-{$domain}.conf";
+            if (is_readable($snippetFile)) {
+                $raw = (string) file_get_contents($snippetFile);
+                foreach (['TTL', 'EXCLUDE_URLS', 'BYPASS_COOKIES', 'BYPASS_QUERY', 'STALE_REVALIDATE', 'DEBUG_HEADER'] as $key) {
+                    if (preg_match('/# AIDIPANEL_CACHE_' . $key . '=(.*)/', $raw, $m)) {
+                        $cacheConfig[strtolower(str_replace('_', '-', $key))] = trim($m[1]);
+                    }
+                }
+            }
+            $lastPurgeRow = $this->db->row(
+                "SELECT created_at FROM activity_log WHERE action = 'cache:purge' AND detail LIKE ? ORDER BY created_at DESC LIMIT 1",
+                ["%{$domain}%"]
+            );
+            $lastPurge = $lastPurgeRow ? $lastPurgeRow['created_at'] : null;
+
+            $duOut = @shell_exec('du -sh /var/cache/nginx/fastcgi 2>/dev/null');
+            if ($duOut !== null) {
+                $duParts = preg_split('/\s+/', trim($duOut), 2);
+                $cacheZoneSize = $duParts[0] ?? null;
+            }
+        }
+
+        // hasCache is still needed for the Overview tab cache card (cheap DB read)
+        $hasCache = (bool) ($site['cache_enabled'] ?? false);
 
         $this->view('sites/detail', compact(
             'site', 'nginxConf', 'ssl', 'sslExpiry', 'sslDaysLeft',
-            'logs', 'activeTab', 'diskSize', 'opcache', 'redisInfo'
+            'logs', 'activeTab', 'diskSize', 'hasCache',
+            'pageCacheInfo', 'objectCacheInfo', 'opcacheInfo', 'protocolInfo',
+            'cacheConfig', 'lastPurge', 'cacheZoneSize'
         ) + ['_full_bleed' => true]);
     }
 
@@ -491,23 +531,127 @@ class SiteController extends BaseController
         return is_array($s) ? $s : [];
     }
 
-    private function getRedisInfo(): array
+    private function getPageCacheInfo(string $domain): array
     {
-        $pong = trim((string) @shell_exec('redis-cli ping 2>/dev/null'));
-        if ($pong !== 'PONG') return ['ok' => false];
-
-        $info = (string) @shell_exec('redis-cli info 2>/dev/null');
-        $mem  = '—';
-        if (preg_match('/used_memory_human:(\S+)/', $info, $m)) {
-            $mem = rtrim($m[1]);
+        // An empty array signals "CLI unavailable" to the view, which then falls
+        // back to the DB cache flag and suppresses engine-level warnings/actions.
+        $result = run_cli('cache:page', ['--action', 'status', '--domain', $domain]);
+        if (!$result['success'] || trim($result['output']) === '') {
+            return [];
         }
-        $keys = 0;
-        preg_match_all('/keys=(\d+)/', $info, $km);
-        foreach (($km[1] ?? []) as $n) {
-            $keys += (int) $n;
+        $kv = parse_kv_output($result['output']);
+        return [
+            'engine'           => $kv['engine'] ?? 'fastcgi',
+            'engine_ok'        => ($kv['engine_ok'] ?? '0') === '1',
+            'site_cache_status'=> $kv['site_cache_status'] ?? 'unknown',
+            'wp_helper_status' => $kv['wp_helper_status'] ?? 'unknown',
+            'cache_header'     => $kv['cache_header'] ?? 'unknown',
+            'hit_rate'         => $kv['hit_rate'] ?? 'unknown',
+            'cache_path'       => $kv['cache_path'] ?? '/var/cache/nginx/fastcgi',
+            'can_enable'       => ($kv['can_enable'] ?? '0') === '1',
+            'can_disable'      => ($kv['can_disable'] ?? '0') === '1',
+            'can_purge'        => ($kv['can_purge'] ?? '0') === '1',
+            'can_check'        => ($kv['can_check'] ?? '0') === '1',
+            'error'            => $kv['error'] ?? '',
+        ];
+    }
+
+    private function getObjectCacheInfo(string $domain, string $type): array
+    {
+        // Skip CLI call for non-WordPress sites — report unsupported immediately
+        if ($type !== 'wordpress') {
+            return [
+                'engine' => 'redis', 'service_ok' => false,
+                'redis_host' => '127.0.0.1', 'redis_port' => '6379',
+                'site_cache_status' => 'unsupported', 'plugin_status' => 'not_wordpress',
+                'dropin_status' => 'unknown', 'prefix' => '', 'prefix_managed' => false,
+                'site_keys' => 'unknown', 'site_memory' => 'unknown',
+                'wp_cli_missing' => false,
+                'can_enable' => false, 'can_disable' => false, 'can_flush' => false,
+                'error' => '',
+            ];
+        }
+        $result = run_cli('cache:redis', ['--action', 'status', '--domain', $domain]);
+        if (!$result['success'] || trim($result['output']) === '') {
+            return [];   // CLI unavailable — the view shows "status unavailable"
+        }
+        $kv = parse_kv_output($result['output']);
+        return [
+            'engine'           => 'redis',
+            'service_ok'       => ($kv['service_ok'] ?? '0') === '1',
+            'redis_host'       => $kv['redis_host'] ?? '127.0.0.1',
+            'redis_port'       => $kv['redis_port'] ?? '6379',
+            'site_cache_status'=> $kv['site_cache_status'] ?? 'unknown',
+            'plugin_status'    => $kv['plugin_status'] ?? 'unknown',
+            'dropin_status'    => $kv['dropin_status'] ?? 'unknown',
+            'prefix'           => $kv['prefix'] ?? '',
+            'prefix_managed'   => ($kv['prefix_managed'] ?? '0') === '1',
+            'site_keys'        => $kv['site_keys'] ?? 'unknown',
+            'site_memory'      => $kv['site_memory'] ?? 'unknown',
+            'wp_cli_missing'   => ($kv['wp_cli_missing'] ?? '0') === '1',
+            'can_enable'       => ($kv['can_enable'] ?? '0') === '1',
+            'can_disable'      => ($kv['can_disable'] ?? '0') === '1',
+            'can_flush'        => ($kv['can_flush'] ?? '0') === '1',
+            'error'            => $kv['error'] ?? '',
+        ];
+    }
+
+    private function buildOpcacheInfo(array $raw, string $phpVer): array
+    {
+        $enabled = !empty($raw['opcache_enabled']);
+        $st = $raw['opcache_statistics'] ?? [];
+        $mu = $raw['memory_usage'] ?? [];
+        return [
+            'enabled'        => $enabled,
+            'scope'          => 'php_runtime',
+            'php_version'    => $phpVer ?: '—',
+            'hit_rate'       => $enabled ? round((float) ($st['opcache_hit_rate'] ?? 0), 1) . '%' : '—',
+            'hits'           => $enabled ? number_format((int) ($st['hits'] ?? 0)) : '—',
+            'memory_used'    => $enabled ? format_bytes((int) ($mu['used_memory'] ?? 0)) : '—',
+            'memory_limit'   => $enabled ? format_bytes((int) (($mu['used_memory'] ?? 0) + ($mu['free_memory'] ?? 0))) : '—',
+            'scripts_cached' => $enabled ? number_format((int) ($st['num_cached_scripts'] ?? 0)) : '—',
+            'managed_at'     => 'Admin > PHP',
+        ];
+    }
+
+    private function getProtocolInfo(string $domain): array
+    {
+        // 5-minute file cache to avoid repeated subprocess calls
+        $cacheFile = '/opt/aidipanel/storage/cache/protocol_info.json';
+        if (is_readable($cacheFile) && (time() - (int) @filemtime($cacheFile)) < 300) {
+            $cached = json_decode((string) @file_get_contents($cacheFile), true);
+            if (is_array($cached)) {
+                return $cached;
+            }
         }
 
-        return ['ok' => true, 'keys' => $keys, 'memory' => $mem];
+        $vhostConf  = "/etc/nginx/sites-available/{$domain}.conf";
+        $vhost      = is_readable($vhostConf) ? (string) @file_get_contents($vhostConf) : '';
+        $globalConf = (string) @file_get_contents('/etc/nginx/nginx.conf');
+        $nginxV     = (string) @shell_exec('nginx -V 2>&1');
+
+        $http2  = (bool) preg_match('/http2\s+on|listen\s[^;]+\s+http2/i', $vhost) ? 'on' : 'off';
+        $http3  = (bool) preg_match('/quic|http3/i', $vhost) ? 'on' : 'not_configured';
+        $brotli = str_contains($nginxV, 'brotli') ? 'on' : 'not_installed';
+        $gzip   = (bool) preg_match('/gzip\s+on/i', $vhost . $globalConf) ? 'on' : 'off';
+        $browserCache = (bool) preg_match('/expires\s+[^;]+;|add_header\s+Cache-Control/i', $vhost . $globalConf) ? 'on' : 'off';
+
+        $info = [
+            'http2'                 => $http2,
+            'http3'                 => $http3,
+            'brotli'                => $brotli,
+            'gzip'                  => $gzip,
+            'browser_cache_headers' => $browserCache,
+            'scope'                 => 'server_level',
+        ];
+
+        // Write cache file (non-fatal)
+        $cacheDir = dirname($cacheFile);
+        if (is_dir($cacheDir) || @mkdir($cacheDir, 0770, true)) {
+            @file_put_contents($cacheFile, json_encode($info));
+        }
+
+        return $info;
     }
 
     /**

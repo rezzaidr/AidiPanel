@@ -59,20 +59,7 @@ $tabs = [
     'settings'    => ['icon' => 'ti-settings',      'label' => t('site.tab.settings')],
 ];
 
-// ── OPcache stats (Performance tab only) ────────────────────────────────────
-$opcacheEnabled = !empty($opcache['opcache_enabled']);
-$opcHitRate  = '—';
-$opcHits     = '—';
-$opcUsedMem  = '—';
-$opcTotalMem = '—';
-if ($opcacheEnabled && isset($opcache['opcache_statistics'])) {
-    $st         = $opcache['opcache_statistics'];
-    $opcHitRate = round((float) ($st['opcache_hit_rate'] ?? 0), 1) . '%';
-    $opcHits    = number_format((int) ($st['hits'] ?? 0));
-    $mu         = $opcache['memory_usage'] ?? [];
-    $opcUsedMem  = format_bytes((int) ($mu['used_memory'] ?? 0));
-    $opcTotalMem = format_bytes((int) (($mu['used_memory'] ?? 0) + ($mu['free_memory'] ?? 0)));
-}
+// (OPcache data is now in $opcacheInfo — built by SiteController::buildOpcacheInfo)
 ?>
 
 <!-- ===== FULL-BLEED SITE HEADER BAND ===== -->
@@ -306,164 +293,529 @@ if ($opcacheEnabled && isset($opcache['opcache_statistics'])) {
 
 <?php elseif ($activeTab === 'performance'): ?>
 <!-- ─────────────────────────── PERFORMANCE ──────────────────────────────── -->
+<?php
+  // Page Cache state (from CLI status; falls back to DB $hasCache if CLI unavailable)
+  $pcStatus   = $pageCacheInfo['site_cache_status'] ?? 'unknown';
+  $pcEngineOk = $pageCacheInfo['engine_ok'] ?? false;
+  $pcActive   = $pcStatus === 'active';
+  $pcUnsup    = $pcStatus === 'unsupported';
+  if ($pcStatus === 'unknown' && empty($pageCacheInfo)) { $pcActive = $hasCache; }
+  $wpHelper   = $pageCacheInfo['wp_helper_status'] ?? '';
 
-  <!-- Page Cache card -->
+  $currentTtl   = $cacheConfig['ttl'] ?? '1h';
+  $staleOn      = ($cacheConfig['stale-revalidate'] ?? 'off') === 'on';
+  $debugOn      = ($cacheConfig['debug-header'] ?? 'on') === 'on';
+  $bypassQOn    = ($cacheConfig['bypass-query'] ?? 'off') === 'on';
+  $excludeLines = implode("\n", array_filter(array_map('trim', explode(',', $cacheConfig['exclude-urls'] ?? ''))));
+  $ttlLabels    = ['5m'=>'5 minutes','10m'=>'10 minutes','15m'=>'15 minutes','30m'=>'30 minutes',
+                   '1h'=>'1 hour','2h'=>'2 hours','6h'=>'6 hours','12h'=>'12 hours','1d'=>'1 day','7d'=>'7 days'];
+
+  // Object Cache state
+  $ocStatus  = $objectCacheInfo['site_cache_status'] ?? 'unknown';
+  $ocSvcOk   = $objectCacheInfo['service_ok'] ?? false;
+  $ocPlugin  = $objectCacheInfo['plugin_status'] ?? 'unknown';
+  $ocDropin  = $objectCacheInfo['dropin_status'] ?? 'unknown';
+  $ocPrefix  = $objectCacheInfo['prefix'] ?? '';
+  $ocManaged = $objectCacheInfo['prefix_managed'] ?? false;
+  $ocWpCli   = $objectCacheInfo['wp_cli_missing'] ?? false;
+  $ocActive  = $ocStatus === 'active';
+  $ocUnsup   = $ocStatus === 'unsupported';
+  $ocSvcDown = $ocStatus === 'service_down';
+
+  // OPcache state
+  $opcEnabled = $opcacheInfo['enabled'] ?? false;
+  $opcHitRate = $opcacheInfo['hit_rate'] ?? '—';
+  $opcHits    = $opcacheInfo['hits'] ?? '—';
+  $opcUsedMem = $opcacheInfo['memory_used'] ?? '—';
+  $opcLimit   = $opcacheInfo['memory_limit'] ?? '—';
+
+  // Protocol state — $protocolInfo is a flat map of feature => 'on'|'off'|...
+  $protoLabels   = [
+    'http2'                 => 'HTTP/2',
+    'http3'                 => 'HTTP/3 (QUIC)',
+    'brotli'                => 'Brotli',
+    'gzip'                  => 'Gzip',
+    'browser_cache_headers' => 'Browser cache headers',
+  ];
+?>
+
+  <!-- Page Cache card (full width) -->
   <div class="card overflow-hidden mb-5">
+
+    <!-- Card head -->
     <div class="card-head">
       <div class="flex items-center gap-2.5">
-        <i class="ti ti-bolt text-speed text-lg"></i>
+        <i class="ti ti-bolt <?= $pcActive ? 'text-speed' : 'text-zinc-300' ?> text-lg"></i>
         <div>
-          <h2 class="font-head font-semibold text-sm text-zinc-900 flex items-center gap-2">
+          <h2 class="card-title">
             <?= e(t('perf.page_cache')) ?>
-            <span class="text-[10px] font-semibold text-speed bg-speed-pale px-1.5 py-0.5 rounded">
-              <?= e(t('perf.page_cache.tech')) ?>
-            </span>
+            <span class="tag tag-info"><?= e(t('perf.page_cache.tech')) ?></span>
+            <?php if ($pcUnsup): ?>
+              <span class="badge badge-muted">Not supported</span>
+            <?php elseif ($pcActive): ?>
+              <span class="badge badge-ok"><span class="dot bg-emerald-500"></span> Enabled</span>
+            <?php else: ?>
+              <span class="badge badge-warn">Disabled</span>
+            <?php endif; ?>
           </h2>
           <p class="text-[11px] text-zinc-400"><?= e(t('perf.page_cache.desc')) ?></p>
         </div>
       </div>
       <div class="flex items-center gap-2">
-        <?php if ($hasCache): ?>
+        <?php if ($pcActive): ?>
         <form method="POST" action="/cache/purge" class="inline">
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
           <input type="hidden" name="domain" value="<?= e($domain) ?>">
-          <button type="submit"
-                  class="text-xs font-semibold text-ink hover:bg-ink-pale px-2.5 py-1.5 rounded-md flex items-center gap-1">
+          <button type="submit" class="btn btn-secondary btn-sm">
             <i class="ti ti-refresh text-sm"></i> <?= e(t('perf.purge')) ?>
           </button>
         </form>
-        <?php endif; ?>
-        <form method="POST" action="/cache/toggle" class="inline">
+        <span class="w-px h-4 bg-zinc-200 mx-1"></span>
+        <form method="POST" action="/cache/toggle" class="inline flex items-center gap-2">
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
           <input type="hidden" name="domain" value="<?= e($domain) ?>">
-          <input type="hidden" name="action" value="<?= $hasCache ? 'disable' : 'enable' ?>">
-          <button type="submit" class="cursor-pointer bg-transparent border-0 p-0">
-            <?php if ($hasCache): ?>
+          <input type="hidden" name="action" value="disable">
+          <span class="text-[11px] font-medium text-zinc-500">Cache on</span>
+          <button type="submit" class="flex items-center bg-transparent p-0 border-0 cursor-pointer" title="<?= e(t('perf.disable')) ?>">
             <span class="sw-on"><span></span></span>
-            <?php else: ?>
-            <span class="sw-off"><span></span></span>
-            <?php endif; ?>
           </button>
         </form>
+        <?php endif; ?>
       </div>
     </div>
 
-    <?php if (!$hasCache): ?>
-    <div class="px-5 py-6 text-center">
-      <p class="text-sm text-zinc-500 mb-3">
-        FastCGI cache is currently <strong>disabled</strong> for this site.
-      </p>
+    <?php if ($pcUnsup): ?>
+    <!-- UNSUPPORTED STATE -->
+    <div class="px-5 py-5">
+      <div class="flex items-start gap-3">
+        <i class="ti ti-info-circle text-zinc-400 text-lg flex-none mt-0.5"></i>
+        <div>
+          <p class="text-sm font-medium text-zinc-700 mb-0.5">Page cache is not supported for this site type.</p>
+          <p class="text-[11px] text-zinc-400">FastCGI page cache applies to PHP sites only. Static and reverse-proxy sites are served directly by Nginx without a cache layer.</p>
+        </div>
+      </div>
+    </div>
+
+    <?php elseif (!$pcActive): ?>
+    <!-- DISABLED STATE -->
+    <div class="px-5 py-6">
+      <?php if (!$pcEngineOk && !empty($pageCacheInfo)): ?>
+      <div class="flex items-start gap-3 mb-5 bg-amber-50 border border-amber-200/70 rounded-lg px-4 py-3">
+        <i class="ti ti-alert-triangle text-amber-500 text-sm shrink-0 mt-0.5"></i>
+        <div>
+          <p class="text-xs font-semibold text-amber-800 mb-0.5">FastCGI cache engine not configured</p>
+          <p class="text-[11px] text-amber-700 leading-relaxed">The server-level cache zone is not active. Go to <a href="/admin" class="underline">Admin Area</a> to configure it first.</p>
+        </div>
+      </div>
+      <?php endif; ?>
+      <div class="flex items-start gap-3 mb-5">
+        <span class="flex-none w-9 h-9 rounded-lg bg-speed-pale flex items-center justify-center shrink-0">
+          <i class="ti ti-bolt text-speed text-lg"></i>
+        </span>
+        <div>
+          <p class="text-sm font-semibold text-zinc-800 mb-0.5">Start caching this site</p>
+          <p class="text-[11px] text-zinc-500 leading-relaxed">Serve ready HTML, skip PHP — the single biggest performance win for most sites.</p>
+        </div>
+      </div>
+      <div class="space-y-2.5 mb-5">
+        <div class="flex items-center gap-2.5">
+          <i class="ti ti-check text-emerald-500 text-sm flex-none"></i>
+          <span class="text-sm text-zinc-600"><?= e(t('perf.setup.checklist.1')) ?></span>
+        </div>
+        <div class="flex items-center gap-2.5">
+          <i class="ti ti-check text-emerald-500 text-sm flex-none"></i>
+          <span class="text-sm text-zinc-600"><?= e(t('perf.setup.checklist.2')) ?></span>
+        </div>
+        <div class="flex items-center gap-2.5">
+          <i class="ti ti-check text-emerald-500 text-sm flex-none"></i>
+          <span class="text-sm text-zinc-600"><?= e(t('perf.setup.checklist.3')) ?></span>
+        </div>
+      </div>
       <form method="POST" action="/cache/toggle">
         <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
         <input type="hidden" name="domain" value="<?= e($domain) ?>">
         <input type="hidden" name="action" value="enable">
         <?php if ($type === 'wordpress'): ?>
-        <div class="bg-zinc-50 border border-zinc-200 rounded-lg px-4 py-3 mb-4 text-left text-sm max-w-sm mx-auto">
-          <p class="font-semibold text-zinc-700 mb-2">WordPress helpers</p>
-          <label class="flex items-center gap-2 text-zinc-600 mb-1.5">
-            <input type="checkbox" name="install_nginx_helper" value="1"
-                   class="rounded border-zinc-300">
-            Install Nginx Helper (auto-purge on publish)
-          </label>
-          <label class="flex items-center gap-2 text-zinc-600">
-            <input type="checkbox" name="install_redis_plugin" value="1"
-                   class="rounded border-zinc-300">
-            Install Redis Object Cache plugin
+        <div class="mb-5">
+          <p class="eyebrow mb-2.5">WordPress optimization</p>
+          <label class="flex items-start gap-2.5 p-3 border border-zinc-200 rounded-lg cursor-pointer hover:bg-zinc-50 transition-colors">
+            <input type="checkbox" name="install_nginx_helper" value="1" class="mt-0.5 rounded border-zinc-300 text-indigo-600">
+            <span>
+              <span class="block text-xs font-semibold text-zinc-800"><?= e(t('perf.setup.install_helper')) ?></span>
+              <span class="block text-[11px] text-zinc-400 mt-0.5">Auto-purge the page cache on publish &amp; updates. Configured automatically.</span>
+            </span>
           </label>
         </div>
         <?php endif; ?>
-        <button type="submit" class="btn btn-primary">
-          <i class="ti ti-bolt text-sm"></i> <?= e(t('perf.enable')) ?>
-        </button>
+        <div class="pt-4 border-t border-zinc-100 flex items-center justify-between">
+          <p class="text-[11px] text-zinc-400">Safe defaults applied automatically.</p>
+          <button type="submit" class="btn btn-primary" <?= (!$pcEngineOk && !empty($pageCacheInfo)) ? 'disabled' : '' ?>>
+            <i class="ti ti-bolt text-sm"></i> <?= e(t('perf.enable')) ?>
+          </button>
+        </div>
       </form>
     </div>
+
     <?php else: ?>
-    <div class="px-5 py-4 bg-zinc-50/50 border-t border-zinc-100">
-      <p class="text-xs text-zinc-400 flex items-center gap-1.5">
-        <i class="ti ti-info-circle text-sm"></i>
-        Per-site cache configuration (TTL, exclusions, cookies) — available in next update.
+    <!-- ENABLED STATE: metric tiles + single-column config form -->
+    <?php if ($type === 'wordpress' && $wpHelper === 'not_installed'): ?>
+    <div class="flex items-center gap-2 bg-sky-50 border-b border-sky-100 px-5 py-2.5">
+      <i class="ti ti-info-circle text-sky-500 text-sm shrink-0"></i>
+      <p class="text-[11px] text-sky-800">
+        Install <strong>Nginx Helper</strong> in WordPress to auto-purge the page cache on publish and updates.
       </p>
     </div>
     <?php endif; ?>
+
+    <!-- Metric tiles -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 divide-x divide-zinc-100 border-b border-zinc-100">
+      <div class="px-5 py-3.5 bg-emerald-50/40">
+        <p class="eyebrow mb-1.5">Status</p>
+        <p class="text-sm font-semibold text-emerald-700 flex items-center gap-1.5">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-none"></span>
+          <?= e(t('perf.cache.status.active')) ?>
+        </p>
+      </div>
+      <div class="px-5 py-3.5">
+        <p class="eyebrow mb-1.5"><?= e(t('perf.cache.ttl')) ?></p>
+        <p class="text-sm font-semibold text-zinc-800"><?= e($ttlLabels[$currentTtl] ?? $currentTtl) ?></p>
+      </div>
+      <div class="px-5 py-3.5">
+        <p class="eyebrow mb-1.5"><?= e(t('perf.cache.last_purge')) ?></p>
+        <p class="text-sm font-semibold text-zinc-800">
+          <?= $lastPurge !== null ? e($lastPurge) : e(t('perf.cache.never_purged')) ?>
+        </p>
+      </div>
+      <div class="px-5 py-3.5">
+        <p class="eyebrow mb-1.5"><?= e(t('perf.cache.zone')) ?></p>
+        <p class="text-sm font-semibold text-zinc-800 mono"><?= e($cacheZoneSize ?? '—') ?></p>
+      </div>
+    </div>
+
+    <!-- Config form: single-column layout -->
+    <form method="POST" action="/cache/config" id="cache-config-form">
+      <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+      <input type="hidden" name="domain" value="<?= e($domain) ?>">
+
+      <div class="px-5 py-4 space-y-4">
+        <p class="eyebrow"><?= e(t('perf.col.cache_rules')) ?></p>
+
+        <!-- TTL -->
+        <div>
+          <label class="lbl"><?= e(t('perf.cache.ttl')) ?></label>
+          <select name="ttl" class="inp w-full">
+            <?php foreach ($ttlLabels as $val => $label): ?>
+            <option value="<?= e($val) ?>" <?= $currentTtl === $val ? 'selected' : '' ?>><?= e($label) ?></option>
+            <?php endforeach; ?>
+          </select>
+          <p class="hint"><?= e(t('perf.cache.ttl.desc')) ?></p>
+        </div>
+
+        <!-- Toggle: stale-revalidate -->
+        <div class="flex items-center justify-between gap-4" data-toggle>
+          <div class="pr-2">
+            <p class="text-sm font-medium text-zinc-800"><?= e(t('perf.cache.stale')) ?></p>
+            <p class="hint"><?= e(t('perf.cache.stale.desc')) ?></p>
+          </div>
+          <button type="button" class="<?= $staleOn ? 'sw-on' : 'sw-off' ?> flex-none" data-sw><span></span></button>
+          <input type="hidden" name="stale_revalidate" value="<?= $staleOn ? '1' : '0' ?>" data-toggle-input>
+        </div>
+
+        <!-- Toggle: debug-header -->
+        <div class="flex items-center justify-between gap-4" data-toggle>
+          <div class="pr-2">
+            <p class="text-sm font-medium text-zinc-800"><?= e(t('perf.cache.debug')) ?></p>
+            <p class="hint"><?= e(t('perf.cache.debug.desc')) ?></p>
+          </div>
+          <button type="button" class="<?= $debugOn ? 'sw-on' : 'sw-off' ?> flex-none" data-sw><span></span></button>
+          <input type="hidden" name="debug_header" value="<?= $debugOn ? '1' : '0' ?>" data-toggle-input>
+        </div>
+
+        <!-- Bypass rules -->
+        <p class="eyebrow pt-4 border-t border-zinc-100"><?= e(t('perf.col.bypass_rules')) ?></p>
+
+        <!-- Exclude URLs -->
+        <div>
+          <label class="lbl"><?= e(t('perf.cache.exclude')) ?></label>
+          <textarea name="exclude_urls" rows="5" class="inp w-full font-mono text-xs"><?= e($excludeLines) ?></textarea>
+          <p class="hint"><?= e(t('perf.cache.exclude.desc')) ?></p>
+        </div>
+
+        <!-- Bypass cookies -->
+        <div>
+          <label class="lbl"><?= e(t('perf.cache.cookies')) ?></label>
+          <input type="text" name="bypass_cookies"
+                 value="<?= e($cacheConfig['bypass-cookies'] ?? '') ?>"
+                 class="inp w-full font-mono text-xs"
+                 placeholder="wordpress_logged_in, woocommerce_session">
+          <p class="hint"><?= e(t('perf.cache.cookies.desc')) ?></p>
+        </div>
+
+        <!-- Toggle: bypass query -->
+        <div class="flex items-center justify-between gap-4" data-toggle>
+          <div class="pr-2">
+            <p class="text-sm font-medium text-zinc-800"><?= e(t('perf.cache.bypass_q')) ?></p>
+            <p class="hint"><?= e(t('perf.cache.bypass_q.desc')) ?></p>
+          </div>
+          <button type="button" class="<?= $bypassQOn ? 'sw-on' : 'sw-off' ?> flex-none" data-sw><span></span></button>
+          <input type="hidden" name="bypass_query" value="<?= $bypassQOn ? '1' : '0' ?>" data-toggle-input>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="px-5 py-3.5 bg-zinc-50/60 border-t border-zinc-100 flex items-center justify-end">
+        <button type="submit" class="btn btn-primary"><i class="ti ti-device-floppy text-sm"></i> <?= e(t('perf.cache.save')) ?></button>
+      </div>
+    </form>
+    <?php endif; ?>
   </div>
 
-  <!-- Object Cache (Redis) card -->
+  <!-- Toggle switch wiring (no Alpine dependency) -->
+  <script>
+  document.querySelectorAll('[data-toggle]').forEach(function(row) {
+    var sw = row.querySelector('[data-sw]');
+    var inp = row.querySelector('[data-toggle-input]');
+    if (!sw || !inp) return;
+    sw.addEventListener('click', function() {
+      var on = sw.classList.contains('sw-on');
+      sw.classList.toggle('sw-on', !on);
+      sw.classList.toggle('sw-off', on);
+      inp.value = on ? '0' : '1';
+    });
+  });
+  </script>
+
+  <!-- Object Cache (Redis) card — Phase 1: read-only status -->
   <div class="card overflow-hidden mb-5">
     <div class="card-head">
       <div class="flex items-center gap-2.5">
-        <i class="ti ti-brand-redis text-speed text-lg"></i>
+        <i class="ti ti-database <?= $ocActive ? 'text-speed' : 'text-zinc-300' ?> text-lg"></i>
         <div>
-          <h2 class="font-head font-semibold text-sm text-zinc-900 flex items-center gap-2">
+          <h2 class="card-title">
             <?= e(t('perf.object_cache')) ?>
-            <span class="text-[10px] font-semibold text-zinc-500 bg-zinc-100 px-1.5 py-0.5 rounded">
-              <?= e(t('perf.object_cache.tech')) ?>
-            </span>
+            <span class="tag tag-info"><?= e(t('perf.object_cache.tech')) ?></span>
+            <?php if ($ocActive && $ocManaged): ?>
+              <span class="badge badge-ok"><span class="dot bg-emerald-500"></span> Active</span>
+            <?php elseif ($ocActive && !$ocManaged): ?>
+              <span class="badge badge-warn">Active · Manual</span>
+            <?php elseif ($ocSvcDown): ?>
+              <span class="badge badge-warn">Service down</span>
+            <?php elseif ($ocUnsup): ?>
+              <span class="badge badge-muted">Not supported</span>
+            <?php else: ?>
+              <span class="badge badge-muted">Not connected</span>
+            <?php endif; ?>
           </h2>
           <p class="text-[11px] text-zinc-400"><?= e(t('perf.object_cache.desc')) ?></p>
         </div>
       </div>
+      <?php if (!$ocUnsup && !empty($objectCacheInfo)): ?>
+      <span class="badge <?= $ocSvcOk ? 'badge-ok' : 'badge-danger' ?> shrink-0">
+        <span class="dot <?= $ocSvcOk ? 'bg-emerald-500' : 'bg-red-500' ?>"></span>
+        Redis <?= $ocSvcOk ? 'running' : 'down' ?>
+      </span>
+      <?php endif; ?>
     </div>
+
+    <?php if (empty($objectCacheInfo)): ?>
     <div class="px-5 py-4">
-      <?php if (!empty($redisInfo['ok'])): ?>
-        <p class="text-sm flex items-center gap-2 text-zinc-700">
-          <i class="ti ti-circle-check text-emerald-500"></i>
-          <?= e(t('perf.redis.ok', ['keys' => number_format($redisInfo['keys']), 'mem' => $redisInfo['memory']])) ?>
-        </p>
-      <?php else: ?>
-        <p class="text-sm flex items-center gap-2 text-zinc-400">
-          <i class="ti ti-plug-x text-zinc-300"></i>
-          <?= e(t('perf.redis.fail')) ?>
-        </p>
-      <?php endif; ?>
+      <p class="text-[11px] text-zinc-400">Status unavailable — performance CLI may not be deployed yet.</p>
     </div>
+
+    <?php elseif ($ocUnsup): ?>
+    <div class="px-5 py-5">
+      <div class="flex items-start gap-3">
+        <i class="ti ti-info-circle text-zinc-400 text-lg flex-none mt-0.5"></i>
+        <div>
+          <p class="text-sm font-medium text-zinc-700 mb-0.5">WordPress only</p>
+          <p class="text-[11px] text-zinc-400 leading-relaxed">Redis object cache integration is available for WordPress sites. WP stores queries, transients, and object data in memory for faster page generation.</p>
+        </div>
+      </div>
+    </div>
+
+    <?php elseif ($ocSvcDown): ?>
+    <div class="px-5 py-5">
+      <div class="flex items-start gap-3 bg-amber-50 border border-amber-200/70 rounded-lg px-4 py-3.5">
+        <i class="ti ti-alert-triangle text-amber-500 text-sm shrink-0 mt-0.5"></i>
+        <div>
+          <p class="text-xs font-semibold text-amber-800 mb-0.5">Redis service is not running</p>
+          <p class="text-[11px] text-amber-700 leading-relaxed">
+            The Redis server is not responding. Go to
+            <a href="/services" class="underline font-medium">Services</a>
+            to check and restart it.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <?php elseif ($ocActive): ?>
+    <!-- ACTIVE STATE: metric tiles + disabled action buttons -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 divide-x divide-zinc-100 border-b border-zinc-100">
+      <div class="px-5 py-3.5 bg-emerald-50/40">
+        <p class="eyebrow mb-1.5">Status</p>
+        <p class="text-sm font-semibold text-emerald-700 flex items-center gap-1.5">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-none"></span>
+          Active
+        </p>
+      </div>
+      <div class="px-5 py-3.5">
+        <p class="eyebrow mb-1.5">Plugin</p>
+        <p class="text-sm font-semibold text-zinc-800"><?= $ocPlugin === 'active' ? 'Active' : e(ucfirst($ocPlugin)) ?></p>
+      </div>
+      <div class="px-5 py-3.5">
+        <p class="eyebrow mb-1.5">Drop-in</p>
+        <p class="text-sm font-semibold text-zinc-800"><?= $ocDropin === 'present' ? 'Present' : 'Missing' ?></p>
+      </div>
+      <div class="px-5 py-3.5">
+        <p class="eyebrow mb-1.5">Prefix</p>
+        <p class="text-sm font-semibold <?= $ocManaged ? 'text-zinc-800' : 'text-amber-700' ?> mono truncate" title="<?= e($ocPrefix) ?>">
+          <?= $ocPrefix !== '' ? e($ocPrefix) : '—' ?>
+        </p>
+      </div>
+    </div>
+    <?php if (!$ocManaged): ?>
+    <div class="flex items-center gap-2 bg-amber-50 border-b border-amber-100 px-5 py-2.5">
+      <i class="ti ti-info-circle text-amber-500 text-sm shrink-0"></i>
+      <p class="text-[11px] text-amber-800">This site's Redis prefix was not set by AidiPanel. Cache management actions are unavailable to avoid affecting manually-configured data.</p>
+    </div>
+    <?php endif; ?>
+    <div class="px-5 py-3.5 bg-zinc-50/60 border-t border-zinc-100 flex items-center justify-between">
+      <p class="text-[11px] text-zinc-400">Enable/disable actions available in a future update.</p>
+      <div class="flex items-center gap-2">
+        <button type="button" disabled class="btn btn-ghost btn-sm opacity-50 cursor-not-allowed">
+          <i class="ti ti-power-off text-sm"></i> Disable
+        </button>
+        <button type="button" disabled class="btn btn-secondary btn-sm opacity-50 cursor-not-allowed">
+          <i class="ti ti-trash text-sm"></i> Flush cache
+        </button>
+      </div>
+    </div>
+
+    <?php else: ?>
+    <!-- NOT CONNECTED: service OK but plugin/drop-in not set up -->
+    <div class="px-5 py-5 space-y-4">
+      <div class="grid grid-cols-3 gap-3">
+        <div class="rounded-lg border border-zinc-100 bg-zinc-50 px-3.5 py-3">
+          <p class="eyebrow mb-1.5">Redis service</p>
+          <div class="flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-none"></span>
+            <span class="text-xs font-semibold text-emerald-700">Running</span>
+          </div>
+        </div>
+        <div class="rounded-lg border border-zinc-100 bg-zinc-50 px-3.5 py-3">
+          <p class="eyebrow mb-1.5">Plugin</p>
+          <?php $pluginOk = in_array($ocPlugin, ['installed', 'active'], true); ?>
+          <div class="flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full <?= $pluginOk ? 'bg-emerald-500' : 'bg-zinc-300' ?> flex-none"></span>
+            <span class="text-xs font-semibold <?= $pluginOk ? 'text-emerald-700' : 'text-zinc-500' ?>">
+              <?= $ocPlugin === 'active' ? 'Active' : ($ocPlugin === 'installed' ? 'Installed' : ($ocPlugin === 'not_installed' ? 'Not installed' : e(ucfirst($ocPlugin)))) ?>
+            </span>
+          </div>
+        </div>
+        <div class="rounded-lg border border-zinc-100 bg-zinc-50 px-3.5 py-3">
+          <p class="eyebrow mb-1.5">Drop-in</p>
+          <div class="flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full <?= $ocDropin === 'present' ? 'bg-emerald-500' : 'bg-zinc-300' ?> flex-none"></span>
+            <span class="text-xs font-semibold <?= $ocDropin === 'present' ? 'text-emerald-700' : 'text-zinc-500' ?>">
+              <?= $ocDropin === 'present' ? 'Present' : 'Missing' ?>
+            </span>
+          </div>
+        </div>
+      </div>
+      <?php if ($ocWpCli): ?>
+      <div class="flex items-start gap-2 bg-amber-50 border border-amber-200/70 rounded-lg px-3 py-2.5">
+        <i class="ti ti-alert-triangle text-amber-500 mt-0.5 text-sm shrink-0"></i>
+        <p class="text-[11px] text-amber-800 leading-relaxed">WP-CLI is not installed on this server. It is required for safe object cache management.</p>
+      </div>
+      <?php endif; ?>
+      <div class="pt-1 border-t border-zinc-100 flex items-center justify-between">
+        <p class="text-[11px] text-zinc-400">Enable actions available in a future update.</p>
+        <button type="button" disabled class="btn btn-primary opacity-50 cursor-not-allowed">
+          <i class="ti ti-bolt text-sm"></i> Enable Object Cache
+        </button>
+      </div>
+    </div>
+    <?php endif; ?>
   </div>
 
-  <!-- OPcache card (compact) -->
-  <div class="card px-5 py-4 mb-5 flex items-center justify-between">
-    <div>
-      <h2 class="font-head font-semibold text-sm text-zinc-900"><?= e(t('perf.opcache')) ?></h2>
-      <?php if ($opcacheEnabled): ?>
-        <p class="text-[11px] text-zinc-400 mt-0.5">
-          <?= e(t('perf.opcache.hit', ['rate' => $opcHitRate, 'hits' => $opcHits])) ?>
-          · <?= e(t('perf.opcache.mem', ['used' => $opcUsedMem, 'total' => $opcTotalMem])) ?>
-        </p>
-      <?php else: ?>
-        <p class="text-[11px] text-zinc-400 mt-0.5"><?= e(t('perf.opcache.disabled')) ?></p>
-      <?php endif; ?>
+  <!-- OPcache card — read-only (manage via Admin Area → PHP) -->
+  <div class="card overflow-hidden mb-5">
+    <div class="card-head">
+      <div class="flex items-center gap-2.5">
+        <i class="ti ti-cpu <?= $opcEnabled ? 'text-speed' : 'text-zinc-300' ?> text-lg"></i>
+        <div>
+          <h2 class="card-title">
+            <?= e(t('perf.opcache')) ?>
+            <span class="tag tag-muted">PHP</span>
+            <?php if ($opcEnabled): ?>
+              <span class="badge badge-ok"><span class="dot bg-emerald-500"></span> Enabled</span>
+            <?php else: ?>
+              <span class="badge badge-warn">Disabled</span>
+            <?php endif; ?>
+          </h2>
+          <?php if ($opcEnabled): ?>
+            <p class="text-[11px] text-zinc-400">
+              Hit rate <?= e($opcHitRate) ?> · <?= e($opcHits) ?> hits · <?= e($opcUsedMem) ?> / <?= e($opcLimit) ?> memory
+            </p>
+          <?php else: ?>
+            <p class="text-[11px] text-zinc-400"><?= e(t('perf.opcache.disabled')) ?></p>
+          <?php endif; ?>
+        </div>
+      </div>
+      <a href="/php" class="btn btn-ghost btn-sm shrink-0">
+        <i class="ti ti-settings text-sm"></i> Manage in PHP Settings
+      </a>
     </div>
+    <?php if ($opcEnabled): ?>
+    <div class="grid grid-cols-2 sm:grid-cols-4 divide-x divide-zinc-100 border-t border-zinc-100">
+      <div class="px-5 py-3.5">
+        <p class="eyebrow mb-1.5">Hit rate</p>
+        <p class="text-sm font-semibold text-zinc-800"><?= e($opcHitRate) ?></p>
+      </div>
+      <div class="px-5 py-3.5">
+        <p class="eyebrow mb-1.5">Hits</p>
+        <p class="text-sm font-semibold text-zinc-800"><?= e($opcHits) ?></p>
+      </div>
+      <div class="px-5 py-3.5">
+        <p class="eyebrow mb-1.5">Memory used</p>
+        <p class="text-sm font-semibold text-zinc-800"><?= e($opcUsedMem) ?></p>
+      </div>
+      <div class="px-5 py-3.5">
+        <p class="eyebrow mb-1.5">Memory limit</p>
+        <p class="text-sm font-semibold text-zinc-800"><?= e($opcLimit) ?></p>
+      </div>
+    </div>
+    <?php endif; ?>
   </div>
 
-  <!-- Delivery card (server default, compact) -->
+  <!-- Protocol & Compression (server-level, detected) -->
   <div class="bg-zinc-50 rounded-xl border border-zinc-200/70 px-5 py-4">
     <div class="flex items-center justify-between">
       <div>
         <h2 class="font-head font-semibold text-sm text-zinc-700 flex items-center gap-2">
           <i class="ti ti-rocket text-zinc-400"></i>
           <?= e(t('perf.delivery')) ?>
-          <span class="text-[10px] font-semibold text-zinc-500 bg-zinc-200/70 px-1.5 py-0.5 rounded">
-            <?= e(t('perf.server_default')) ?>
-          </span>
+          <span class="tag tag-muted"><?= e(t('perf.server_default')) ?></span>
         </h2>
         <p class="text-[11px] text-zinc-400 mt-1"><?= e(t('perf.delivery.desc')) ?></p>
       </div>
-      <a href="/admin/tuning"
+      <a href="/admin"
          class="text-xs font-semibold text-ink hover:underline flex items-center gap-1 whitespace-nowrap shrink-0">
         <?= e(t('perf.server_tuning')) ?> <i class="ti ti-arrow-right text-sm"></i>
       </a>
     </div>
     <div class="flex flex-wrap items-center gap-2 mt-3">
-      <span class="text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full flex items-center gap-1">
-        <i class="ti ti-check text-xs"></i> Brotli
-      </span>
-      <span class="text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full flex items-center gap-1">
-        <i class="ti ti-check text-xs"></i> Gzip
-      </span>
-      <span class="text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full flex items-center gap-1">
-        <i class="ti ti-check text-xs"></i> HTTP/2
-      </span>
-      <span class="text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full flex items-center gap-1">
-        <i class="ti ti-check text-xs"></i> Browser cache headers
-      </span>
+      <?php if (!empty($protocolInfo)): ?>
+        <?php foreach ($protoLabels as $key => $label): ?>
+          <?php $protoActive = ($protocolInfo[$key] ?? '') === 'on'; ?>
+          <span class="text-[11px] font-medium <?= $protoActive ? 'text-emerald-700 bg-emerald-50' : 'text-zinc-400 bg-zinc-100' ?> px-2.5 py-1 rounded-full flex items-center gap-1">
+            <i class="ti <?= $protoActive ? 'ti-check' : 'ti-minus' ?> text-xs"></i>
+            <?= e($label) ?>
+          </span>
+        <?php endforeach; ?>
+      <?php else: ?>
+        <span class="text-[11px] text-zinc-400">Protocol detection unavailable.</span>
+      <?php endif; ?>
     </div>
   </div>
 
