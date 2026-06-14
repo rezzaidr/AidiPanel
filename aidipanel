@@ -517,7 +517,7 @@ _site_add() {
   _cache_snippet_write "$domain" "1h" \
     "/wp-admin/,/wp-login.php,/checkout/,/cart/,/my-account/,/?wc-ajax=" \
     "wordpress_logged_in,woocommerce_session,comment_author,laravel_session,PHPSESSID" \
-    "off"
+    "off" "off" "on"
   wrote_snippet=1
 
   ln -sf "${NGINX_CONF_DIR}/${domain}.conf" "${NGINX_ENABLED_DIR}/${domain}.conf"; enabled=1
@@ -584,6 +584,7 @@ _site_write_vhost() {
         #fastcgi_cache        ${NGINX_CACHE_ZONE};
         #fastcgi_cache_valid  200 301 302 1h;
         #fastcgi_cache_valid  404 1m;
+        #fastcgi_cache_use_stale error timeout updating http_500 http_503;
         #fastcgi_cache_bypass \$skip_cache;
         #fastcgi_no_cache     \$skip_cache;
 
@@ -820,6 +821,13 @@ _site_list() {
   echo ""
 }
 
+# Resolve a site's document root from its vhost. Anchors on the per-site-user
+# /home/<user>/htdocs/<domain> root, skipping the /var/www/letsencrypt
+# ACME-challenge root that SSL vhosts also contain. Echoes empty if none found.
+_vhost_webroot() {
+  grep -oP '^\s*root\s+\K/home/[^;]+' "$1" 2>/dev/null | head -1 | tr -d ' ' || true
+}
+
 _site_info() {
   _parse_opts "$@"
   local domain; domain=$(_opt "domain")
@@ -830,7 +838,7 @@ _site_info() {
   local conf="${NGINX_CONF_DIR}/${domain}.conf"
   local php_ver; php_ver=$(grep -oP 'php\K[0-9.]+(?=-fpm)' "$conf" 2>/dev/null | head -1 || echo "-")
   local site_type; site_type=$(grep -oP '# Type: \K\w+' "$conf" 2>/dev/null || echo "php")
-  local webroot; webroot=$(grep -oP 'root \K[^;]+' "$conf" 2>/dev/null | head -1 || echo "-")
+  local webroot; webroot=$(_vhost_webroot "$conf"); [[ -n "$webroot" ]] || webroot="-"
   local enabled; enabled=$([[ -L "${NGINX_ENABLED_DIR}/${domain}.conf" ]] && echo "yes" || echo "no")
   local disk_usage; disk_usage=$(du -sh "$webroot" 2>/dev/null | cut -f1 || echo "-")
 
@@ -900,6 +908,223 @@ _vhost_save() {
 # ===========================================================================
 
 # ---------------------------------------------------------------------------
+# CACHE PAGE — per-site status (Phase 1: read-only)
+# ---------------------------------------------------------------------------
+
+_cache_page_status() {
+  _require_root "cache:page status"
+  _parse_opts "$@"
+  local domain; domain=$(_opt "domain")
+  _require_arg "domain" "$domain" "cache:page --action status --domain example.com"
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
+
+  local conf="${NGINX_CONF_DIR}/${domain}.conf"
+  if [[ ! -f "$conf" ]]; then
+    echo "error=domain_not_found"
+    exit 1
+  fi
+
+  local site_user; site_user=$(grep -oP '^\s*root\s+/home/\K[^/;]+' "$conf" 2>/dev/null | head -1 || echo "")
+  local webroot; webroot=$(_vhost_webroot "$conf")
+  local site_type; site_type=$(grep -oP '# Type: \K\w+' "$conf" 2>/dev/null | head -1 || echo "php")
+
+  echo "domain=${domain}"
+  echo "site_user=${site_user}"
+  echo "webroot=${webroot}"
+  echo "site_type=${site_type}"
+  echo "engine=fastcgi"
+  echo "cache_path=${NGINX_CACHE_DIR}"
+
+  # Engine readiness: fastcgi_cache_path directive exists + cache dir present
+  local engine_ok=0
+  if grep -rql 'fastcgi_cache_path' /etc/nginx/ 2>/dev/null && [[ -d "$NGINX_CACHE_DIR" ]]; then
+    engine_ok=1
+  fi
+  echo "engine_ok=${engine_ok}"
+
+  # Unsupported site types
+  if [[ "$site_type" == "static" || "$site_type" == "proxy" ]]; then
+    echo "site_cache_status=unsupported"
+    echo "wp_helper_status=not_applicable"
+    echo "cache_header=unknown"
+    echo "hit_rate=unknown"
+    echo "can_enable=0"
+    echo "can_disable=0"
+    echo "can_purge=0"
+    echo "can_check=0"
+    echo "error="
+    return 0
+  fi
+
+  # Site cache status: check if FastCGI directives are active in vhost
+  local site_cache_status="disabled"
+  if grep -Eq "^[[:space:]]*fastcgi_cache[[:space:]]+${NGINX_CACHE_ZONE}" "$conf" 2>/dev/null; then
+    site_cache_status="active"
+  fi
+  echo "site_cache_status=${site_cache_status}"
+
+  # WP helper (Nginx Helper plugin) — file-based detection only
+  local wp_helper_status="not_wordpress"
+  if [[ "$site_type" == "wordpress" && -n "$webroot" ]]; then
+    if [[ -d "${webroot}/wp-content/plugins/nginx-helper" || -d "${webroot}/wp-content/plugins/nginx-cache" ]]; then
+      wp_helper_status="installed"
+    else
+      wp_helper_status="not_installed"
+    fi
+  fi
+  echo "wp_helper_status=${wp_helper_status}"
+
+  echo "cache_header=unknown"
+  echo "hit_rate=unknown"
+
+  local can_enable=0 can_disable=0 can_purge=0 can_check=1
+  [[ "$engine_ok" -eq 1 && "$site_cache_status" == "disabled" ]] && can_enable=1
+  [[ "$site_cache_status" == "active" ]] && can_disable=1
+  [[ "$site_cache_status" == "active" ]] && can_purge=1
+  echo "can_enable=${can_enable}"
+  echo "can_disable=${can_disable}"
+  echo "can_purge=${can_purge}"
+  echo "can_check=${can_check}"
+  echo "error="
+}
+
+_cache_page() {
+  _parse_opts "$@"
+  local action; action=$(_opt "action" "status")
+  case "$action" in
+    status) _cache_page_status "$@" ;;
+    *) die "cache:page: unknown action '${action}'. Supported: status" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# CACHE REDIS — per-site object cache status (Phase 1: read-only)
+# ---------------------------------------------------------------------------
+
+_cache_redis_site_status() {
+  _require_root "cache:redis status"
+  _parse_opts "$@"
+  local domain; domain=$(_opt "domain")
+  _require_arg "domain" "$domain" "cache:redis --action status --domain example.com"
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
+
+  local conf="${NGINX_CONF_DIR}/${domain}.conf"
+  if [[ ! -f "$conf" ]]; then
+    echo "error=domain_not_found"
+    exit 1
+  fi
+
+  local site_user; site_user=$(grep -oP '^\s*root\s+/home/\K[^/;]+' "$conf" 2>/dev/null | head -1 || echo "")
+  local webroot; webroot=$(_vhost_webroot "$conf")
+  local site_type; site_type=$(grep -oP '# Type: \K\w+' "$conf" 2>/dev/null | head -1 || echo "php")
+
+  echo "domain=${domain}"
+  echo "site_user=${site_user}"
+  echo "webroot=${webroot}"
+  echo "site_type=${site_type}"
+  echo "engine=redis"
+
+  # Redis service check (2-second timeout)
+  local service_ok=0 redis_host="127.0.0.1" redis_port="6379"
+  local ping; ping=$(redis-cli -h "$redis_host" -p "$redis_port" -t 2 PING 2>/dev/null || echo "FAIL")
+  [[ "$ping" == "PONG" ]] && service_ok=1
+  echo "service_ok=${service_ok}"
+  echo "redis_host=${redis_host}"
+  echo "redis_port=${redis_port}"
+
+  # Non-WordPress: report engine status but no plugin/prefix info
+  if [[ "$site_type" != "wordpress" ]]; then
+    echo "site_cache_status=unsupported"
+    echo "plugin_status=not_wordpress"
+    echo "dropin_status=unknown"
+    echo "prefix="
+    echo "prefix_managed=0"
+    echo "site_keys=unknown"
+    echo "site_memory=unknown"
+    local wp_cli_missing=0; command -v wp &>/dev/null || wp_cli_missing=1
+    echo "wp_cli_missing=${wp_cli_missing}"
+    echo "can_enable=0"
+    echo "can_disable=0"
+    echo "can_flush=0"
+    echo "error="
+    return 0
+  fi
+
+  # WordPress detection (wp-config.php presence)
+  local wp_config="${webroot}/wp-config.php"
+  local wp_detected=0
+  [[ -f "$wp_config" ]] && wp_detected=1
+
+  # WP-CLI availability
+  local wp_cli_missing=0
+  command -v wp &>/dev/null || wp_cli_missing=1
+  echo "wp_cli_missing=${wp_cli_missing}"
+
+  # Plugin and drop-in detection (filesystem only, no WP-CLI needed)
+  local plugin_dir="${webroot}/wp-content/plugins/redis-cache"
+  local dropin="${webroot}/wp-content/object-cache.php"
+  local plugin_status="not_installed"
+  local dropin_status="missing"
+
+  [[ -f "$dropin" ]] && dropin_status="present"
+
+  if [[ -d "$plugin_dir" ]]; then
+    if [[ "$dropin_status" == "present" ]]; then
+      plugin_status="active"
+    else
+      plugin_status="installed"
+    fi
+  fi
+  echo "plugin_status=${plugin_status}"
+  echo "dropin_status=${dropin_status}"
+
+  # Prefix from wp-config.php (read-only grep, root can always read)
+  local prefix=""
+  if [[ "$wp_detected" -eq 1 ]]; then
+    prefix=$(grep -oP "define\s*\(\s*['\"]WP_REDIS_PREFIX['\"]\s*,\s*['\"]\K[^'\"]+(?=['\"])" \
+      "$wp_config" 2>/dev/null | head -1 || echo "")
+  fi
+  echo "prefix=${prefix}"
+
+  # Prefix management check: does it match what AidiPanel would set?
+  local expected_prefix="aidipanel:${site_user}:"
+  local prefix_managed=0
+  [[ -n "$prefix" && "$prefix" == "$expected_prefix" ]] && prefix_managed=1
+  echo "prefix_managed=${prefix_managed}"
+
+  # site_cache_status: all 3 conditions required for "active"
+  local site_cache_status="not_connected"
+  if [[ "$service_ok" -eq 0 ]]; then
+    site_cache_status="service_down"
+  elif [[ "$service_ok" -eq 1 && "$plugin_status" == "active" && "$dropin_status" == "present" ]]; then
+    site_cache_status="active"
+  fi
+  echo "site_cache_status=${site_cache_status}"
+
+  # Phase 1: keys and memory not calculated
+  echo "site_keys=unknown"
+  echo "site_memory=unknown"
+
+  local can_enable=0 can_disable=0 can_flush=0
+  [[ "$service_ok" -eq 1 && "$wp_detected" -eq 1 && "$site_cache_status" != "active" ]] && can_enable=1
+  [[ "$site_cache_status" == "active" ]] && can_disable=1
+  [[ "$site_cache_status" == "active" ]] && can_flush=1
+  echo "can_enable=${can_enable}"
+  echo "can_disable=${can_disable}"
+  echo "can_flush=${can_flush}"
+  echo "error="
+}
+
+_cache_redis_per_site() {
+  _parse_opts "$@"
+  local action; action=$(_opt "action" "status")
+  case "$action" in
+    status) _cache_redis_site_status "$@" ;;
+    *) die "cache:redis: unknown action '${action}'. Supported: status" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 # CACHE ENGINE HELPERS
 # ---------------------------------------------------------------------------
 
@@ -910,7 +1135,7 @@ _cache_snippet_path() { echo "${NGINX_SNIPPET_DIR}/cache-${1}.conf"; }
 _cache_snippet_read() {
   local file; file=$(_cache_snippet_path "$1")
   [[ -f "$file" ]] || { echo ""; return; }
-  grep -oP "(?<=# AIDIPANEL_CACHE_${2}=).*" "$file" | head -1
+  grep -oP "(?<=# AIDIPANEL_CACHE_${2}=).*" "$file" 2>/dev/null | head -1 || true
 }
 
 # Build nginx URI regex from comma-separated URL list.
@@ -948,9 +1173,10 @@ _cache_build_cookie_regex() {
 }
 
 # Write (or overwrite) a per-site cache snippet from config values.
-# Usage: _cache_snippet_write <domain> <ttl> <exclude_urls> <bypass_cookies> <bypass_query>
+# Usage: _cache_snippet_write <domain> <ttl> <exclude_urls> <bypass_cookies> <bypass_query> [stale_revalidate] [debug_header]
 _cache_snippet_write() {
   local domain="$1" ttl="$2" exclude_urls="$3" bypass_cookies="$4" bypass_query="$5"
+  local stale_revalidate="${6:-off}" debug_header="${7:-on}"
   local file; file=$(_cache_snippet_path "$domain")
 
   local uri_regex; uri_regex=$(_cache_build_uri_regex "$exclude_urls")
@@ -966,6 +1192,8 @@ _cache_snippet_write() {
 # AIDIPANEL_CACHE_EXCLUDE_URLS=${exclude_urls}
 # AIDIPANEL_CACHE_BYPASS_COOKIES=${bypass_cookies}
 # AIDIPANEL_CACHE_BYPASS_QUERY=${bypass_query}
+# AIDIPANEL_CACHE_STALE_REVALIDATE=${stale_revalidate}
+# AIDIPANEL_CACHE_DEBUG_HEADER=${debug_header}
 
 set \$skip_cache 0;
 
@@ -983,23 +1211,62 @@ SNIP
   chmod 644 "$file"
 }
 
+# Toggle fastcgi_cache_use_stale in the site vhost (on=uncomment, off=comment out).
+# Preference is always saved in the snippet; vhost is only updated when the line exists.
+_cache_vhost_stale_revalidate() {
+  local domain="$1" val="$2"
+  local conf="${NGINX_CONF_DIR}/${domain}.conf"
+  if [[ "$val" == "on" ]]; then
+    if grep -q "#.*fastcgi_cache_use_stale" "$conf"; then
+      sed -i 's|^\(\s*\)#\s*\(fastcgi_cache_use_stale\)|\1\2|' "$conf"
+    elif ! grep -q "fastcgi_cache_use_stale" "$conf"; then
+      # Placeholder missing (old site) — insert active only if cache is currently on
+      if grep -qE "^\s*fastcgi_cache aidipanel_fcgi" "$conf"; then
+        sed -i '/fastcgi_cache_valid.*404/a\        fastcgi_cache_use_stale error timeout updating http_500 http_503;' "$conf"
+      fi
+    fi
+  else
+    if grep -qE "^\s*fastcgi_cache_use_stale" "$conf"; then
+      sed -i 's|^\(\s*\)\(fastcgi_cache_use_stale\)|\1#\2|' "$conf"
+    fi
+  fi
+}
+
+# Toggle add_header X-FastCGI-Cache in the site vhost (on=uncomment, off=comment out).
+_cache_vhost_debug_header() {
+  local domain="$1" val="$2"
+  local conf="${NGINX_CONF_DIR}/${domain}.conf"
+  if [[ "$val" == "on" ]]; then
+    if grep -q "#.*add_header X-FastCGI-Cache" "$conf"; then
+      sed -i 's|^\(\s*\)#\(\s*add_header X-FastCGI-Cache\)|\1\2|' "$conf"
+    fi
+  else
+    if grep -qE "^\s*add_header X-FastCGI-Cache" "$conf"; then
+      sed -i 's|^\(\s*\)\(add_header X-FastCGI-Cache\)|\1#\2|' "$conf"
+    fi
+  fi
+}
+
 _cache_config() {
   _parse_opts "$@"
   local domain; domain=$(_opt "domain")
-  _require_arg "domain" "$domain" "cache:config --domain example.com [--ttl 1h] [--exclude-urls \"/path/\"] [--bypass-cookies \"name\"] [--bypass-query on|off]"
+  _require_arg "domain" "$domain" "cache:config --domain example.com [--ttl 1h] [--exclude-urls \"/path/\"] [--bypass-cookies \"name\"] [--bypass-query on|off] [--stale-revalidate on|off] [--debug-header on|off]"
   _domain_valid "$domain"   || die "Invalid domain name: ${domain}"
   _domain_exists "$domain"  || die "Site not found: ${domain}"
 
   local snippet; snippet=$(_cache_snippet_path "$domain")
 
   # ---- SET mode: any --set flag present ----
-  local set_ttl;      set_ttl=$(_opt "ttl" "")
-  local set_exclude;  set_exclude=$(_opt "exclude-urls" "")
-  local set_cookies;  set_cookies=$(_opt "bypass-cookies" "")
-  local set_bypass_q; set_bypass_q=$(_opt "bypass-query" "")
+  local set_ttl;        set_ttl=$(_opt "ttl" "")
+  local set_exclude;    set_exclude=$(_opt "exclude-urls" "")
+  local set_cookies;    set_cookies=$(_opt "bypass-cookies" "")
+  local set_bypass_q;   set_bypass_q=$(_opt "bypass-query" "")
+  local set_stale;      set_stale=$(_opt "stale-revalidate" "")
+  local set_debug_hdr;  set_debug_hdr=$(_opt "debug-header" "")
 
   local has_set=0
-  [[ -n "$set_ttl" || -n "$set_exclude" || -n "$set_cookies" || -n "$set_bypass_q" ]] && has_set=1
+  if [[ -n "$set_ttl" || -n "$set_exclude" || -n "$set_cookies" || -n "$set_bypass_q" \
+        || -n "$set_stale" || -n "$set_debug_hdr" ]]; then has_set=1; fi
 
   if [[ "$has_set" == 1 ]]; then
     _require_root "cache:config --set"
@@ -1034,36 +1301,49 @@ _cache_config() {
     if [[ -n "$set_bypass_q" ]]; then
       [[ "$set_bypass_q" == "on" || "$set_bypass_q" == "off" ]] || die "bypass-query must be 'on' or 'off'."
     fi
+    if [[ -n "$set_stale" ]]; then
+      [[ "$set_stale" == "on" || "$set_stale" == "off" ]] || die "stale-revalidate must be 'on' or 'off'."
+    fi
+    if [[ -n "$set_debug_hdr" ]]; then
+      [[ "$set_debug_hdr" == "on" || "$set_debug_hdr" == "off" ]] || die "debug-header must be 'on' or 'off'."
+    fi
 
     # Read current values, merge with new
     local cur_ttl;     cur_ttl=$(_cache_snippet_read "$domain" "TTL")
     local cur_excl;    cur_excl=$(_cache_snippet_read "$domain" "EXCLUDE_URLS")
     local cur_cookies; cur_cookies=$(_cache_snippet_read "$domain" "BYPASS_COOKIES")
     local cur_bq;      cur_bq=$(_cache_snippet_read "$domain" "BYPASS_QUERY")
+    local cur_stale;   cur_stale=$(_cache_snippet_read "$domain" "STALE_REVALIDATE")
+    local cur_debug;   cur_debug=$(_cache_snippet_read "$domain" "DEBUG_HEADER")
 
     local final_ttl="${set_ttl:-${cur_ttl:-1h}}"
     local final_excl="${set_exclude:-${cur_excl:-/wp-admin/,/wp-login.php,/checkout/,/cart/,/my-account/,/?wc-ajax=}}"
     local final_cookies="${set_cookies:-${cur_cookies:-wordpress_logged_in,woocommerce_session,comment_author,laravel_session,PHPSESSID}}"
     local final_bq="${set_bypass_q:-${cur_bq:-off}}"
+    local final_stale="${set_stale:-${cur_stale:-off}}"
+    local final_debug="${set_debug_hdr:-${cur_debug:-on}}"
 
-    # Backup snippet in case nginx -t fails
+    # Backup snippet + vhost in case nginx -t fails
     local backup; backup=$(mktemp)
+    local vhost_backup; vhost_backup=$(mktemp)
+    local conf="${NGINX_CONF_DIR}/${domain}.conf"
     cp "$snippet" "$backup"
+    cp "$conf"    "$vhost_backup"
 
-    _cache_snippet_write "$domain" "$final_ttl" "$final_excl" "$final_cookies" "$final_bq"
+    _cache_snippet_write "$domain" "$final_ttl" "$final_excl" "$final_cookies" "$final_bq" "$final_stale" "$final_debug"
 
-    # If TTL changed, update fastcgi_cache_valid in the vhost (both commented + uncommented)
-    if [[ -n "$set_ttl" ]]; then
-      local conf="${NGINX_CONF_DIR}/${domain}.conf"
-      sed -i -E "s|(#?\s*fastcgi_cache_valid\s+200 301 302 )[0-9]+[smhd]|\1${final_ttl}|g" "$conf"
-    fi
+    # Apply vhost changes (TTL, stale-revalidate, debug-header)
+    sed -i -E "s|(#?\s*fastcgi_cache_valid\s+200 301 302 )[0-9]+[smhd]|\1${final_ttl}|g" "$conf"
+    _cache_vhost_stale_revalidate "$domain" "$final_stale"
+    _cache_vhost_debug_header     "$domain" "$final_debug"
 
     if ! nginx -t >> "$CLI_LOG" 2>&1; then
-      cp "$backup" "$snippet"
-      rm -f "$backup"
-      die "Nginx config test failed after cache:config update — reverted snippet. Check: nginx -t"
+      cp "$backup"       "$snippet"
+      cp "$vhost_backup" "$conf"
+      rm -f "$backup" "$vhost_backup"
+      die "Nginx config test failed after cache:config update — reverted. Check: nginx -t"
     fi
-    rm -f "$backup"
+    rm -f "$backup" "$vhost_backup"
     nginx -s reload >> "$CLI_LOG" 2>&1
     ok "Cache config updated for: ${domain}"
     return 0
@@ -1079,14 +1359,18 @@ _cache_config() {
   local cur_excl;    cur_excl=$(_cache_snippet_read "$domain" "EXCLUDE_URLS")
   local cur_cookies; cur_cookies=$(_cache_snippet_read "$domain" "BYPASS_COOKIES")
   local cur_bq;      cur_bq=$(_cache_snippet_read "$domain" "BYPASS_QUERY")
+  local cur_stale;   cur_stale=$(_cache_snippet_read "$domain" "STALE_REVALIDATE")
+  local cur_debug;   cur_debug=$(_cache_snippet_read "$domain" "DEBUG_HEADER")
 
   echo ""
   echo -e "  ${BOLD}Cache config: ${domain}${RESET}"
   _hr
-  _table_row "TTL"            "${cur_ttl:--}"
-  _table_row "Exclude URLs"   "${cur_excl:--}"
-  _table_row "Bypass cookies" "${cur_cookies:--}"
-  _table_row "Bypass query"   "${cur_bq:--}"
+  _table_row "TTL"                "${cur_ttl:--}"
+  _table_row "Exclude URLs"       "${cur_excl:--}"
+  _table_row "Bypass cookies"     "${cur_cookies:--}"
+  _table_row "Bypass query"       "${cur_bq:--}"
+  _table_row "Stale revalidate"   "${cur_stale:-off}"
+  _table_row "Debug header"       "${cur_debug:-on}"
   _hr
   echo ""
 }
@@ -1193,13 +1477,17 @@ _cache_install_wp_plugins() {
   [[ "$install_nginx_helper" == "true" || "$install_redis_plugin" == "true" ]] || return 0
 
   local conf="${NGINX_CONF_DIR}/${domain}.conf"
-  local webroot; webroot=$(grep -oP 'root \K[^;]+' "$conf" 2>/dev/null | head -1)
+  local webroot; webroot=$(_vhost_webroot "$conf")
   if [[ -z "$webroot" || ! -f "${webroot}/wp-config.php" ]]; then
     warn "WordPress not detected in ${webroot}; skipping WordPress cache plugin installation."
+    [[ "$install_nginx_helper" == "true" ]] && echo "nginx_helper=skipped_no_wordpress" || true
+    [[ "$install_redis_plugin"  == "true" ]] && echo "redis_plugin=skipped_no_wordpress"  || true
     return 0
   fi
   if ! command -v wp >/dev/null 2>&1; then
     warn "WP-CLI is not installed; skipping WordPress cache plugin installation."
+    [[ "$install_nginx_helper" == "true" ]] && echo "nginx_helper=skipped_no_wpcli" || true
+    [[ "$install_redis_plugin"  == "true" ]] && echo "redis_plugin=skipped_no_wpcli"  || true
     return 0
   fi
 
@@ -1216,29 +1504,44 @@ _cache_install_wp_plugins() {
   fi
 
   if [[ "$install_nginx_helper" == "true" ]]; then
+    local nh_status="install_failed"
     log "Installing WordPress plugin: Nginx Helper (${domain})..."
     if "${runner[@]}" plugin install nginx-helper --activate >> "$CLI_LOG" 2>&1; then
       ok "Nginx Helper plugin installed for: ${domain}"
       local nh_options
       nh_options=$(printf '{"enable_purge":"1","cache_method":"enable_fastcgi","purge_method":"unlink_files","cache_path":"%s"}' \
         "$NGINX_CACHE_DIR")
-      "${runner[@]}" option update rt_wp_nginx_helper_options "$nh_options" --format=json \
-        >> "$CLI_LOG" 2>&1 \
-        && ok "Nginx Helper configured (cache path: ${NGINX_CACHE_DIR})" \
-        || warn "Nginx Helper installed but WP option set failed — configure manually in WP Admin > Settings > Nginx Helper"
+      if "${runner[@]}" option update rt_wp_nginx_helper_options "$nh_options" --format=json >> "$CLI_LOG" 2>&1; then
+        ok "Nginx Helper configured (cache path: ${NGINX_CACHE_DIR})"
+        nh_status="configured"
+      else
+        warn "Nginx Helper installed but WP option set failed — configure manually in WP Admin > Settings > Nginx Helper"
+        nh_status="installed_not_configured"
+      fi
     else
       warn "Failed to install Nginx Helper plugin for: ${domain}"
+      nh_status="install_failed"
     fi
+    echo "nginx_helper=${nh_status}"
   fi
 
   if [[ "$install_redis_plugin" == "true" ]]; then
+    local rp_status="install_failed"
     log "Installing WordPress plugin: Redis Object Cache (${domain})..."
-    "${runner[@]}" plugin install redis-cache --activate >> "$CLI_LOG" 2>&1 \
-      && ok "Redis Object Cache plugin installed for: ${domain}" \
-      || warn "Failed to install Redis Object Cache plugin for: ${domain}"
-    "${runner[@]}" redis enable >> "$CLI_LOG" 2>&1 \
-      && ok "Redis Object Cache enabled for: ${domain}" \
-      || warn "Redis Object Cache plugin installed, but object-cache enable did not complete for: ${domain}"
+    if "${runner[@]}" plugin install redis-cache --activate >> "$CLI_LOG" 2>&1; then
+      ok "Redis Object Cache plugin installed for: ${domain}"
+      if "${runner[@]}" redis enable >> "$CLI_LOG" 2>&1; then
+        ok "Redis Object Cache enabled for: ${domain}"
+        rp_status="enabled"
+      else
+        warn "Redis Object Cache plugin installed, but object-cache enable did not complete for: ${domain}"
+        rp_status="installed_not_enabled"
+      fi
+    else
+      warn "Failed to install Redis Object Cache plugin for: ${domain}"
+      rp_status="install_failed"
+    fi
+    echo "redis_plugin=${rp_status}"
   fi
 }
 _cache_toggle() {
@@ -1271,7 +1574,7 @@ _cache_toggle() {
       _cache_snippet_write "$domain" "1h" \
         "/wp-admin/,/wp-login.php,/checkout/,/cart/,/my-account/,/?wc-ajax=" \
         "wordpress_logged_in,woocommerce_session,comment_author,laravel_session,PHPSESSID" \
-        "off"
+        "off" "off" "on"
       log "Per-site cache snippet created: ${snippet}"
     fi
 
@@ -1294,6 +1597,12 @@ _cache_toggle() {
       sed -i -E "s|(fastcgi_cache_valid\s+200 301 302 )[0-9]+[smhd]|\1${saved_ttl}|g" "$conf"
     fi
 
+    # 5. Apply stale-revalidate and debug-header preferences from snippet
+    local saved_stale; saved_stale=$(_cache_snippet_read "$domain" "STALE_REVALIDATE")
+    local saved_debug; saved_debug=$(_cache_snippet_read "$domain" "DEBUG_HEADER")
+    _cache_vhost_stale_revalidate "$domain" "${saved_stale:-off}"
+    _cache_vhost_debug_header     "$domain" "${saved_debug:-on}"
+
     ok "FastCGI cache enabled for: ${domain}"
     _cache_install_wp_plugins "$domain" "$install_nginx_helper" "$install_redis_plugin"
   else
@@ -1303,6 +1612,8 @@ _cache_toggle() {
       -e 's|^\(\s*\)fastcgi_cache_valid|\1#fastcgi_cache_valid|g' \
       -e 's|^\(\s*\)fastcgi_cache_bypass|\1#fastcgi_cache_bypass|g' \
       -e 's|^\(\s*\)fastcgi_no_cache|\1#fastcgi_no_cache|g' \
+      -e 's|^\(\s*\)fastcgi_cache_use_stale|\1#fastcgi_cache_use_stale|g' \
+      -e 's|^\(\s*\)add_header X-FastCGI-Cache|\1#add_header X-FastCGI-Cache|g' \
       "$conf"
     _cache_purge_domain "$domain"
     ok "FastCGI cache disabled for: ${domain}"
@@ -1337,7 +1648,7 @@ _cache_migrate() {
         _cache_snippet_write "$domain" "1h" \
           "/wp-admin/,/wp-login.php,/checkout/,/cart/,/my-account/,/?wc-ajax=" \
           "wordpress_logged_in,woocommerce_session,comment_author,laravel_session,PHPSESSID" \
-          "off"
+          "off" "off" "on"
       fi
 
       local backup="${conf}.migrate-bak"
@@ -2228,7 +2539,10 @@ main() {
     site:info)      _site_info "$@" ;;
     vhost:save)     _vhost_save "$@" ;;
 
-    # Cache
+    # Cache — per-site status (Phase 1)
+    cache:page)   _cache_page "$@" ;;
+    cache:redis)  _cache_redis_per_site "$@" ;;
+    # Cache — existing commands (unchanged)
     cache:status)   _cache_status "$@" ;;
     cache:purge)    _cache_purge "$@" ;;
     cache:enable)   _cache_toggle enable "$@" ;;
