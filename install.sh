@@ -1041,6 +1041,23 @@ _configure_redis() {
   ok "Redis configured (maxmemory: ${redis_maxmem}, policy: allkeys-lru, persistence: off)"
 }
 
+_install_wpcli() {
+  if command -v wp &>/dev/null; then
+    log "WP-CLI already installed — skipping"
+    return 0
+  fi
+  log "Installing WP-CLI..."
+  if curl -fsSL -o /usr/local/bin/wp \
+      "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar" \
+      2>/dev/null; then
+    chmod +x /usr/local/bin/wp
+    ok "WP-CLI installed: /usr/local/bin/wp"
+  else
+    warn "WP-CLI download failed (non-fatal) — object cache management will be limited"
+  fi
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # 12. UFW FIREWALL
 # ---------------------------------------------------------------------------
@@ -1542,7 +1559,7 @@ export NO_COLOR=1
 cmd="${1:-}"
 case "$cmd" in
   site:add|site:delete|site:list|vhost:save|\
-  cache:status|cache:purge|cache:enable|cache:disable|\
+  cache:page|cache:redis|cache:status|cache:purge|cache:enable|cache:disable|\
   db:add|db:delete|db:list|db:backup|\
   php:list|php:version|php:restart|php:install|\
   ssl:install|ssl:renew|ssl:status|ssl:import|\
@@ -1856,6 +1873,7 @@ main() {
   _configure_database; ui_ok "Database secured"; ui_ok "AidiPanel database created"
   _install_redis;      ui_ok "Redis installed"
   _configure_redis;    ui_ok "Redis configured: 128mb, allkeys-lru, persistence off"
+  _install_wpcli;      ui_ok "WP-CLI ready"
   ui_elapsed "$t"
 
   ui_section "Security Layer"; ui_note "Applying base protection"; printf '\n'
