@@ -842,24 +842,27 @@ $tabs = [
     <div class="card p-5">
       <h2 class="font-head font-semibold text-sm text-zinc-900 mb-1"><?= e(t('site.set.php_title')) ?></h2>
       <p class="text-[11px] text-zinc-400 mb-4"><?= e(t('site.set.php_hint')) ?></p>
-      <form method="POST" action="/sites/<?= e($domain) ?>/php" class="flex items-end gap-3"
+      <form method="POST" action="/sites/<?= e($domain) ?>/php"
             x-data="phpSwitchForm()" @submit="onSubmit($event)" x-ref="form">
         <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
-        <div class="flex-1">
-          <label class="lbl">PHP version</label>
-          <select name="php_version" class="inp" data-phpselect>
-            <?php foreach (php_versions_status() as $v => $s): ?>
-            <option value="<?= e($v) ?>"
-              <?= $phpVer === $v ? 'selected' : '' ?>
-              <?= $s['installed'] ? '' : 'data-needs-install="1"' ?>>PHP <?= e($v) ?><?= $s['installed'] ? '' : ' — ' . e(t('php.will_install')) ?></option>
-            <?php endforeach; ?>
-          </select>
-          <p class="hint mt-1"><?= e(t('site.set.php_autoinstall_hint')) ?></p>
+        <div data-op-fields class="flex items-end gap-3">
+          <div class="flex-1">
+            <label class="lbl">PHP version</label>
+            <select name="php_version" class="inp" data-phpselect>
+              <?php foreach (php_versions_status() as $v => $s): ?>
+              <option value="<?= e($v) ?>"
+                <?= $phpVer === $v ? 'selected' : '' ?>
+                <?= $s['installed'] ? '' : 'data-needs-install="1"' ?>>PHP <?= e($v) ?><?= $s['installed'] ? '' : ' — ' . e(t('php.will_install')) ?></option>
+              <?php endforeach; ?>
+            </select>
+            <p class="hint mt-1"><?= e(t('site.set.php_autoinstall_hint')) ?></p>
+          </div>
+          <button type="submit" class="btn btn-primary" :disabled="submitting">
+            <span x-show="!submitting"><?= e(t('site.set.php_apply')) ?></span>
+            <span x-show="submitting" x-cloak><i class="ti ti-loader-2 text-sm spin"></i> <?= e(t('site.set.php_applying')) ?></span>
+          </button>
         </div>
-        <button type="submit" class="btn btn-primary" :disabled="submitting">
-          <span x-show="!submitting"><?= e(t('site.set.php_apply')) ?></span>
-          <span x-show="submitting" x-cloak><i class="ti ti-loader-2 text-sm spin"></i> <?= e(t('site.set.php_applying')) ?></span>
-        </button>
+        <?php include APP_ROOT . '/Views/partials/op-progress.php'; ?>
 
         <!-- Modal: confirm on-demand PHP install before switching -->
         <div x-show="confirmVer" x-cloak class="fixed inset-0 z-50">
@@ -1016,14 +1019,14 @@ $tabs = [
 
       <div class="flex items-center gap-2.5 px-5 py-3.5 border-t border-zinc-100 bg-zinc-50/60">
         <?php if ($sslState === 'letsencrypt'): ?>
-        <form method="POST" action="/sites/<?= e($domain) ?>/ssl/renew" @submit="submitting = true; window.opGuard.start()">
+        <form method="POST" action="/sites/<?= e($domain) ?>/ssl/renew" data-op-stream class="flex-1">
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
-          <button type="submit" class="btn btn-primary" :disabled="submitting">
-            <i class="ti ti-refresh text-sm" x-show="!submitting"></i>
-            <i class="ti ti-loader-2 text-sm animate-spin" x-show="submitting" x-cloak></i>
-            <span x-show="!submitting"><?= e(t('site.ssl.renew')) ?></span>
-            <span x-show="submitting" x-cloak><?= e(t('site.ssl.processing')) ?></span>
-          </button>
+          <div data-op-fields>
+            <button type="submit" class="btn btn-primary">
+              <i class="ti ti-refresh text-sm"></i> <?= e(t('site.ssl.renew')) ?>
+            </button>
+          </div>
+          <?php include APP_ROOT . '/Views/partials/op-progress.php'; ?>
         </form>
         <?php else: ?>
         <button type="button" @click="modal='le'" class="btn btn-primary"><i class="ti ti-lock-check text-sm"></i> <?= e(t('site.ssl.install_le')) ?></button>
@@ -1040,8 +1043,9 @@ $tabs = [
           <h3 class="card-title"><i class="ti ti-rosette-discount-check text-speed"></i> <?= e(t('site.ssl.le_modal_title')) ?></h3>
           <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
         </div>
-        <form method="POST" action="/sites/<?= e($domain) ?>/ssl/install" @submit="submitting = true; window.opGuard.start()">
+        <form method="POST" action="/sites/<?= e($domain) ?>/ssl/install" data-op-stream>
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+          <div data-op-fields>
           <div class="p-5">
             <div class="flex items-start gap-2.5 bg-speed-pale border border-speed/20 rounded-lg px-4 py-3 mb-4">
               <i class="ti ti-info-circle text-speed mt-0.5 shrink-0"></i>
@@ -1077,6 +1081,8 @@ $tabs = [
               <span x-show="submitting" x-cloak><?= e(t('site.ssl.processing')) ?></span>
             </button>
           </div>
+          </div>
+          <div class="p-5"><?php include APP_ROOT . '/Views/partials/op-progress.php'; ?></div>
         </form>
       </div>
     </div>
@@ -1147,22 +1153,54 @@ function phpSwitchForm() {
     submitting: false,
     confirmVer: null,   // set to the version string when an in-app confirm is needed
     onSubmit(e) {
+      e.preventDefault();                  // always stream
       var opt = this._selectedNeedsInstall();
       if (opt && !this.confirmVer) {
-        e.preventDefault();
         this.confirmVer = opt.value;
         return;
       }
-      this.submitting = true;
-      window.opGuard.start(); // warn on reload/leave until the redirect replaces the page
+      this._stream();
     },
     proceed() {
+      this.confirmVer = null;
+      this._stream();
+    },
+    _stream() {
+      if (this.submitting) return;
       this.submitting = true;
       window.opGuard.start();
-      this.$refs.form.submit();
+      var form   = this.$root;
+      var fields = form.querySelector('[data-op-fields]');
+      var ui     = window.opProgressController(form.querySelector('[data-op-progress]'));
+      var fd     = new FormData(form);
+      fd.set('stream', '1');
+      if (fields) fields.classList.add('hidden');
+      if (ui) ui.show();
+      var self = this;
+      window.opStream(form.getAttribute('action'), fd, {
+        onProgress: function (pct, key, msg) { if (ui) ui.set(pct, key, msg); },
+        onDone: function (frame) {
+          window.opGuard.stop();
+          if (frame.ok) {
+            if (ui) ui.done();
+            try { sessionStorage.setItem('aidipanel_toast', JSON.stringify({ kind: 'success', message: frame.message })); } catch (e) {}
+            if (frame.redirect) window.location.href = frame.redirect; else window.location.reload();
+          } else {
+            self.submitting = false;
+            if (ui) ui.fail(frame.message || 'Operation failed.');
+            if (fields) fields.classList.remove('hidden');
+          }
+        },
+        onError: function (msg) {
+          window.opGuard.stop();
+          self.submitting = false;
+          if (ui) ui.fail(msg);
+          if (fields) fields.classList.remove('hidden');
+        }
+      });
     },
     _selectedNeedsInstall() {
-      var sel = this.$el.querySelector('select[data-phpselect]');
+      var sel = this.$root.querySelector('select[data-phpselect]');
       if (!sel) return null;
       var opt = sel.options[sel.selectedIndex];
       return (opt && opt.getAttribute('data-needs-install') === '1') ? opt : null;

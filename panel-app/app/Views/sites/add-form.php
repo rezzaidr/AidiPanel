@@ -112,21 +112,27 @@ $renderField = function (array $f): void {
         <input type="hidden" name="type" value="<?= e($form['type']) ?>">
       <?php endif; ?>
 
-      <div class="space-y-4">
-        <?php foreach ($form['fields'] as $f) { $renderField($f); } ?>
+      <div data-op-fields>
+        <div class="space-y-4">
+          <?php foreach ($form['fields'] as $f) { $renderField($f); } ?>
+        </div>
+
+        <div class="flex items-center gap-3 mt-6 pt-5 border-t border-zinc-100">
+          <?php if ($creatable): ?>
+            <button type="submit" class="btn btn-primary" :disabled="submitting">
+              <span x-show="!submitting"><i class="ti ti-plus text-sm"></i> <?= e(t('site.add.create')) ?></span>
+              <span x-show="submitting" x-cloak><i class="ti ti-loader-2 text-sm spin"></i> <?= e(t('site.add.creating')) ?></span>
+            </button>
+            <a href="/sites/add" class="text-xs font-medium text-zinc-500 hover:text-zinc-700 px-2"><?= e(t('common.cancel')) ?></a>
+          <?php else: ?>
+            <button type="button" class="btn btn-secondary" disabled><i class="ti ti-clock text-sm"></i> <?= e(t('site.add.coming_soon')) ?></button>
+          <?php endif; ?>
+        </div>
       </div>
 
-      <div class="flex items-center gap-3 mt-6 pt-5 border-t border-zinc-100">
-        <?php if ($creatable): ?>
-          <button type="submit" class="btn btn-primary" :disabled="submitting">
-            <span x-show="!submitting"><i class="ti ti-plus text-sm"></i> <?= e(t('site.add.create')) ?></span>
-            <span x-show="submitting" x-cloak><i class="ti ti-loader-2 text-sm spin"></i> <?= e(t('site.add.creating')) ?></span>
-          </button>
-          <a href="/sites/add" class="text-xs font-medium text-zinc-500 hover:text-zinc-700 px-2"><?= e(t('common.cancel')) ?></a>
-        <?php else: ?>
-          <button type="button" class="btn btn-secondary" disabled><i class="ti ti-clock text-sm"></i> <?= e(t('site.add.coming_soon')) ?></button>
-        <?php endif; ?>
-      </div>
+      <?php if ($creatable): ?>
+        <?php include APP_ROOT . '/Views/partials/op-progress.php'; ?>
+      <?php endif; ?>
 
       <!-- Modal: confirm on-demand PHP install before create -->
       <div x-show="confirmVer" x-cloak class="fixed inset-0 z-50">
@@ -200,25 +206,57 @@ function phpCreateForm() {
     submitting: false,
     confirmVer: null,   // set to the version string when an in-app confirm is needed
     onSubmit(e) {
-      // If a not-installed version is selected, intercept and show the in-app
-      // modal instead of submitting. The modal's Confirm calls proceed().
+      e.preventDefault();                  // always stream — never a native submit
+      // If a not-installed PHP version is selected, confirm first; the modal's
+      // Confirm calls proceed(). Otherwise stream the create straight away.
       var opt = this._selectedNeedsInstall();
       if (opt && !this.confirmVer) {
-        e.preventDefault();
         this.confirmVer = opt.value;
         return;
       }
-      this.submitting = true; // spinner; install+create runs server-side (≤300s)
-      window.opGuard.start(); // warn on reload/leave until the redirect replaces the page
+      this._stream();
     },
-    proceed() {
-      // User confirmed the install in the modal — submit the form for real.
+    proceed() {                            // modal Confirm
+      this.confirmVer = null;
+      this._stream();
+    },
+    // Submit via SSE: show the live progress bar, then redirect on success.
+    _stream() {
+      if (this.submitting) return;
       this.submitting = true;
-      window.opGuard.start();
-      this.$refs.form.submit();
+      window.opGuard.start();              // warn on reload/leave until we redirect
+      var form   = this.$root;
+      var fields = form.querySelector('[data-op-fields]');
+      var ui     = window.opProgressController(form.querySelector('[data-op-progress]'));
+      var fd     = new FormData(form);
+      fd.set('stream', '1');
+      if (fields) fields.classList.add('hidden');
+      if (ui) ui.show();
+      var self = this;
+      window.opStream(form.getAttribute('action'), fd, {
+        onProgress: function (pct, key, msg) { if (ui) ui.set(pct, key, msg); },
+        onDone: function (frame) {
+          window.opGuard.stop();
+          if (frame.ok) {
+            if (ui) ui.done();
+            try { sessionStorage.setItem('aidipanel_toast', JSON.stringify({ kind: 'success', message: frame.message })); } catch (e) {}
+            window.location.href = frame.redirect;
+          } else {
+            self.submitting = false;
+            if (ui) ui.fail(frame.message || 'Operation failed.');
+            if (fields) fields.classList.remove('hidden');
+          }
+        },
+        onError: function (msg) {
+          window.opGuard.stop();
+          self.submitting = false;
+          if (ui) ui.fail(msg);
+          if (fields) fields.classList.remove('hidden');
+        }
+      });
     },
     _selectedNeedsInstall() {
-      var sel = this.$el.querySelector('select[data-phpselect]');
+      var sel = this.$root.querySelector('select[data-phpselect]');
       if (!sel) return null;
       var opt = sel.options[sel.selectedIndex];
       return (opt && opt.getAttribute('data-needs-install') === '1') ? opt : null;

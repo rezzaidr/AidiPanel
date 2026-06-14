@@ -172,6 +172,13 @@ select.inp {
 @keyframes ap-spin { to { transform: rotate(360deg); } }
 .spin { display: inline-block; animation: ap-spin .7s linear infinite; }
 
+/* --- Streamed-op progress ----------------------------------------------- */
+/* "working" shimmer while a long step holds the bar at its anchor (the bar
+   width is still driven by real backend stages); plus a failure tint. */
+@keyframes op-working { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
+.op-working { animation: op-working 1.2s ease-in-out infinite; }
+.op-bar-fail { background: #f43f5e !important; }
+
 /* --- Toasts (flash messages) -------------------------------------------- */
 .toast {
   display: flex; align-items: center; gap: .5rem;

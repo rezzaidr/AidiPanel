@@ -432,6 +432,7 @@ return [
     'site.add.f.app_port'       => 'App Port',
     'common.cancel'         => 'Cancel',
     'common.optional'       => 'optional',
+    'op.progress.starting'  => 'Starting…',
 
     // Site SSL/TLS tab
     'site.ssl.title'             => 'SSL/TLS Certificate',

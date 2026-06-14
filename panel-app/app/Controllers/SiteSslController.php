@@ -39,6 +39,14 @@ class SiteSslController extends BaseController
         $args = ['--domains', implode(',', $domains)];
         if ($email !== '') { $args[] = '--email'; $args[] = $email; }
 
+        if ($this->request->post('stream') === '1') {
+            $this->streamCli('ssl:install', $args, function (array $r) use ($domain, $domains): array {
+                $this->db->run("UPDATE sites SET ssl_type = 'letsencrypt' WHERE domain = ?", [$domain]);
+                \Core\DB::log('ssl:install', "Installed Let's Encrypt for: " . implode(', ', $domains));
+                return ['redirect' => $this->tab($domain), 'message' => "Let's Encrypt certificate installed for {$domain}."];
+            });
+        }
+
         $result = run_cli('ssl:install', $args);
         if (!$result['success']) {
             $this->error("Let's Encrypt failed: " . $result['output'], $this->tab($domain));
@@ -54,6 +62,13 @@ class SiteSslController extends BaseController
     {
         $domain = (string) ($params['domain'] ?? '');
         $this->requireSite($domain);
+
+        if ($this->request->post('stream') === '1') {
+            $this->streamCli('ssl:renew', ['--domain', $domain], function (array $r) use ($domain): array {
+                \Core\DB::log('ssl:renew', "Renewed SSL for: {$domain}");
+                return ['redirect' => $this->tab($domain), 'message' => "Certificate renewed for {$domain}."];
+            });
+        }
 
         $result = run_cli('ssl:renew', ['--domain', $domain]);
         if (!$result['success']) {

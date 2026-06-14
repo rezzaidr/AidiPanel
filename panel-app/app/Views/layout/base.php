@@ -117,7 +117,7 @@ $_hostname = gethostname() ?: 'server';
 <?php endif; ?>
 
 <!-- ===== TOASTS (flash messages) ===== -->
-<div class="fixed top-4 right-4 z-[60] flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)]">
+<div id="toast-stack" class="fixed top-4 right-4 z-[60] flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)]">
   <?php if (!empty($_flash_success ?? '')): ?>
     <div x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 8000)" x-transition
          class="toast toast-ok">
@@ -204,6 +204,167 @@ window.api = async (url, method = 'GET', body = null) => {
   const res = await fetch(url, opts);
   return res.json();
 };
+
+// ── AidiToast — inject a toast (used after a streamed op redirects) ───────────
+window.AidiToast = function (kind, message) {
+  var stack = document.getElementById('toast-stack');
+  if (!stack || !message) return;
+  var map = {
+    success: ['toast-ok', 'ti-circle-check'],
+    error:   ['toast-error', 'ti-alert-circle'],
+    warning: ['toast-warn', 'ti-alert-triangle'],
+  };
+  var cfg = map[kind] || map.success;
+  var el = document.createElement('div');
+  el.className = 'toast ' + cfg[0];
+  el.innerHTML = '<i class="ti ' + cfg[1] + ' text-base shrink-0"></i>'
+    + '<span class="flex-1"></span>'
+    + '<button type="button" class="shrink-0"><i class="ti ti-x text-sm"></i></button>';
+  el.querySelector('span').textContent = message;        // textContent = no HTML injection
+  el.querySelector('button').addEventListener('click', function () { el.remove(); });
+  stack.appendChild(el);
+  setTimeout(function () { el.remove(); }, 8000);
+};
+
+// A streamed op finishes by stashing its toast, then navigating — show it on arrival.
+(function () {
+  try {
+    var raw = sessionStorage.getItem('aidipanel_toast');
+    if (raw) {
+      sessionStorage.removeItem('aidipanel_toast');
+      var t = JSON.parse(raw);
+      if (t && t.message) window.AidiToast(t.kind || 'success', t.message);
+    }
+  } catch (e) {}
+})();
+
+// ── opStream — POST a form and read an SSE progress stream ────────────────────
+// handlers: { onProgress(pct,key,msg), onDone(frame), onError(message) }
+window.opStream = function (url, formData, handlers) {
+  handlers = handlers || {};
+  fetch(url, { method: 'POST', body: formData, headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+    .then(function (res) {
+      var ct = res.headers.get('content-type') || '';
+      if (!res.ok || ct.indexOf('text/event-stream') === -1) {
+        if (handlers.onError) handlers.onError('Could not start the operation. Please check your input and try again.');
+        return;
+      }
+      var reader = res.body.getReader();
+      var decoder = new TextDecoder();
+      var buf = '';
+      function pump() {
+        return reader.read().then(function (r) {
+          if (r.done) return;
+          buf += decoder.decode(r.value, { stream: true });
+          var parts = buf.split('\n\n');
+          buf = parts.pop();
+          parts.forEach(function (chunk) {
+            var data = chunk.split('\n')
+              .filter(function (l) { return l.indexOf('data:') === 0; })
+              .map(function (l) { return l.slice(5).trim(); }).join('');
+            if (!data) return;
+            var frame; try { frame = JSON.parse(data); } catch (e) { return; }
+            if (frame.t === 'p' && handlers.onProgress) handlers.onProgress(frame.pct, frame.key, frame.msg);
+            else if (frame.t === 'done' && handlers.onDone) handlers.onDone(frame);
+          });
+          return pump();
+        });
+      }
+      return pump();
+    })
+    .catch(function () {
+      if (handlers.onError) handlers.onError('Connection interrupted. The operation may still be running on the server.');
+    });
+};
+
+// ── opProgressController — drive a [data-op-progress] UI block (see partial) ──
+window.opProgressController = function (root) {
+  if (!root) return null;
+  var bar = root.querySelector('[data-op-bar]');
+  var label = root.querySelector('[data-op-label]');
+  var elapsed = root.querySelector('[data-op-elapsed]');
+  var icon = root.querySelector('[data-op-icon]');
+  var errEl = root.querySelector('[data-op-error]');
+  var stepStart = 0, timer = null;
+  function tick() {
+    var s = Math.floor((Date.now() - stepStart) / 1000);
+    if (elapsed) elapsed.textContent = s > 0 ? s + 's' : '';
+    if (s >= 3 && bar) bar.classList.add('op-working');   // shimmer once a step runs long
+  }
+  function stopTimer() { if (timer) { clearInterval(timer); timer = null; } }
+  return {
+    show: function () {
+      root.classList.remove('hidden');
+      if (errEl) { errEl.classList.add('hidden'); errEl.textContent = ''; }
+      if (icon) icon.className = 'ti ti-loader-2 spin text-ink';
+      if (bar) { bar.style.width = '0%'; bar.classList.remove('op-working', 'op-bar-fail'); }
+      stepStart = Date.now(); stopTimer(); timer = setInterval(tick, 1000); tick();
+    },
+    set: function (pct, key, msg) {
+      pct = Math.max(0, Math.min(100, parseInt(pct, 10) || 0));
+      if (bar) { bar.style.width = pct + '%'; bar.classList.remove('op-working'); }
+      if (msg && label) label.textContent = msg;
+      stepStart = Date.now(); tick();
+    },
+    fail: function (msg) {
+      stopTimer();
+      if (icon) icon.className = 'ti ti-alert-circle text-rose-600';
+      if (bar) { bar.classList.remove('op-working'); bar.classList.add('op-bar-fail'); }
+      if (label) label.textContent = 'Failed';
+      if (elapsed) elapsed.textContent = '';
+      if (errEl) { errEl.textContent = msg; errEl.classList.remove('hidden'); }
+    },
+    done: function () {
+      stopTimer();
+      if (bar) { bar.style.width = '100%'; bar.classList.remove('op-working'); }
+      if (icon) icon.className = 'ti ti-circle-check text-emerald-600';
+      if (elapsed) elapsed.textContent = '';
+    },
+  };
+};
+
+// ── Declarative streaming: <form data-op-stream> submits via opStream with a bar ──
+// The form should contain the op-progress partial ([data-op-progress]) and wrap its
+// inputs/buttons in [data-op-fields]. On success: redirect (+ toast) or reload.
+window.opStreamSubmit = function (form) {
+  if (!form || form.dataset.opStreaming === '1') return;
+  form.dataset.opStreaming = '1';
+  var fields = form.querySelector('[data-op-fields]');
+  var ui     = window.opProgressController(form.querySelector('[data-op-progress]'));
+  var fd     = new FormData(form);
+  fd.set('stream', '1');
+  if (fields) fields.classList.add('hidden');
+  if (ui) ui.show();
+  window.opGuard.start();
+  window.opStream(form.getAttribute('action'), fd, {
+    onProgress: function (p, k, m) { if (ui) ui.set(p, k, m); },
+    onDone: function (frame) {
+      window.opGuard.stop();
+      if (frame.ok) {
+        if (ui) ui.done();
+        try { sessionStorage.setItem('aidipanel_toast', JSON.stringify({ kind: 'success', message: frame.message })); } catch (e) {}
+        if (frame.redirect) window.location.href = frame.redirect; else window.location.reload();
+      } else {
+        form.dataset.opStreaming = '0';
+        if (ui) ui.fail(frame.message || 'Operation failed.');
+        if (fields) fields.classList.remove('hidden');
+      }
+    },
+    onError: function (msg) {
+      window.opGuard.stop();
+      form.dataset.opStreaming = '0';
+      if (ui) ui.fail(msg);
+      if (fields) fields.classList.remove('hidden');
+    }
+  });
+};
+document.addEventListener('submit', function (e) {
+  var form = e.target;
+  if (form && form.matches && form.matches('form[data-op-stream]')) {
+    e.preventDefault();
+    window.opStreamSubmit(form);
+  }
+});
 </script>
 </body>
 </html>

@@ -39,6 +39,14 @@ class SslController extends BaseController
         $args = ['--domain', $domain];
         if ($email) $args = array_merge($args, ['--email', $email]);
 
+        if ($this->request->post('stream') === '1') {
+            $this->streamCli('ssl:install', $args, function (array $r) use ($domain): array {
+                $this->db->run("UPDATE sites SET ssl_type = 'letsencrypt' WHERE domain = ?", [$domain]);
+                \Core\DB::log('ssl:install', "Installed SSL for: {$domain}");
+                return ['redirect' => '/ssl', 'message' => "SSL certificate installed for {$domain}."];
+            });
+        }
+
         $result = run_cli('ssl:install', $args);
         if (!$result['success']) $this->error('SSL installation failed: ' . $result['output']);
 
@@ -55,6 +63,14 @@ class SslController extends BaseController
         }
 
         $args   = $domain ? ['--domain', $domain] : [];
+
+        if ($this->request->post('stream') === '1') {
+            $this->streamCli('ssl:renew', $args, function (array $r) use ($domain): array {
+                \Core\DB::log('ssl:renew', "Renewed SSL: " . ($domain ?: 'all'));
+                return ['redirect' => '/ssl', 'message' => 'SSL certificates renewed.'];
+            });
+        }
+
         $result = run_cli('ssl:renew', $args);
         if (!$result['success']) $this->error('SSL renewal failed: ' . $result['output']);
 

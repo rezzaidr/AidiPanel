@@ -47,6 +47,13 @@ class PhpController extends BaseController
             $this->error('Invalid PHP version.');
         }
 
+        if ($this->request->post('stream') === '1') {
+            $this->streamCli('php:install', ['--version', $version], function (array $r) use ($version): array {
+                \Core\DB::log('php:install', "Installed PHP {$version}");
+                return ['redirect' => '/php', 'message' => "PHP {$version} installed."];
+            });
+        }
+
         $result = run_cli('php:install', ['--version', $version]);
         if (!$result['success']) {
             $this->error('PHP ' . $version . ' install failed: ' . $result['output']);

@@ -31,6 +31,14 @@ class SiteController extends BaseController
 
     public function add(array $params = []): void
     {
+        // Streaming variant: the wizard posts stream=1 and reads live SSE progress.
+        // addStream() sets up the event stream and exits; the CLI is the validator
+        // there (its die() messages surface in the error frame).
+        if ($this->request->post('stream') === '1') {
+            $this->addStream();
+            return;
+        }
+
         $domain    = strtolower(trim((string) $this->request->post('domain', '')));
         $type      = (string) $this->request->post('type', 'php');
         $phpVer    = (string) $this->request->post('php_version', php_policy()['default']);
@@ -163,6 +171,68 @@ class SiteController extends BaseController
         $this->success("Site {$domain} created successfully.", "/sites/{$domain}");
     }
 
+    /**
+     * Streaming site create. Mirrors add()'s arg-building (keep in sync) but reports
+     * progress over SSE instead of blocking + redirecting. The CLI validates the
+     * input and installs; its summary is parsed for the admin URL on success.
+     */
+    private function addStream(): void
+    {
+        stream_begin();
+
+        $domain    = strtolower(trim((string) $this->request->post('domain', '')));
+        $type      = (string) $this->request->post('type', 'php');
+        $phpVer    = (string) $this->request->post('php_version', php_policy()['default']);
+        $proxyPass = (string) $this->request->post('proxy_pass', 'http://127.0.0.1:3000');
+        $siteUser  = strtolower(trim((string) $this->request->post('site_user', '')));
+
+        $args = ['--domain', $domain, '--type', $type, '--php', $phpVer];
+        if ($siteUser !== '') {
+            $args[] = '--user';
+            $args[] = $siteUser;
+        }
+        if ($type === 'proxy') {
+            $args[] = '--proxy-pass';
+            $args[] = $proxyPass;
+        }
+        if ($type === 'wordpress') {
+            array_push(
+                $args,
+                '--wp-title',       trim((string) $this->request->post('site_title', '')),
+                '--wp-admin-user',  trim((string) $this->request->post('admin_user', '')),
+                '--wp-admin-pass',  (string) $this->request->post('admin_pass', ''),
+                '--wp-admin-email', trim((string) $this->request->post('admin_email', '')),
+                '--wp-multisite',   (string) $this->request->post('multisite', 'off')
+            );
+        }
+
+        $result = run_cli_stream('site:add', $args, function (string $pct, string $key, string $msg): void {
+            stream_send(['t' => 'p', 'pct' => (int) $pct, 'key' => $key, 'msg' => $msg]);
+        });
+
+        if (!$result['success']) {
+            // The CLI's die() message is the last line; drop the [ERROR]/[INFO] tag.
+            $lines = array_values(array_filter(array_map('trim', explode("\n", $result['output'])), fn($l) => $l !== ''));
+            $tail  = $lines ? (string) end($lines) : '';
+            $tail  = preg_replace('/^\[(ERROR|WARN|INFO|OK)\]\s*/', '', $tail);
+            stream_send(['t' => 'done', 'ok' => false,
+                         'message' => 'Failed to create site: ' . ($tail !== '' ? $tail : 'unknown error')]);
+            exit;
+        }
+
+        // Persist to the panel DB, exactly like add().
+        $this->syncOneSite($domain, $type, $phpVer);
+        \Core\DB::log('site:add', "Added site: {$domain} ({$type}, PHP {$phpVer})");
+
+        $kv      = parse_kv_output($result['output']);
+        $message = $type === 'wordpress'
+            ? "WordPress site {$domain} created. Admin login: " . ($kv['admin_url'] ?? "https://{$domain}/wp-admin")
+            : "Site {$domain} created successfully.";
+
+        stream_send(['t' => 'done', 'ok' => true, 'redirect' => "/sites/{$domain}", 'message' => $message]);
+        exit;
+    }
+
     public function detail(array $params = []): void
     {
         $domain = $params['domain'] ?? '';
@@ -284,6 +354,14 @@ class SiteController extends BaseController
 
         if (!in_array($phpVer, php_policy()['available'], true)) {
             $this->error('Invalid PHP version.');
+        }
+
+        if ($this->request->post('stream') === '1') {
+            $this->streamCli('php:version', ['--domain', $domain, '--set', $phpVer], function (array $r) use ($domain, $phpVer): array {
+                $this->db->run('UPDATE sites SET php_version = ? WHERE domain = ?', [$phpVer, $domain]);
+                \Core\DB::log('php:version', "Changed {$domain} to PHP {$phpVer}");
+                return ['redirect' => "/sites/{$domain}", 'message' => "PHP version changed to {$phpVer} for {$domain}."];
+            });
         }
         // Patch C: the CLI (php:version) auto-installs a missing version; the
         // per-site switcher confirms with the user before submitting.

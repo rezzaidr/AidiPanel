@@ -370,6 +370,112 @@ function run_cli(string $command, array $args = []): array
 }
 
 /**
+ * Streaming sibling of run_cli(): runs a long op with --progress and calls
+ * $onProgress(pct, key, msg) for every @@PROGRESS marker as it arrives (via popen),
+ * so the panel can forward live progress to the browser. Non-marker lines (the
+ * key=value summary + any error text) are captured into 'output', like run_cli().
+ * Success = the CLI's terminal "100 done" marker and/or a zero exit code.
+ */
+function run_cli_stream(string $command, array $args, callable $onProgress): array
+{
+    $binary = '/usr/local/bin/aidipanel';
+    if (!file_exists($binary)) {
+        return ['success' => false, 'output' => 'AidiPanel CLI not found: ' . $binary, 'code' => 1];
+    }
+    if (!is_web_cli_command_allowed($command)) {
+        return ['success' => false, 'output' => 'Command not allowed from web panel.', 'code' => 126];
+    }
+    $logDir = '/opt/aidipanel/storage/logs';
+    if (!is_dir($logDir)) {
+        @mkdir($logDir, 0770, true);
+    }
+
+    // Always ask the CLI to emit @@PROGRESS markers (a flag, so it survives sudo).
+    $args[]   = '--progress';
+    $safeArgs = array_map('escapeshellarg', $args);
+
+    $currentUser = trim((string)(shell_exec('whoami 2>/dev/null') ?: ''));
+    if ($currentUser !== 'root' && file_exists('/usr/bin/sudo')) {
+        $runner = file_exists('/usr/local/sbin/aidipanel-web-run')
+            ? '/usr/local/sbin/aidipanel-web-run'
+            : $binary;
+        $cmd = '/usr/bin/sudo ' . escapeshellcmd($runner) . ' ' . escapeshellarg($command) . ' ' . implode(' ', $safeArgs) . ' 2>&1';
+    } else {
+        $cmd = 'NO_COLOR=1 ' . escapeshellcmd($binary) . ' ' . escapeshellarg($command) . ' ' . implode(' ', $safeArgs) . ' 2>&1';
+    }
+
+    $fp = popen($cmd, 'r');
+    if (!is_resource($fp)) {
+        return ['success' => false, 'output' => 'Failed to start the CLI process.', 'code' => 1];
+    }
+
+    $output  = [];
+    $sawDone = false;
+    while (($line = fgets($fp)) !== false) {
+        $line = rtrim($line, "\r\n");
+        if (preg_match('/^@@PROGRESS\s+(\S+)\s+(\S+)\s?(.*)$/', $line, $m)) {
+            if ($m[1] === '100' && $m[2] === 'done') {
+                $sawDone = true;
+            }
+            $onProgress($m[1], $m[2], $m[3]);
+        } elseif ($line !== '') {
+            $output[] = preg_replace('/\x1B\[[0-9;]*[A-Za-z]/', '', $line);
+        }
+    }
+
+    $status = pclose($fp);
+    if ($status === -1) {
+        $exitCode = 1;
+    } elseif (function_exists('pcntl_wifexited') && pcntl_wifexited($status)) {
+        $exitCode = pcntl_wexitstatus($status);
+    } else {
+        // pclose returns a wait-status; the exit code is the high byte on POSIX.
+        $exitCode = ($status > 255) ? (($status >> 8) & 0xFF) : $status;
+    }
+
+    return [
+        // The CLI emits "100 done" only after every step succeeded; accept that OR a
+        // zero exit (pclose status decoding varies across PHP/SAPI builds).
+        'success' => $sawDone || $exitCode === 0,
+        'output'  => implode("\n", $output),
+        'code'    => $exitCode,
+    ];
+}
+
+/**
+ * Begin a Server-Sent Events stream for a long operation: kill output buffering so
+ * the browser gets each frame live, keep the request alive past a tab close, and
+ * drop the session lock so other tabs aren't blocked for the duration.
+ */
+function stream_begin(): void
+{
+    @ini_set('zlib.output_compression', '0');
+    @ini_set('output_buffering', '0');
+    @ini_set('implicit_flush', '1');
+    while (ob_get_level() > 0) {
+        @ob_end_flush();
+    }
+    header('Content-Type: text/event-stream; charset=utf-8');
+    header('Cache-Control: no-cache, no-transform');
+    header('X-Accel-Buffering: no');     // ask nginx not to buffer this response
+    header('Connection: keep-alive');
+    @ignore_user_abort(true);
+    @set_time_limit(0);
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        session_write_close();           // don't hold the session lock during the op
+    }
+    echo ':' . str_repeat(' ', 2048) . "\n\n";   // pad to defeat any lingering proxy buffer
+    @flush();
+}
+
+/** Send one SSE frame (a JSON object) and flush it to the browser. */
+function stream_send(array $frame): void
+{
+    echo 'data: ' . json_encode($frame, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n\n";
+    @flush();
+}
+
+/**
  * Parse key=value CLI output into an associative array.
  * Lines that don't contain '=' are skipped. Values may be empty.
  */

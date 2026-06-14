@@ -62,4 +62,37 @@ abstract class BaseController
         flash('warning', $message);
         redirect($redirect ?: safe_back_url());
     }
+
+    /**
+     * Run a long CLI op as an SSE progress stream (see run_cli_stream / stream_begin).
+     * Emits a frame per @@PROGRESS marker, then a terminal frame. On success it calls
+     * $onSuccess(array $result) — which may write to the DB / log — and uses its
+     * ['redirect','message'] for the done frame. On failure the CLI's last line
+     * becomes the error message. Never returns (the stream ends the request).
+     */
+    protected function streamCli(string $command, array $args, callable $onSuccess): never
+    {
+        stream_begin();
+
+        $result = run_cli_stream($command, $args, function (string $pct, string $key, string $msg): void {
+            stream_send(['t' => 'p', 'pct' => (int) $pct, 'key' => $key, 'msg' => $msg]);
+        });
+
+        if (!$result['success']) {
+            $lines = array_values(array_filter(array_map('trim', explode("\n", $result['output'])), fn($l) => $l !== ''));
+            $tail  = $lines ? (string) end($lines) : '';
+            $tail  = preg_replace('/^\[(ERROR|WARN|INFO|OK)\]\s*/', '', $tail);
+            stream_send(['t' => 'done', 'ok' => false, 'message' => ($tail !== '' ? $tail : 'Operation failed.')]);
+            exit;
+        }
+
+        $done = $onSuccess($result);
+        stream_send([
+            't'        => 'done',
+            'ok'       => true,
+            'redirect' => $done['redirect'] ?? null,
+            'message'  => $done['message'] ?? 'Done.',
+        ]);
+        exit;
+    }
 }
