@@ -307,6 +307,11 @@ $tabs = [
   $debugOn      = ($cacheConfig['debug-header'] ?? 'on') === 'on';
   $bypassQOn    = ($cacheConfig['bypass-query'] ?? 'off') === 'on';
   $excludeLines = implode("\n", array_filter(array_map('trim', explode(',', $cacheConfig['exclude-urls'] ?? ''))));
+  // Bypass cookies: the baseline is always enforced server-side, so show it as locked
+  // chips and let the user edit only their own additions (stored list minus baseline).
+  $baselineCookies = cache_baseline_cookies();
+  $storedCookies   = array_filter(array_map('trim', explode(',', $cacheConfig['bypass-cookies'] ?? '')));
+  $extraCookies    = implode(', ', array_values(array_diff($storedCookies, $baselineCookies)));
   $ttlLabels    = ['5m'=>'5 minutes','10m'=>'10 minutes','15m'=>'15 minutes','30m'=>'30 minutes',
                    '1h'=>'1 hour','2h'=>'2 hours','6h'=>'6 hours','12h'=>'12 hours','1d'=>'1 day','7d'=>'7 days'];
 
@@ -544,10 +549,18 @@ $tabs = [
         <!-- Bypass cookies -->
         <div>
           <label class="lbl"><?= e(t('perf.cache.cookies')) ?></label>
+          <!-- Non-removable security baseline: shown locked, enforced server-side -->
+          <div class="flex flex-wrap gap-1.5 mb-2">
+            <?php foreach ($baselineCookies as $bc): ?>
+              <span class="tag tag-muted" title="<?= e(t('perf.cache.cookies.baseline_hint')) ?>">
+                <i class="ti ti-lock"></i><?= e($bc) ?>
+              </span>
+            <?php endforeach; ?>
+          </div>
           <input type="text" name="bypass_cookies"
-                 value="<?= e($cacheConfig['bypass-cookies'] ?? '') ?>"
+                 value="<?= e($extraCookies) ?>"
                  class="inp w-full font-mono text-xs"
-                 placeholder="wordpress_logged_in, woocommerce_session">
+                 placeholder="my_session_cookie, custom_login">
           <p class="hint"><?= e(t('perf.cache.cookies.desc')) ?></p>
         </div>
 

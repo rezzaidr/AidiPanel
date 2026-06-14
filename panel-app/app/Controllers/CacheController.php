@@ -117,7 +117,11 @@ class CacheController extends BaseController
         $domain      = (string) $this->request->post('domain', '');
         $ttl         = (string) $this->request->post('ttl', '');
         $excludeRaw  = (string) $this->request->post('exclude_urls', '');
-        $cookies     = (string) $this->request->post('bypass_cookies', '');
+        // Always enforce the non-removable baseline + the user's own additions. Sending
+        // the full list (never empty) lets a user clear their additions while the
+        // session/login baseline can never be dropped — the CLI re-enforces it too.
+        $cookieExtras = array_filter(array_map('trim', explode(',', (string) $this->request->post('bypass_cookies', ''))));
+        $cookies      = implode(',', array_values(array_unique(array_merge(cache_baseline_cookies(), $cookieExtras))));
         $bypassQ     = $this->request->post('bypass_query', '')     === '1' ? 'on' : 'off';
         $staleReval  = $this->request->post('stale_revalidate', '') === '1' ? 'on' : 'off';
         $debugHeader = $this->request->post('debug_header', '')     === '1' ? 'on' : 'off';
@@ -132,7 +136,7 @@ class CacheController extends BaseController
         $args = ['--domain', $domain];
         if ($ttl !== '')         { $args[] = '--ttl';           $args[] = $ttl; }
         if ($excludeUrls !== '') { $args[] = '--exclude-urls';  $args[] = $excludeUrls; }
-        if ($cookies !== '')     { $args[] = '--bypass-cookies'; $args[] = $cookies; }
+        $args[] = '--bypass-cookies';   $args[] = $cookies;
         $args[] = '--bypass-query';     $args[] = $bypassQ;
         $args[] = '--stale-revalidate'; $args[] = $staleReval;
         $args[] = '--debug-header';     $args[] = $debugHeader;

@@ -234,6 +234,19 @@ function is_web_cli_command_allowed(string $command): bool
 }
 
 /**
+ * The non-removable page-cache bypass baseline: session/login cookies that must
+ * always bypass the cache so a logged-in or checkout response is never cached and
+ * served to other visitors. The CLI enforces this regardless (see
+ * _cache_baseline_cookies / _cache_snippet_write in `aidipanel`); the panel mirrors
+ * it only to render the locked baseline and split it from the user's own additions.
+ * Keep this list in sync with the CLI.
+ */
+function cache_baseline_cookies(): array
+{
+    return ['wordpress_logged_in', 'woocommerce_session', 'comment_author', 'laravel_session', 'PHPSESSID'];
+}
+
+/**
  * PHP version policy from /etc/aidipanel/php.conf (Patch A single source of truth).
  * Parsed directly (no sudo) for speed; falls back to a sane built-in if the file
  * is missing. Returns: ['default'=>'8.4', 'available'=>['8.2','8.3','8.4','8.5']].
