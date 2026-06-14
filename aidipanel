@@ -59,6 +59,22 @@ warn()   { echo -e "${YELLOW}[WARN]${RESET}  $*" >&2; echo "[$(_ts)] [WARN]  $*"
 die()    { echo -e "${RED}[ERROR]${RESET} $*" >&2; echo "[$(_ts)] [ERROR] $*" >> "$CLI_LOG" 2>/dev/null || true; exit 1; }
 info()   { echo -e "${DIM}$*${RESET}"; }
 
+# Progress markers for the panel's streaming UI. Prints ONE machine-readable line
+# to stdout per stage, but ONLY when --progress was passed (PROGRESS_ENABLED=1) —
+# so terminal use and the smoke tests see byte-identical output otherwise. First
+# field is a 0-100 percentage; the panel renders bar=pct + the message + a live
+# elapsed timer (long steps simply have a longer gap to the next marker). Always
+# returns 0 so it is safe under `set -e`; verbose detail still goes to $CLI_LOG.
+PROGRESS_ENABLED=0
+_progress() {
+  [[ "${PROGRESS_ENABLED:-0}" == 1 ]] || return 0
+  local pct="${1:-0}" key="${2:-step}"; shift 2 || true
+  local IFS=' '
+  local msg="$*"
+  printf '@@PROGRESS %s %s %s\n' "$pct" "$key" "$msg"
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # HELPERS
 # ---------------------------------------------------------------------------
@@ -322,7 +338,7 @@ _mysql_exec_db() {
 }
 
 _nginx_test_reload() {
-  nginx -t >> "$CLI_LOG" 2>&1 || die "Nginx config test failed. Run: nginx -t"
+  nginx -t >> "$CLI_LOG" 2>&1 || die "The web server rejected the new configuration; no changes were applied."
   systemctl reload nginx >> "$CLI_LOG" 2>&1
   ok "Nginx reloaded"
 }
@@ -510,6 +526,7 @@ _site_add() {
   # Runs BEFORE the rollback ledger below, so a failed install dies cleanly with
   # no half-created site. _ensure_php_version is idempotent and validates the version.
   if ! _php_installed "$php_ver"; then
+    _progress 5 php_install "Installing PHP ${php_ver}"
     log "PHP ${php_ver} not installed — installing it first (this may take 1-2 minutes)..."
     _ensure_php_version "$php_ver"
   fi
@@ -536,11 +553,14 @@ _site_add() {
     systemctl reload nginx >> "$CLI_LOG" 2>&1 || true
   }
 
+  _progress 12 create_user "Creating site user"
   _ensure_site_user "$site_user"            || { _site_add_rollback; die "Could not create site user '${site_user}'."; }
   _site_make_layout "$site_user" "$domain" "$webroot"; created_home=1
   _site_grant_web_access "$site_user"       || { _site_add_rollback; die "Could not grant web access for '${site_user}'."; }
+  _progress 25 php_pool "Configuring PHP-FPM pool"
   _write_fpm_pool "$site_user" "$php_ver"   || { _site_add_rollback; die "PHP-FPM pool creation failed."; }
   wrote_pool=1
+  _progress 35 vhost "Writing nginx configuration"
   _site_write_vhost "$domain" "$php_ver" "$webroot" "$site_type" "$site_user" "$wp_multisite"; wrote_vhost=1
 
   # Create per-site cache snippet (cache OFF by default; enables on cache:enable)
@@ -554,9 +574,10 @@ _site_add() {
 
   # nginx -t validates ALL enabled vhosts; on failure roll back THIS site so one
   # broken vhost can't make every future site:add fail.
+  _progress 45 nginx "Testing and reloading nginx"
   if ! nginx -t >> "$CLI_LOG" 2>&1; then
     _site_add_rollback
-    die "Nginx config test failed — rolled back ${domain}. Inspect: nginx -t"
+    die "The web server rejected the configuration for ${domain}; the site was rolled back."
   fi
   systemctl reload nginx >> "$CLI_LOG" 2>&1
   ok "Site created: ${domain}"
@@ -568,21 +589,24 @@ _site_add() {
     local _s; _s=$(printf '%s' "$site_user" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_' '_')
     db_user="${_s:0:32}"; db_name="wp_${_s:0:60}"
     db_pass=$(openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 24)
+    _progress 55 database "Provisioning database"
     log "Provisioning database for WordPress: ${db_name} (user: ${db_user})..."
     _db_provision "$db_name" "$db_user" "$db_pass" \
       || { _site_add_rollback; die "Database provisioning failed for ${domain}."; }
     wrote_db=1
+    _progress 60 wp_setup "Setting up WordPress"
     log "Installing WordPress (${domain}, multisite=${wp_multisite})..."
     if ! _site_install_wordpress "$domain" "$site_user" "$webroot" "$wp_multisite" \
          "$wp_title" "$wp_admin_user" "$wp_admin_pass" "$wp_admin_email" \
          "$db_name" "$db_user" "$db_pass"; then
       _site_add_rollback
-      die "WordPress installation failed for ${domain} — rolled back. See ${CLI_LOG}."
+      die "WordPress installation failed for ${domain}; the half-created site was rolled back. Please try again."
     fi
     wp_installed=1
     ok "WordPress installed: ${domain}"
   fi
 
+  _progress 100 done "Done"
   # Machine-readable summary for the Panel (Patch 2). The CLI writes NO DB state.
   local sock; sock=$(_site_php_sock "$php_ver" "$site_user")
   echo "site_user=${site_user}"
@@ -810,17 +834,20 @@ _site_install_wordpress() {
   chown "${site_user}:${site_user}" "$cache_dir" 2>/dev/null || true
   local wp=(sudo -u "$site_user" -- env "WP_CLI_CACHE_DIR=${cache_dir}" wp --path="$webroot")
 
+  _progress 65 wp_download "Downloading WordPress core"
   # 1. Download core (idempotent)
   if [[ ! -f "${webroot}/wp-load.php" ]]; then
     "${wp[@]}" core download --version=latest >> "$CLI_LOG" 2>&1 \
       || { warn "wp core download failed"; return 1; }
   fi
 
+  _progress 85 wp_config "Writing wp-config.php"
   # 2. wp-config.php — salts auto-generated; DB password via stdin, not argv.
   printf '%s\n' "$db_pass" | "${wp[@]}" config create \
     --dbname="$db_name" --dbuser="$db_user" --dbhost=localhost --force --prompt=dbpass \
     >> "$CLI_LOG" 2>&1 || { warn "wp config create failed"; return 1; }
 
+  _progress 90 wp_install "Installing WordPress"
   # 3. Install (single or subdirectory network). Admin password via stdin.
   local -a subcmd checkargs
   if [[ "$multisite" == "subdir" ]]; then
@@ -833,6 +860,7 @@ _site_install_wordpress() {
     --admin_email="$wp_admin_email" --skip-email --prompt=admin_password \
     >> "$CLI_LOG" 2>&1 || { warn "wp ${subcmd[*]} failed"; return 1; }
 
+  _progress 97 wp_verify "Verifying installation"
   # 4. Verify
   "${wp[@]}" "${checkargs[@]}" >> "$CLI_LOG" 2>&1 \
     || { warn "WordPress not installed after setup"; return 1; }
@@ -890,7 +918,17 @@ _site_delete() {
   # Teardown (both modes)
   rm -f "${NGINX_ENABLED_DIR}/${domain}.conf" "${NGINX_CONF_DIR}/${domain}.conf"
   rm -f "/etc/ssl/aidipanel-self/${domain}.crt" "/etc/ssl/aidipanel-self/${domain}.key"
-  [[ -n "$site_user" && -n "$php_ver" ]] && _remove_fpm_pool "$site_user" "$php_ver"
+  # Remove the per-site FPM pool. A site has exactly one pool (named by site_user);
+  # sweep EVERY PHP version so a php_ver-resolution miss can't leave an orphan pool
+  # that later makes `php-fpm -t` (and the whole service) fail for that version.
+  if [[ -n "$site_user" ]]; then
+    local _pool _pv
+    for _pool in /etc/php/*/fpm/pool.d/"${site_user}".conf; do
+      [[ -f "$_pool" ]] || continue
+      _pv=$(printf '%s' "$_pool" | sed -n 's#^/etc/php/\([0-9.]\+\)/fpm/.*#\1#p')
+      [[ -n "$_pv" ]] && _remove_fpm_pool "$site_user" "$_pv"
+    done
+  fi
   _cache_purge_domain "$domain" 2>/dev/null || true
   _nginx_test_reload
 
@@ -1491,7 +1529,7 @@ _cache_config() {
       cp "$backup"       "$snippet"
       cp "$vhost_backup" "$conf"
       rm -f "$backup" "$vhost_backup"
-      die "Nginx config test failed after cache:config update — reverted. Check: nginx -t"
+      die "The web server rejected the cache configuration change; it was reverted."
     fi
     rm -f "$backup" "$vhost_backup"
     nginx -s reload >> "$CLI_LOG" 2>&1
@@ -1866,7 +1904,7 @@ _cache_redis_enable() {
   command -v redis-server >/dev/null 2>&1 || die "redis-server not installed."
   systemctl enable --now redis-server >> "$CLI_LOG" 2>&1 \
     && ok "Redis enabled and started." \
-    || die "Failed to enable Redis. Check: systemctl status redis-server"
+    || die "Could not start Redis. The redis-server service failed to start."
 }
 
 _cache_redis_disable() {
@@ -1882,7 +1920,7 @@ _cache_redis_flush() {
   command -v redis-cli >/dev/null 2>&1 || die "redis-cli not installed."
   redis-cli FLUSHALL >> "$CLI_LOG" 2>&1 \
     && ok "Redis flushed (FLUSHALL)." \
-    || die "Redis flush failed. Is Redis running? Check: aidipanel cache:redis-status"
+    || die "Could not flush the Redis cache — Redis may not be running."
 }
 
 _cache_opcache_restart() {
@@ -1927,6 +1965,10 @@ _db_provision() {
   # context (errexit suppressed), e.g. the site:add WordPress rollback path.
   _mysql_exec "CREATE DATABASE IF NOT EXISTS \`${db_name}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" || return 1
   _mysql_exec "CREATE USER IF NOT EXISTS '${db_user}'@'localhost' IDENTIFIED BY '${db_pass_sql}';" || return 1
+  # CREATE USER IF NOT EXISTS is a no-op for an existing user, so without this a
+  # leftover user from a prior site keeps its OLD password and the new connection
+  # fails with "Access denied". ALTER USER force-sets the intended password.
+  _mysql_exec "ALTER USER '${db_user}'@'localhost' IDENTIFIED BY '${db_pass_sql}';" || return 1
   _mysql_exec "GRANT ALL PRIVILEGES ON \`${db_name}\`.* TO '${db_user}'@'localhost';" || return 1
   _mysql_exec "FLUSH PRIVILEGES;" || return 1
 }
@@ -2072,9 +2114,9 @@ _ensure_php_version() {
     fi
   done
   [[ ${#skipped[@]} -gt 0 ]] && log "Skipping packages not in repo for PHP ${ver}: ${skipped[*]} (bundled into core or unavailable)."
-  [[ ${#pkgs[@]} -gt 0 ]] || die "No php${ver} packages found in the repository. Check that the ondrej PPA provides PHP ${ver}."
+  [[ ${#pkgs[@]} -gt 0 ]] || die "PHP ${ver} is not available from this server's package repository."
 
-  apt-get install -y -qq "${pkgs[@]}" || die "Failed to install PHP ${ver}. Check that the package repository provides php${ver}."
+  apt-get install -y -qq "${pkgs[@]}" || die "Could not install PHP ${ver}. The package repository may be temporarily unavailable — please try again."
 
   local ini_dir="/etc/php/${ver}/fpm/conf.d"
   mkdir -p "$ini_dir"
@@ -2166,8 +2208,10 @@ _php_version() {
   fi
 
   _php_version_valid "$new_ver" || die "Invalid PHP version: ${new_ver}. Supported: ${PHP_VERSIONS_SUPPORTED[*]}"
+  _progress 15 check "Preparing PHP ${new_ver}"
   # Auto-install the target version on demand if it is missing (Patch C).
   if ! _php_installed "$new_ver"; then
+    _progress 25 php_install "Installing PHP ${new_ver}"
     log "PHP ${new_ver} not installed — installing it first (this may take 1-2 minutes)..."
     _ensure_php_version "$new_ver"
   fi
@@ -2178,6 +2222,7 @@ _php_version() {
   # new version, then repoint the vhost socket. (Pool must follow the version.)
   local site_user; site_user=$(grep -oP 'php[0-9.]+-fpm-\K[a-z0-9_-]+(?=\.sock)' "$conf" 2>/dev/null | head -1 || echo "")
   local old_sock new_sock
+  _progress 65 php_pool "Reconfiguring PHP-FPM pool"
   if [[ -n "$site_user" ]]; then
     _write_fpm_pool "$site_user" "$new_ver" || die "Could not create php${new_ver} pool for ${site_user}."
     _remove_fpm_pool "$site_user" "$current_ver"
@@ -2191,7 +2236,9 @@ _php_version() {
   sed "s|${old_sock}|${new_sock}|g" "$conf" > "$tmp" && cp "$tmp" "$conf"
   rm -f "$tmp"
 
+  _progress 90 reload "Reloading nginx"
   _nginx_test_reload
+  _progress 100 done "Done"
   ok "PHP version changed for ${domain}: ${current_ver} → ${new_ver}"
 }
 
@@ -2200,7 +2247,9 @@ _php_install() {
   _parse_opts "$@"
   local ver; ver=$(_opt "version")
   _require_arg "version" "$ver" "php:install --version 8.5"
+  _progress 10 php_install "Installing PHP ${ver}"
   _ensure_php_version "$ver"
+  _progress 100 done "PHP ${ver} ready"
 }
 
 _php_restart() {
@@ -2274,7 +2323,7 @@ _ssl_point_vhost() {
   rm -f "$tmp"
   if ! nginx -t >> "$CLI_LOG" 2>&1; then
     cp "$bak" "$conf"; rm -f "$bak"
-    die "Nginx config test failed after cert change — reverted ${domain}. Run: nginx -t"
+    die "The web server rejected the certificate change for ${domain}; it was reverted."
   fi
   rm -f "$bak"
   systemctl reload nginx >> "$CLI_LOG" 2>&1
@@ -2372,10 +2421,11 @@ _ssl_install() {
   local primary="${domains[0]}"
   _domain_exists "$primary" || die "Site not found: ${primary}"
 
-  command -v certbot &>/dev/null || die "Certbot is not installed. Run: apt install certbot python3-certbot-nginx"
+  command -v certbot &>/dev/null || die "Certbot (the Let's Encrypt client) is not installed on this server, so SSL cannot be issued."
 
   # Pre-flight DNS: every name must resolve, or certbot's HTTP-01 challenge fails
   # with a cryptic error. Fail early with a clear, per-domain message instead.
+  _progress 10 dns "Checking DNS"
   local -a unresolved=()
   for d in "${domains[@]}"; do
     getent hosts "$d" >/dev/null 2>&1 || unresolved+=("$d")
@@ -2395,8 +2445,9 @@ _ssl_install() {
   [[ -n "$email" ]] && certbot_args+=(--email "$email") || certbot_args+=(--register-unsafely-without-email)
   [[ -n "$staging" ]] && certbot_args+=(--test-cert)
 
+  _progress 30 request "Requesting certificate (Let's Encrypt)"
   "${certbot_args[@]}" >> "$CLI_LOG" 2>&1 \
-    || die "Certbot failed. Check: ${CLI_LOG}"
+    || die "Let's Encrypt could not verify domain ownership. Make sure every domain points to this server's IP and that port 80 is open, then try again."
 
   # certbot makes /etc/letsencrypt/{live,archive} 0700 (root-only), which blocks
   # the panel (www-data) from reading the public cert to report SSL status.
@@ -2405,9 +2456,11 @@ _ssl_install() {
 
   # Point the vhost at the LE certs (generalized — replaces whatever path is
   # currently set, so self-signed/custom → LE all work; tests + restores on fail).
+  _progress 90 reload "Updating nginx"
   _ssl_point_vhost "$primary" \
     "/etc/letsencrypt/live/${primary}/fullchain.pem" \
     "/etc/letsencrypt/live/${primary}/privkey.pem"
+  _progress 100 done "Done"
   ok "SSL certificate installed for: ${domains[*]}"
   info "Auto-renewal is managed by: /etc/cron.d/aidipanel"
 }
@@ -2418,6 +2471,7 @@ _ssl_renew() {
   local domain; domain=$(_opt "domain" "")
 
   log "Renewing SSL certificates..."
+  _progress 20 renew "Renewing certificate"
   if [[ -n "$domain" ]]; then
     _domain_valid "$domain" || die "Invalid domain name: ${domain}"
     certbot renew --cert-name "$domain" --nginx --non-interactive >> "$CLI_LOG" 2>&1
@@ -2426,7 +2480,9 @@ _ssl_renew() {
     certbot renew --nginx --non-interactive >> "$CLI_LOG" 2>&1
     ok "All certificates renewed"
   fi
+  _progress 90 reload "Reloading nginx"
   systemctl reload nginx >> "$CLI_LOG" 2>&1
+  _progress 100 done "Done"
 }
 
 _ssl_status() {
@@ -2522,7 +2578,7 @@ _service_action() {
 
   log "${action^}: ${service_name}"
   systemctl "$action" "$service_name" >> "$CLI_LOG" 2>&1 \
-    || die "Failed to ${action} ${service_name}. Check: journalctl -u ${service_name}"
+    || die "Could not ${action} ${service_name}; the service did not respond as expected."
   ok "${action^}ed: ${service_name}"
 }
 
@@ -2694,6 +2750,12 @@ main() {
 
   local command="${1:-}"
   shift 2>/dev/null || true
+
+  # Streaming progress: the panel passes --progress so long ops emit @@PROGRESS
+  # stage markers on stdout. Detect it ONCE here (a flag, not an env var, so it
+  # survives the sudo wrapper) so nested helpers can't lose it to a re-parse.
+  local _a
+  for _a in "$@"; do [[ "$_a" == "--progress" ]] && PROGRESS_ENABLED=1; done
 
   case "$command" in
     # Site
