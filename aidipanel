@@ -1369,6 +1369,10 @@ _cache_redis_enable_site() {
   "${OC_RUNNER[@]}" config set WP_REDIS_TIMEOUT 1 --raw --type=constant >> "$CLI_LOG" 2>&1 || true
   "${OC_RUNNER[@]}" config set WP_REDIS_READ_TIMEOUT 1 --raw --type=constant >> "$CLI_LOG" 2>&1 || true
   "${OC_RUNNER[@]}" config set WP_CACHE true --raw --type=constant >> "$CLI_LOG" 2>&1 || true
+  # Per-site flush safety (verified by T0): without this, `wp cache flush` does a
+  # global FLUSHDB (wipes every site's keys). This scopes the plugin's flush to
+  # this site's prefix only. Keep in sync with the flush guard below.
+  "${OC_RUNNER[@]}" config set WP_REDIS_SELECTIVE_FLUSH true --raw --type=constant >> "$CLI_LOG" 2>&1 || true
 
   # Activate only if not already WP-active (so rollback won't deactivate a pre-active plugin).
   _progress 80 oc_activate "Activating plugin"
@@ -1421,6 +1425,84 @@ _cache_redis_disable_site() {
   _cache_redis_site_status --domain "$domain"
 }
 
+# cache:redis --action flush --domain <domain>
+# Flush ONLY this AidiPanel-managed site's object cache. Default `wp cache flush`
+# does a GLOBAL FLUSHDB (proven by T0), so we hard-require WP_REDIS_SELECTIVE_FLUSH=true
+# (prefix-scoped) before flushing — never FLUSHALL/FLUSHDB/KEYS ourselves.
+_cache_redis_flush_site() {
+  _require_root "cache:redis flush"
+  _parse_opts "$@"
+  local domain; domain=$(_opt "domain")
+  _require_arg "domain" "$domain" "cache:redis --action flush --domain example.com"
+  _cache_redis_resolve "$domain"
+
+  [[ "$OC_SITE_TYPE" == "wordpress" && -f "$OC_WPCONFIG" ]] || { echo "error=not_wordpress"; exit 1; }
+  [[ "$(timeout 2 redis-cli -h 127.0.0.1 -p 6379 PING 2>/dev/null || echo FAIL)" == "PONG" ]] \
+    || { echo "error=redis_service_down"; exit 1; }
+
+  local dropin="${OC_WEBROOT}/wp-content/object-cache.php"
+  local cur_prefix; cur_prefix=$(_cache_redis_cfg_prefix "$OC_WPCONFIG")
+  [[ -f "$dropin" ]]                            || { echo "error=object_cache_not_connected"; exit 1; }
+  [[ "$cur_prefix" == "$OC_EXPECTED_PREFIX" ]]  || { echo "error=object_cache_unmanaged"; exit 1; }
+
+  # Scope guard: ensure selective (prefix-scoped) flush, else REFUSE.
+  if ! grep -qE "define\s*\(\s*['\"]WP_REDIS_SELECTIVE_FLUSH['\"]\s*,\s*true" "$OC_WPCONFIG" 2>/dev/null; then
+    "${OC_RUNNER[@]}" config set WP_REDIS_SELECTIVE_FLUSH true --raw --type=constant >> "$CLI_LOG" 2>&1 || true
+  fi
+  grep -qE "define\s*\(\s*['\"]WP_REDIS_SELECTIVE_FLUSH['\"]\s*,\s*true" "$OC_WPCONFIG" 2>/dev/null \
+    || { echo "error=flush_scope_unsafe"; exit 1; }
+
+  _progress 40 oc_flush "Flushing object cache"
+  "${OC_RUNNER[@]}" cache flush >> "$CLI_LOG" 2>&1 || { echo "error=flush_failed"; exit 1; }
+  _progress 100 done "Object cache flushed"
+  ok "Object cache flushed: ${domain}"
+  _cache_redis_site_status --domain "$domain"
+}
+
+# cache:redis --action metrics --domain <domain>
+# Read-only, bounded: SCAN (never KEYS) the site prefix, cap 1000 keys + timeout,
+# approximate memory from a 50-key sample. Returns unknown when not measurable.
+_cache_redis_metrics() {
+  _require_root "cache:redis metrics"
+  _parse_opts "$@"
+  local domain; domain=$(_opt "domain")
+  _require_arg "domain" "$domain" "cache:redis --action metrics --domain example.com"
+  _cache_redis_resolve "$domain"
+
+  echo "domain=${domain}"
+  local keys="unknown" mem="unknown" limited=0
+  local dropin="${OC_WEBROOT}/wp-content/object-cache.php"
+  if [[ "$OC_SITE_TYPE" == "wordpress" && -f "$dropin" \
+        && "$(timeout 2 redis-cli -h 127.0.0.1 -p 6379 PING 2>/dev/null || echo FAIL)" == "PONG" ]]; then
+    local pat="${OC_EXPECTED_PREFIX}*"
+    # Keys: redis-cli --scan uses SCAN (never KEYS); cap 1000; time-bounded.
+    # The subshell disables pipefail so head closing the pipe (SIGPIPE) isn't an error.
+    local n; n=$( set +o pipefail; timeout 3 redis-cli -h 127.0.0.1 -p 6379 --scan --pattern "$pat" 2>/dev/null | head -1000 | wc -l | tr -d ' ' )
+    [[ "$n" =~ ^[0-9]+$ ]] || n=0
+    keys="$n"
+    [[ "$n" -ge 1000 ]] && limited=1
+    if [[ "$n" -gt 0 ]]; then
+      # Memory: average a <=50-key sample, extrapolate. Approximate by design.
+      local total=0 sn=0 k u
+      while IFS= read -r k; do
+        [[ -z "$k" ]] && continue
+        u=$(redis-cli -h 127.0.0.1 -p 6379 MEMORY USAGE "$k" 2>/dev/null || echo "")
+        [[ "$u" =~ ^[0-9]+$ ]] && { total=$((total+u)); sn=$((sn+1)); }
+      done < <( set +o pipefail; timeout 2 redis-cli -h 127.0.0.1 -p 6379 --scan --pattern "$pat" 2>/dev/null | head -50 )
+      if [[ "$sn" -gt 0 ]]; then
+        local approx=$(( (total / sn) * n ))
+        if   [[ "$approx" -ge 1048576 ]]; then mem="~$((approx/1048576))MB"
+        elif [[ "$approx" -ge 1024 ]];    then mem="~$((approx/1024))KB"
+        else mem="~${approx}B"; fi
+      fi
+    fi
+  fi
+  echo "site_keys=${keys}"
+  echo "site_memory=${mem}"
+  echo "metrics_limited=${limited}"
+  echo "error="
+}
+
 _cache_redis_per_site() {
   _parse_opts "$@"
   local action; action=$(_opt "action" "status")
@@ -1428,7 +1510,9 @@ _cache_redis_per_site() {
     status)  _cache_redis_site_status "$@" ;;
     enable)  _cache_redis_enable_site "$@" ;;
     disable) _cache_redis_disable_site "$@" ;;
-    *) die "cache:redis: unknown action '${action}'. Supported: status, enable, disable" ;;
+    flush)   _cache_redis_flush_site "$@" ;;
+    metrics) _cache_redis_metrics "$@" ;;
+    *) die "cache:redis: unknown action '${action}'. Supported: status, enable, disable, flush, metrics" ;;
   esac
 }
 
