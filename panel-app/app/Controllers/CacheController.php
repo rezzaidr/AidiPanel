@@ -79,6 +79,9 @@ class CacheController extends BaseController
             $args[] = '--install-nginx-helper';
         }
 
+        // Installing Nginx Helper / enabling FastCGI can take a few seconds; release the
+        // session lock first so concurrent same-session requests don't exhaust the pool.
+        $this->unlockForLongOp();
         $result = run_cli("cache:{$action}", $args);
         if (!$result['success']) {
             $this->error("Cache {$action} failed: " . $result['output']);
@@ -171,16 +174,16 @@ class CacheController extends BaseController
     }
 
     /**
-     * Per-site WordPress Object Cache (Redis) enable/disable — Phase 2.
-     * Calls the new per-site `cache:redis --action enable|disable --domain` (NOT the
-     * legacy global `cache:redis-*`). Streamed (progress bar) when stream=1.
+     * Per-site WordPress Object Cache (Redis) enable/disable/flush.
+     * Calls the new per-site `cache:redis --action enable|disable|flush --domain` (NOT
+     * the legacy global `cache:redis-*`). Streamed (progress bar) when stream=1.
      */
     public function objectCache(array $params = []): void
     {
         $domain = strtolower(trim((string) $this->request->post('domain', '')));
         $action = (string) $this->request->post('action', '');
 
-        if (!in_array($action, ['enable', 'disable'], true)) {
+        if (!in_array($action, ['enable', 'disable', 'flush'], true)) {
             $this->error('Invalid action.');
         }
         if (!is_valid_domain($domain)) {
@@ -192,9 +195,11 @@ class CacheController extends BaseController
 
         $args = ['--action', $action, '--domain', $domain];
         $tab  = "/sites/{$domain}?tab=performance";
-        $okMsg = $action === 'enable'
-            ? "Object cache enabled for {$domain}."
-            : "Object cache disabled for {$domain}.";
+        $okMsg = match ($action) {
+            'enable'  => "Object cache enabled for {$domain}.",
+            'disable' => "Object cache disabled for {$domain}.",
+            'flush'   => "Object cache flushed for {$domain}.",
+        };
 
         if ($this->request->post('stream') === '1') {
             $this->streamCli(
@@ -208,6 +213,9 @@ class CacheController extends BaseController
             );
         }
 
+        // Non-streamed (flush/disable via plain POST): release the session lock first so
+        // this multi-second wp-cli op doesn't block other same-session requests (→ 502).
+        $this->unlockForLongOp();
         $result = run_cli('cache:redis', $args);
         if (!$result['success']) {
             $this->error($this->objectCacheError($result['output']), $tab);
@@ -230,9 +238,40 @@ class CacheController extends BaseController
             'plugin_install_failed'  => "Couldn't install the Redis Object Cache plugin — check the server's network connection.",
             'plugin_activate_failed' => "Couldn't activate the Redis Object Cache plugin.",
             'dropin_enable_failed'   => "Couldn't enable the object cache; the changes were rolled back.",
+            'object_cache_not_connected' => "Object cache isn't set up for this site yet, so there's nothing to flush.",
+            'flush_scope_unsafe'     => "AidiPanel couldn't guarantee a per-site flush, so it stopped to avoid clearing other sites' cache. Nothing was flushed.",
+            'flush_failed'           => "The object cache couldn't be flushed. Please try again.",
             'domain_not_found'       => "Site not found.",
             default                  => "Object cache operation failed. Please try again.",
         };
+    }
+
+    /**
+     * Read-only per-site object cache metrics (keys + approx memory) as JSON.
+     * Drives the Performance tab's live tiles without blocking page load.
+     */
+    public function objectCacheMetrics(array $params = []): void
+    {
+        $domain = strtolower(trim((string) $this->request->get('domain', '')));
+        if (!is_valid_domain($domain)) {
+            $this->json(['ok' => false, 'error' => 'invalid_domain'], 400);
+        }
+        if (!$this->db->row('SELECT id FROM sites WHERE domain = ?', [$domain])) {
+            $this->json(['ok' => false, 'error' => 'not_found'], 404);
+        }
+
+        $result = run_cli('cache:redis', ['--action', 'metrics', '--domain', $domain]);
+        if (!$result['success']) {
+            $this->json(['ok' => false, 'error' => 'cli_failed']);
+        }
+
+        $kv = parse_kv_output($result['output']);
+        $this->json([
+            'ok'      => true,
+            'keys'    => $kv['site_keys']   ?? 'unknown',
+            'memory'  => $kv['site_memory'] ?? 'unknown',
+            'limited' => ($kv['metrics_limited'] ?? '0') === '1',
+        ]);
     }
 
     public function opcacheRestart(array $params = []): void

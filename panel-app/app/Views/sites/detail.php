@@ -516,24 +516,30 @@ $tabs = [
           <p class="hint"><?= e(t('perf.cache.ttl.desc')) ?></p>
         </div>
 
-        <!-- Toggle: stale-revalidate -->
-        <div class="flex items-center justify-between gap-4" data-toggle>
+        <!-- Serve stale while revalidating -->
+        <div class="flex items-center justify-between gap-4" data-seg>
           <div class="pr-2">
             <p class="text-sm font-medium text-zinc-800"><?= e(t('perf.cache.stale')) ?></p>
             <p class="hint"><?= e(t('perf.cache.stale.desc')) ?></p>
           </div>
-          <button type="button" class="<?= $staleOn ? 'sw-on' : 'sw-off' ?> flex-none" data-sw><span></span></button>
-          <input type="hidden" name="stale_revalidate" value="<?= $staleOn ? '1' : '0' ?>" data-toggle-input>
+          <div class="inline-flex flex-none rounded-lg border border-zinc-200 bg-zinc-50 p-0.5" role="group">
+            <button type="button" data-seg-opt="1" class="px-3 py-1 text-xs font-semibold rounded-md transition">On</button>
+            <button type="button" data-seg-opt="0" class="px-3 py-1 text-xs font-semibold rounded-md transition">Off</button>
+          </div>
+          <input type="hidden" name="stale_revalidate" value="<?= $staleOn ? '1' : '0' ?>" data-seg-input>
         </div>
 
-        <!-- Toggle: debug-header -->
-        <div class="flex items-center justify-between gap-4" data-toggle>
+        <!-- Add X-FastCGI-Cache header -->
+        <div class="flex items-center justify-between gap-4" data-seg>
           <div class="pr-2">
             <p class="text-sm font-medium text-zinc-800"><?= e(t('perf.cache.debug')) ?></p>
             <p class="hint"><?= e(t('perf.cache.debug.desc')) ?></p>
           </div>
-          <button type="button" class="<?= $debugOn ? 'sw-on' : 'sw-off' ?> flex-none" data-sw><span></span></button>
-          <input type="hidden" name="debug_header" value="<?= $debugOn ? '1' : '0' ?>" data-toggle-input>
+          <div class="inline-flex flex-none rounded-lg border border-zinc-200 bg-zinc-50 p-0.5" role="group">
+            <button type="button" data-seg-opt="1" class="px-3 py-1 text-xs font-semibold rounded-md transition">On</button>
+            <button type="button" data-seg-opt="0" class="px-3 py-1 text-xs font-semibold rounded-md transition">Off</button>
+          </div>
+          <input type="hidden" name="debug_header" value="<?= $debugOn ? '1' : '0' ?>" data-seg-input>
         </div>
 
         <!-- Bypass rules -->
@@ -564,14 +570,17 @@ $tabs = [
           <p class="hint"><?= e(t('perf.cache.cookies.desc')) ?></p>
         </div>
 
-        <!-- Toggle: bypass query -->
-        <div class="flex items-center justify-between gap-4" data-toggle>
+        <!-- Bypass query strings -->
+        <div class="flex items-center justify-between gap-4" data-seg>
           <div class="pr-2">
             <p class="text-sm font-medium text-zinc-800"><?= e(t('perf.cache.bypass_q')) ?></p>
             <p class="hint"><?= e(t('perf.cache.bypass_q.desc')) ?></p>
           </div>
-          <button type="button" class="<?= $bypassQOn ? 'sw-on' : 'sw-off' ?> flex-none" data-sw><span></span></button>
-          <input type="hidden" name="bypass_query" value="<?= $bypassQOn ? '1' : '0' ?>" data-toggle-input>
+          <div class="inline-flex flex-none rounded-lg border border-zinc-200 bg-zinc-50 p-0.5" role="group">
+            <button type="button" data-seg-opt="1" class="px-3 py-1 text-xs font-semibold rounded-md transition">On</button>
+            <button type="button" data-seg-opt="0" class="px-3 py-1 text-xs font-semibold rounded-md transition">Off</button>
+          </div>
+          <input type="hidden" name="bypass_query" value="<?= $bypassQOn ? '1' : '0' ?>" data-seg-input>
         </div>
       </div>
 
@@ -583,22 +592,33 @@ $tabs = [
     <?php endif; ?>
   </div>
 
-  <!-- Toggle switch wiring (no Alpine dependency) -->
+  <!-- Segmented On/Off selector wiring (no Alpine dependency) -->
   <script>
-  document.querySelectorAll('[data-toggle]').forEach(function(row) {
-    var sw = row.querySelector('[data-sw]');
-    var inp = row.querySelector('[data-toggle-input]');
-    if (!sw || !inp) return;
-    sw.addEventListener('click', function() {
-      var on = sw.classList.contains('sw-on');
-      sw.classList.toggle('sw-on', !on);
-      sw.classList.toggle('sw-off', on);
-      inp.value = on ? '0' : '1';
+  document.querySelectorAll('[data-seg]').forEach(function (row) {
+    var input = row.querySelector('[data-seg-input]');
+    var opts  = row.querySelectorAll('[data-seg-opt]');
+    if (!input || !opts.length) return;
+    function render() {
+      opts.forEach(function (b) {
+        var sel  = b.getAttribute('data-seg-opt') === String(input.value);
+        var isOn = b.getAttribute('data-seg-opt') === '1';
+        // On = green, Off = grey; only the selected side is filled.
+        b.classList.remove('bg-emerald-500', 'bg-zinc-500', 'text-white', 'shadow-sm', 'text-zinc-500');
+        if (sel) {
+          b.classList.add('text-white', 'shadow-sm', isOn ? 'bg-emerald-500' : 'bg-zinc-500');
+        } else {
+          b.classList.add('text-zinc-500');
+        }
+      });
+    }
+    opts.forEach(function (b) {
+      b.addEventListener('click', function () { input.value = b.getAttribute('data-seg-opt'); render(); });
     });
+    render();
   });
   </script>
 
-  <!-- Object Cache (Redis) card — Phase 1: read-only status -->
+  <!-- Object Cache (Redis) card -->
   <div class="card overflow-hidden mb-5">
     <div class="card-head">
       <div class="flex items-center gap-2.5">
@@ -607,27 +627,51 @@ $tabs = [
           <h2 class="card-title">
             <?= e(t('perf.object_cache')) ?>
             <span class="tag tag-info"><?= e(t('perf.object_cache.tech')) ?></span>
-            <?php if ($ocActive && $ocManaged): ?>
-              <span class="badge badge-ok"><span class="dot bg-emerald-500"></span> Active</span>
-            <?php elseif ($ocActive && !$ocManaged): ?>
-              <span class="badge badge-warn">Active · Manual</span>
+            <?php if ($ocUnsup): ?>
+              <span class="badge badge-muted">Not supported</span>
             <?php elseif ($ocSvcDown): ?>
               <span class="badge badge-warn">Service down</span>
-            <?php elseif ($ocUnsup): ?>
-              <span class="badge badge-muted">Not supported</span>
+            <?php elseif ($ocActive && !$ocManaged): ?>
+              <span class="badge badge-warn">Enabled · Manual</span>
+            <?php elseif ($ocActive): ?>
+              <span class="badge badge-ok"><span class="dot bg-emerald-500"></span> Enabled</span>
             <?php else: ?>
-              <span class="badge badge-muted">Not connected</span>
+              <span class="badge badge-warn">Disabled</span>
             <?php endif; ?>
           </h2>
           <p class="text-[11px] text-zinc-400"><?= e(t('perf.object_cache.desc')) ?></p>
         </div>
       </div>
-      <?php if (!$ocUnsup && !empty($objectCacheInfo)): ?>
-      <span class="badge <?= $ocSvcOk ? 'badge-ok' : 'badge-danger' ?> shrink-0">
-        <span class="dot <?= $ocSvcOk ? 'bg-emerald-500' : 'bg-red-500' ?>"></span>
-        Redis <?= $ocSvcOk ? 'running' : 'down' ?>
-      </span>
-      <?php endif; ?>
+      <!-- Right: Redis health (same spot in every state) + Flush + on/off toggle -->
+      <div class="flex items-center gap-2">
+        <?php if (!$ocUnsup && !empty($objectCacheInfo)): ?>
+        <span class="badge <?= $ocSvcOk ? 'badge-ok' : 'badge-danger' ?> shrink-0">
+          <span class="dot <?= $ocSvcOk ? 'bg-emerald-500' : 'bg-red-500' ?>"></span>
+          Redis <?= $ocSvcOk ? 'running' : 'down' ?>
+        </span>
+        <?php endif; ?>
+        <?php if ($ocActive && $ocManaged): ?>
+        <span class="w-px h-4 bg-zinc-200 mx-1"></span>
+        <form method="POST" action="/cache/object" class="inline">
+          <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+          <input type="hidden" name="domain" value="<?= e($domain) ?>">
+          <input type="hidden" name="action" value="flush">
+          <button type="submit" class="btn btn-secondary btn-sm" title="Clear this site's object cache">
+            <i class="ti ti-refresh text-sm"></i> Flush
+          </button>
+        </form>
+        <span class="w-px h-4 bg-zinc-200 mx-1"></span>
+        <form method="POST" action="/cache/object" class="inline flex items-center gap-2">
+          <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+          <input type="hidden" name="domain" value="<?= e($domain) ?>">
+          <input type="hidden" name="action" value="disable">
+          <span class="text-[11px] font-medium text-zinc-500">Cache on</span>
+          <button type="submit" class="flex items-center bg-transparent p-0 border-0 cursor-pointer" title="Disable object cache for this site">
+            <span class="sw-on"><span></span></span>
+          </button>
+        </form>
+        <?php endif; ?>
+      </div>
     </div>
 
     <?php if (empty($objectCacheInfo)): ?>
@@ -662,13 +706,13 @@ $tabs = [
     </div>
 
     <?php elseif ($ocActive): ?>
-    <!-- ACTIVE STATE: metric tiles + disabled action buttons -->
+    <!-- ENABLED STATE: status + live metric tiles (actions live in the header) -->
     <div class="grid grid-cols-2 sm:grid-cols-4 divide-x divide-zinc-100 border-b border-zinc-100">
       <div class="px-5 py-3.5 bg-emerald-50/40">
         <p class="eyebrow mb-1.5">Status</p>
         <p class="text-sm font-semibold text-emerald-700 flex items-center gap-1.5">
           <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-none"></span>
-          Active
+          Enabled
         </p>
       </div>
       <div class="px-5 py-3.5">
@@ -686,57 +730,29 @@ $tabs = [
         </p>
       </div>
     </div>
-    <?php if (!$ocManaged): ?>
+    <?php if ($ocManaged): ?>
+    <!-- Live runtime metrics (async fetch; never blocks page load) -->
+    <div class="grid grid-cols-2 divide-x divide-zinc-100 border-b border-zinc-100" data-oc-metrics data-domain="<?= e($domain) ?>">
+      <div class="px-5 py-3.5">
+        <p class="eyebrow mb-1.5">Cached keys</p>
+        <p class="text-sm font-semibold text-zinc-800 tabular-nums" data-oc-keys><span class="text-zinc-300">···</span></p>
+      </div>
+      <div class="px-5 py-3.5">
+        <p class="eyebrow mb-1.5">Memory used</p>
+        <p class="text-sm font-semibold text-zinc-800 tabular-nums" data-oc-memory><span class="text-zinc-300">···</span></p>
+      </div>
+    </div>
+    <?php else: ?>
     <div class="flex items-center gap-2 bg-amber-50 border-b border-amber-100 px-5 py-2.5">
       <i class="ti ti-info-circle text-amber-500 text-sm shrink-0"></i>
-      <p class="text-[11px] text-amber-800">This site's Redis prefix was not set by AidiPanel. Cache management actions are unavailable to avoid affecting manually-configured data.</p>
+      <p class="text-[11px] text-amber-800">This site's Redis prefix was not set by AidiPanel, so cache actions are hidden to avoid affecting manually-configured data.</p>
     </div>
     <?php endif; ?>
-    <div class="px-5 py-3.5 bg-zinc-50/60 border-t border-zinc-100">
-      <?php if ($ocManaged): ?>
-      <form method="POST" action="/cache/object" data-op-stream>
-        <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
-        <input type="hidden" name="domain" value="<?= e($domain) ?>">
-        <input type="hidden" name="action" value="disable">
-        <div data-op-fields class="flex items-center justify-between">
-          <p class="text-[11px] text-zinc-400">Disconnects this site's object cache. Redis keeps running; cached data is kept.</p>
-          <div class="flex items-center gap-2 shrink-0">
-            <button type="submit" class="btn btn-ghost btn-sm">
-              <i class="ti ti-power-off text-sm"></i> Disable
-            </button>
-            <button type="button" disabled class="btn btn-secondary btn-sm opacity-50 cursor-not-allowed" title="Available in a later update">
-              <i class="ti ti-trash text-sm"></i> Flush cache
-            </button>
-          </div>
-        </div>
-        <?php include APP_ROOT . '/Views/partials/op-progress.php'; ?>
-      </form>
-      <?php else: ?>
-      <div class="flex items-center justify-between">
-        <p class="text-[11px] text-zinc-400">Managed outside AidiPanel — actions unavailable.</p>
-        <div class="flex items-center gap-2">
-          <button type="button" disabled class="btn btn-ghost btn-sm opacity-50 cursor-not-allowed">
-            <i class="ti ti-power-off text-sm"></i> Disable
-          </button>
-          <button type="button" disabled class="btn btn-secondary btn-sm opacity-50 cursor-not-allowed">
-            <i class="ti ti-trash text-sm"></i> Flush cache
-          </button>
-        </div>
-      </div>
-      <?php endif; ?>
-    </div>
 
     <?php else: ?>
     <!-- NOT CONNECTED: service OK but plugin/drop-in not set up -->
     <div class="px-5 py-5 space-y-4">
-      <div class="grid grid-cols-3 gap-3">
-        <div class="rounded-lg border border-zinc-100 bg-zinc-50 px-3.5 py-3">
-          <p class="eyebrow mb-1.5">Redis service</p>
-          <div class="flex items-center gap-1.5">
-            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-none"></span>
-            <span class="text-xs font-semibold text-emerald-700">Running</span>
-          </div>
-        </div>
+      <div class="grid grid-cols-2 gap-3">
         <div class="rounded-lg border border-zinc-100 bg-zinc-50 px-3.5 py-3">
           <p class="eyebrow mb-1.5">Plugin</p>
           <?php $pluginOk = in_array($ocPlugin, ['installed', 'active'], true); ?>
@@ -1244,4 +1260,29 @@ function phpSwitchForm() {
     }
   };
 }
+</script>
+
+<script>
+// Object Cache live metrics — async, non-blocking; fills the Keys/Memory tiles.
+(function () {
+  var box = document.querySelector('[data-oc-metrics]');
+  if (!box) return;
+  var domain = box.getAttribute('data-domain') || '';
+  var kEl = box.querySelector('[data-oc-keys]');
+  var mEl = box.querySelector('[data-oc-memory]');
+  var dash = function (el) { if (el) el.textContent = '—'; };
+  fetch('/api/cache/object-metrics?domain=' + encodeURIComponent(domain), {
+    headers: { 'X-Requested-With': 'XMLHttpRequest' }
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d || !d.ok) { dash(kEl); dash(mEl); return; }
+      if (kEl) {
+        var n = parseInt(d.keys, 10);
+        kEl.textContent = isNaN(n) ? '—' : (n.toLocaleString() + (d.limited ? '+' : ''));
+      }
+      if (mEl) mEl.textContent = (d.memory && d.memory !== 'unknown') ? d.memory : '—';
+    })
+    .catch(function () { dash(kEl); dash(mEl); });
+})();
 </script>

@@ -36,6 +36,11 @@ use Core\Session;
 
 Session::start();
 
+// The panel UI must never be cached anywhere (browser, proxy, or FastCGI). Applies to
+// dynamic PHP responses only — static assets are served straight from Nginx. Streamed
+// endpoints reset their own Cache-Control in stream_begin().
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+
 $request = new Request();
 $router  = new Router($request);
 
@@ -110,6 +115,7 @@ $router->get('/api/metrics',         'DashboardController@apiMetrics');
 $router->get('/api/metrics/history', 'DashboardController@apiHistory');
 $router->get('/api/services',     'ServiceController@apiStatus');
 $router->get('/api/cache/stats',  'CacheController@apiStats');
+$router->get('/api/cache/object-metrics', 'CacheController@objectCacheMetrics');
 $router->post('/api/cli',         'SystemController@apiCli');
 
 // ── Dispatch ─────────────────────────────────────────────────────────────────

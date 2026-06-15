@@ -146,6 +146,11 @@ function url(string $path = ''): string
  */
 function flash(string $key, ?string $message = null): ?string
 {
+    // A non-streamed long op may have closed the session (BaseController::
+    // unlockForLongOp) to release the lock — re-open it so the flash still persists.
+    if (session_status() !== PHP_SESSION_ACTIVE) {
+        @session_start();
+    }
     if ($message !== null) {
         $_SESSION['_flash'][$key] = $message;
         return null;

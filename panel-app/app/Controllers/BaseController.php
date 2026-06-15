@@ -64,6 +64,23 @@ abstract class BaseController
     }
 
     /**
+     * Release the session lock + lift the time limit before a slow, blocking CLI call
+     * made from a NORMAL (non-streamed) request. Holding the session lock for a
+     * multi-second op blocks every other same-session request, which can exhaust the
+     * on-demand panel PHP-FPM pool and surface as a 502. This mirrors what
+     * stream_begin() does for streamed ops; flash() re-opens the session afterwards so
+     * success()/error() messages still survive the redirect.
+     */
+    protected function unlockForLongOp(): void
+    {
+        @set_time_limit(0);
+        @ignore_user_abort(true);
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            @session_write_close();
+        }
+    }
+
+    /**
      * Run a long CLI op as an SSE progress stream (see run_cli_stream / stream_begin).
      * Emits a frame per @@PROGRESS marker, then a terminal frame. On success it calls
      * $onSuccess(array $result) — which may write to the DB / log — and uses its
