@@ -1145,12 +1145,115 @@ _cache_page_status() {
   echo "error="
 }
 
+# cache:page --action check --domain <d> --url <u>
+# Read-only: one anonymous GET; report FastCGI cache status + TTFB.
+_cache_page_check() {
+  _require_root "cache:page check"
+  _parse_opts "$@"
+  local domain url
+  domain=$(_opt "domain")
+  url=$(_opt "url")
+  _require_arg "domain" "$domain" "cache:page --action check --domain example.com --url https://example.com/"
+  _require_arg "url" "$url" "cache:page --action check --domain example.com --url https://example.com/"
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
+
+  # The URL must belong to this site (domain or www.domain) — never probe other hosts.
+  local host
+  host=$(printf '%s' "$url" | sed -E 's#^[a-zA-Z]+://([^/]+).*#\1#')
+  if [[ "$host" != "$domain" && "$host" != "www.${domain}" ]]; then
+    echo "domain=${domain}"; echo "status=unknown"; echo "ttfb_ms=0"
+    echo "http_code=0"; echo "error=url_not_in_domain"; exit 1
+  fi
+
+  local hdrs timing http_code ttfb_s ttfb_ms status
+  hdrs=$(mktemp)
+  timing=$(curl -sk --max-time 10 -o /dev/null -D "$hdrs" \
+    -w '%{http_code} %{time_starttransfer}' "$url" 2>/dev/null || echo "0 0")
+  http_code=$(printf '%s' "$timing" | awk '{print $1}')
+  ttfb_s=$(printf '%s' "$timing" | awk '{print $2}')
+  ttfb_ms=$(awk -v t="$ttfb_s" 'BEGIN{printf "%d", (t*1000)+0.5}')
+  # `|| true`: under `set -Eeuo pipefail` a header-less response makes grep fail,
+  # and a bare `status=$(...)` assignment would otherwise abort the script.
+  status=$(grep -i '^X-FastCGI-Cache:' "$hdrs" 2>/dev/null | head -1 \
+    | sed -E 's/^[^:]+:[[:space:]]*//' | tr -d '\r' | tr '[:lower:]' '[:upper:]' || true)
+  rm -f "$hdrs"
+  [[ -z "$status" ]] && status="unknown"
+
+  echo "domain=${domain}"
+  echo "url=${url}"
+  echo "status=${status}"
+  echo "ttfb_ms=${ttfb_ms}"
+  echo "http_code=${http_code}"
+  echo "error="
+}
+
+# cache:page --action purge-url --domain <d> --urls "<u1,u2,...>"
+# Delete only the cache files for the given URLs, by matching each file's KEY line
+# (KEY: <scheme><method><host><uri>). Fail closed if any URL is off-site.
+_cache_page_purge_url() {
+  _require_root "cache:page purge-url"
+  _parse_opts "$@"
+  local domain urls
+  domain=$(_opt "domain")
+  urls=$(_opt "urls")
+  _require_arg "domain" "$domain" "cache:page --action purge-url --domain example.com --urls https://example.com/a"
+  _require_arg "urls" "$urls" "cache:page --action purge-url --domain example.com --urls https://example.com/a"
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
+
+  local cache_path="${NGINX_CACHE_DIR}"
+  [[ -d "$cache_path" ]] || { echo "purged=0"; echo "notfound=0"; echo "error=cache_dir_missing"; exit 1; }
+
+  local -a url_list=()
+  IFS=',' read -ra url_list <<< "$urls"
+
+  local u host
+  # Pass 1: validate every host belongs to this site (fail closed).
+  for u in "${url_list[@]}"; do
+    u=$(printf '%s' "$u" | xargs 2>/dev/null || true)
+    [[ -z "$u" ]] && continue
+    host=$(printf '%s' "$u" | sed -E 's#^[a-zA-Z]+://([^/]+).*#\1#')
+    if [[ "$host" != "$domain" && "$host" != "www.${domain}" ]]; then
+      echo "purged=0"; echo "notfound=0"; echo "error=url_not_in_domain"; exit 1
+    fi
+  done
+
+  # Pass 2: purge each URL by KEY-line match.
+  local purged=0 notfound=0 path key_re matches f
+  for u in "${url_list[@]}"; do
+    u=$(printf '%s' "$u" | xargs 2>/dev/null || true)
+    [[ -z "$u" ]] && continue
+    host=$(printf '%s' "$u" | sed -E 's#^[a-zA-Z]+://([^/]+).*#\1#')
+    path=$(printf '%s' "$u" | sed -E 's#^[a-zA-Z]+://[^/]+##')
+    [[ -z "$path" ]] && path="/"
+    # Escape every non-alphanumeric in host+path so it matches literally in the grep
+    # ERE. Using [^[:alnum:]] avoids the backslash-before-closing-bracket ordering that
+    # broke an explicit metacharacter class on some sed builds ("unterminated s command").
+    key_re=$(printf '%s%s' "$host" "$path" | sed -E 's/[^[:alnum:]]/\\&/g')
+    matches=$(grep -rlE "^KEY: .*${key_re}\$" "$cache_path" 2>/dev/null || true)
+    if [[ -z "$matches" ]]; then
+      notfound=$((notfound+1))
+      continue
+    fi
+    while IFS= read -r f; do
+      [[ -n "$f" ]] || continue
+      rm -f "$f" && purged=$((purged+1))
+    done <<< "$matches"
+  done
+
+  echo "domain=${domain}"
+  echo "purged=${purged}"
+  echo "notfound=${notfound}"
+  echo "error="
+}
+
 _cache_page() {
   _parse_opts "$@"
   local action; action=$(_opt "action" "status")
   case "$action" in
-    status) _cache_page_status "$@" ;;
-    *) die "cache:page: unknown action '${action}'. Supported: status" ;;
+    status)     _cache_page_status "$@" ;;
+    check)      _cache_page_check "$@" ;;
+    purge-url)  _cache_page_purge_url "$@" ;;
+    *) die "cache:page: unknown action '${action}'. Supported: status, check, purge-url" ;;
   esac
 }
 
