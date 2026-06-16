@@ -274,6 +274,75 @@ class CacheController extends BaseController
         ]);
     }
 
+    /**
+     * Read-only cache status for one URL: HIT/MISS/BYPASS + TTFB, as JSON.
+     * Drives the "Check a URL" tool in the Page Cache card.
+     */
+    public function checkUrl(array $params = []): void
+    {
+        $domain = strtolower(trim((string) $this->request->get('domain', '')));
+        $url    = trim((string) $this->request->get('url', ''));
+        if (!is_valid_domain($domain)) {
+            $this->json(['ok' => false, 'error' => 'invalid_domain'], 400);
+        }
+        if ($url === '' || !preg_match('#^https?://#i', $url)) {
+            $this->json(['ok' => false, 'error' => 'invalid_url'], 400);
+        }
+        if (!$this->db->row('SELECT id FROM sites WHERE domain = ?', [$domain])) {
+            $this->json(['ok' => false, 'error' => 'not_found'], 404);
+        }
+
+        $result = run_cli('cache:page', ['--action', 'check', '--domain', $domain, '--url', $url]);
+        $kv = parse_kv_output($result['output']);
+        if (!$result['success']) {
+            $this->json(['ok' => false, 'error' => $kv['error'] ?? 'cli_failed']);
+        }
+        $this->json([
+            'ok'        => true,
+            'status'    => $kv['status']    ?? 'unknown',
+            'ttfb_ms'   => (int) ($kv['ttfb_ms']   ?? 0),
+            'http_code' => (int) ($kv['http_code'] ?? 0),
+        ]);
+    }
+
+    /**
+     * Purge specific URLs from this site's FastCGI cache (textarea, one per line).
+     * Plain POST + toast. Releases the session lock first (the grep can take a
+     * moment) to avoid blocking the on-demand panel pool.
+     */
+    public function purgeUrls(array $params = []): void
+    {
+        $domain = strtolower(trim((string) $this->request->post('domain', '')));
+        $raw    = (string) $this->request->post('urls', '');
+        $tab    = "/sites/{$domain}?tab=performance";
+
+        if (!is_valid_domain($domain)) {
+            $this->error('Invalid domain name.');
+        }
+        if (!$this->db->row('SELECT id FROM sites WHERE domain = ?', [$domain])) {
+            $this->error("Site not found: {$domain}", $tab);
+        }
+        $urls = array_values(array_filter(array_map('trim', explode("\n", $raw))));
+        if (empty($urls)) {
+            $this->error('Enter at least one URL to purge.', $tab);
+        }
+
+        $this->unlockForLongOp();
+        $result = run_cli('cache:page', ['--action', 'purge-url', '--domain', $domain, '--urls', implode(',', $urls)]);
+        $kv = parse_kv_output($result['output']);
+        if (!$result['success']) {
+            $msg = ($kv['error'] ?? '') === 'url_not_in_domain'
+                ? 'Every URL must belong to this site.'
+                : 'Could not purge the URLs. Please try again.';
+            $this->error($msg, $tab);
+        }
+
+        $purged   = (int) ($kv['purged']   ?? 0);
+        $notfound = (int) ($kv['notfound'] ?? 0);
+        \Core\DB::log('cache:page:purge-url', "Purged {$purged} URL(s) for: {$domain}");
+        $this->success("Purged {$purged} URL(s)" . ($notfound ? ", {$notfound} not cached" : '') . '.', $tab);
+    }
+
     public function opcacheRestart(array $params = []): void
     {
         $php    = (string) $this->request->post('php', '');

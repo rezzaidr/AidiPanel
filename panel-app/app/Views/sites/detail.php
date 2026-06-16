@@ -497,6 +497,37 @@ $tabs = [
       </div>
     </div>
 
+    <!-- Cache tools: check a URL + purge specific URLs -->
+    <div class="px-5 py-4 border-b border-zinc-100 space-y-4" data-cache-tools data-domain="<?= e($domain) ?>">
+      <p class="eyebrow">Cache tools</p>
+
+      <div>
+        <label class="lbl">Check a URL</label>
+        <div class="flex items-center gap-2">
+          <input type="url" data-check-url class="inp flex-1 font-mono text-xs"
+                 value="https://<?= e($domain) ?>/" placeholder="https://<?= e($domain) ?>/path">
+          <button type="button" data-check-btn class="btn btn-secondary btn-sm shrink-0">
+            <i class="ti ti-search text-sm"></i> Check
+          </button>
+        </div>
+        <p data-check-result class="hidden mt-2 text-xs"></p>
+      </div>
+
+      <form method="POST" action="/cache/purge-urls">
+        <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+        <input type="hidden" name="domain" value="<?= e($domain) ?>">
+        <label class="lbl">Purge specific URLs</label>
+        <textarea name="urls" rows="3" class="inp w-full font-mono text-xs"
+                  placeholder="https://<?= e($domain) ?>/about&#10;https://<?= e($domain) ?>/blog/post"></textarea>
+        <div class="flex items-center justify-between mt-1">
+          <p class="hint">One URL per line.</p>
+          <button type="submit" class="btn btn-secondary btn-sm">
+            <i class="ti ti-trash text-sm"></i> Purge URLs
+          </button>
+        </div>
+      </form>
+    </div>
+
     <!-- Config form: single-column layout -->
     <form method="POST" action="/cache/config" id="cache-config-form">
       <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
@@ -616,6 +647,39 @@ $tabs = [
     });
     render();
   });
+  </script>
+
+  <!-- Cache tools: URL check (async, non-blocking) -->
+  <script>
+  (function () {
+    var box = document.querySelector('[data-cache-tools]');
+    if (!box) return;
+    var btn   = box.querySelector('[data-check-btn]');
+    var urlEl = box.querySelector('[data-check-url]');
+    var out   = box.querySelector('[data-check-result]');
+    if (!btn || !urlEl || !out) return;
+    var colors = { HIT: 'text-emerald-600', BYPASS: 'text-zinc-500',
+                   MISS: 'text-amber-600', EXPIRED: 'text-amber-600',
+                   STALE: 'text-amber-600', UPDATING: 'text-amber-600' };
+    btn.addEventListener('click', function () {
+      var domain = box.getAttribute('data-domain');
+      var url = (urlEl.value || '').trim();
+      if (!url) return;
+      out.className = 'mt-2 text-xs text-zinc-500';
+      out.textContent = 'Checking…';
+      fetch('/api/cache/check?domain=' + encodeURIComponent(domain) + '&url=' + encodeURIComponent(url),
+            { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (!d || !d.ok) { out.className = 'mt-2 text-xs text-rose-600'; out.textContent = 'Could not check this URL.'; return; }
+          var c = colors[d.status] || 'text-zinc-500';
+          var hint = d.status === 'unknown' ? '  ·  turn on “Add X-FastCGI-Cache header” to read HIT/MISS' : '';
+          out.className = 'mt-2 text-xs font-semibold ' + c;
+          out.textContent = d.status + ' · TTFB ' + d.ttfb_ms + ' ms' + hint;
+        })
+        .catch(function () { out.className = 'mt-2 text-xs text-rose-600'; out.textContent = 'Request failed.'; });
+    });
+  })();
   </script>
 
   <!-- Object Cache (Redis) card -->
