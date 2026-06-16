@@ -607,7 +607,7 @@ _site_add() {
     ok "WordPress installed: ${domain}"
   fi
 
-  _progress 100 done "Done"
+  _progress 100 "done" "Done"
   # Machine-readable summary for the Panel (Patch 2). The CLI writes NO DB state.
   local sock; sock=$(_site_php_sock "$php_ver" "$site_user")
   echo "site_user=${site_user}"
@@ -1383,7 +1383,6 @@ _cache_redis_resolve() {
   _domain_valid "$domain" || { echo "error=domain_not_found"; exit 1; }
   OC_CONF="${NGINX_CONF_DIR}/${domain}.conf"
   [[ -f "$OC_CONF" ]] || { echo "error=domain_not_found"; exit 1; }
-  OC_DOMAIN="$domain"
   OC_SITE_USER=$(grep -oP '^\s*root\s+/home/\K[^/;]+' "$OC_CONF" 2>/dev/null | head -1 || echo "")
   OC_WEBROOT=$(_vhost_webroot "$OC_CONF")
   OC_SITE_TYPE=$(grep -oP '# Type: \K\w+' "$OC_CONF" 2>/dev/null | head -1 || echo "php")
@@ -1421,7 +1420,7 @@ _cache_redis_enable_site() {
   # Already active (drop-in present)? Managed → idempotent success; unmanaged → refuse.
   if [[ -f "$dropin" ]]; then
     if [[ "$cur_prefix" == "$OC_EXPECTED_PREFIX" ]]; then
-      _progress 100 done "Already active"
+      _progress 100 "done" "Already active"
       ok "Object cache already active (managed): ${domain}"
       _cache_redis_site_status --domain "$domain"
       return 0
@@ -1443,6 +1442,8 @@ _cache_redis_enable_site() {
     if [[ "$dropin_enabled_this_run" == 1 ]]; then "${OC_RUNNER[@]}" redis disable >> "$CLI_LOG" 2>&1 || true; fi
     if [[ "$plugin_activated_this_run" == 1 ]]; then "${OC_RUNNER[@]}" plugin deactivate redis-cache >> "$CLI_LOG" 2>&1 || true; fi
     if [[ "$config_modified_this_run" == 1 && -f "$wp_config_backup_path" ]]; then
+      # CLI_LOG is root-owned; the log redirect runs as root by design (cp runs as the site user for ownership).
+      # shellcheck disable=SC2024
       sudo -u "$OC_SITE_USER" -- cp -f "$wp_config_backup_path" "$OC_WPCONFIG" >> "$CLI_LOG" 2>&1 || true
     fi
     if [[ "$plugin_installed_this_run" == 1 ]]; then "${OC_RUNNER[@]}" plugin uninstall redis-cache --deactivate >> "$CLI_LOG" 2>&1 || true; fi
@@ -1450,6 +1451,8 @@ _cache_redis_enable_site() {
 
   # Timestamped backup (written by the site user, in their own webroot).
   wp_config_backup_path="${OC_WPCONFIG}.aidipanel-bak-$(date +%Y%m%d-%H%M%S)"
+  # CLI_LOG is root-owned; the log redirect runs as root by design (cp runs as the site user for ownership).
+  # shellcheck disable=SC2024
   sudo -u "$OC_SITE_USER" -- cp -f "$OC_WPCONFIG" "$wp_config_backup_path" >> "$CLI_LOG" 2>&1 \
     || { echo "error=wp_config_not_writable"; exit 1; }
 
@@ -1500,7 +1503,7 @@ _cache_redis_enable_site() {
     _oc_enable_rollback; echo "error=dropin_enable_failed"; exit 1
   fi
 
-  _progress 100 done "Object cache enabled"
+  _progress 100 "done" "Object cache enabled"
   ok "Object cache enabled: ${domain}"
   _cache_redis_site_status --domain "$domain"
 }
@@ -1524,7 +1527,7 @@ _cache_redis_disable_site() {
   "${OC_RUNNER[@]}" redis disable >> "$CLI_LOG" 2>&1 || true
   _progress 70 oc_deactivate "Deactivating plugin"
   "${OC_RUNNER[@]}" plugin deactivate redis-cache >> "$CLI_LOG" 2>&1 || true
-  _progress 100 done "Object cache disabled"
+  _progress 100 "done" "Object cache disabled"
   ok "Object cache disabled: ${domain}"
   _cache_redis_site_status --domain "$domain"
 }
@@ -1558,7 +1561,7 @@ _cache_redis_flush_site() {
 
   _progress 40 oc_flush "Flushing object cache"
   "${OC_RUNNER[@]}" cache flush >> "$CLI_LOG" 2>&1 || { echo "error=flush_failed"; exit 1; }
-  _progress 100 done "Object cache flushed"
+  _progress 100 "done" "Object cache flushed"
   ok "Object cache flushed: ${domain}"
   _cache_redis_site_status --domain "$domain"
 }
@@ -2172,7 +2175,7 @@ _cache_harden() {
     return 0
   fi
 
-  local backup="${conf}.harden-bak.$(date +%s)"
+  local backup; backup="${conf}.harden-bak.$(date +%s)"
   cp "$conf" "$backup"
   log "Backed up nginx.conf -> ${backup}"
 
@@ -2626,7 +2629,7 @@ _php_version() {
 
   _progress 90 reload "Reloading nginx"
   _nginx_test_reload
-  _progress 100 done "Done"
+  _progress 100 "done" "Done"
   ok "PHP version changed for ${domain}: ${current_ver} → ${new_ver}"
 }
 
@@ -2637,7 +2640,7 @@ _php_install() {
   _require_arg "version" "$ver" "php:install --version 8.5"
   _progress 10 php_install "Installing PHP ${ver}"
   _ensure_php_version "$ver"
-  _progress 100 done "PHP ${ver} ready"
+  _progress 100 "done" "PHP ${ver} ready"
 }
 
 _php_restart() {
@@ -2848,7 +2851,7 @@ _ssl_install() {
   _ssl_point_vhost "$primary" \
     "/etc/letsencrypt/live/${primary}/fullchain.pem" \
     "/etc/letsencrypt/live/${primary}/privkey.pem"
-  _progress 100 done "Done"
+  _progress 100 "done" "Done"
   ok "SSL certificate installed for: ${domains[*]}"
   info "Auto-renewal is managed by: /etc/cron.d/aidipanel"
 }
@@ -2870,7 +2873,7 @@ _ssl_renew() {
   fi
   _progress 90 reload "Reloading nginx"
   systemctl reload nginx >> "$CLI_LOG" 2>&1
-  _progress 100 done "Done"
+  _progress 100 "done" "Done"
 }
 
 _ssl_status() {
