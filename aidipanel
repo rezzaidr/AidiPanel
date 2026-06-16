@@ -378,6 +378,7 @@ _usage() {
   echo "  cache:disable   Disable FastCGI cache for a domain"
   echo "  cache:config    Get or set per-site cache config (--domain; --ttl, --exclude-urls, --bypass-cookies, --bypass-query)"
   echo "  cache:migrate        Migrate existing sites from shared to per-site cache snippet [--dry-run]"
+  echo "  cache:harden         Apply cache security hardening to an existing install (drops Set-Cookie) [--no-flush]"
   echo "  cache:redis-status   Show Redis service status and ping"
   echo "  cache:redis-enable   Enable and start Redis"
   echo "  cache:redis-disable  Stop and disable Redis"
@@ -2148,6 +2149,55 @@ _cache_toggle() {
   _nginx_test_reload
 }
 
+# cache:harden [--no-flush]
+# Idempotently bring an existing install's global nginx.conf up to the hardened
+# default: remove Set-Cookie from fastcgi_ignore_headers so cookie-setting
+# responses are never cached. Backup + nginx -t + rollback, then flush the cache
+# to evict any already-poisoned entries (skip with --no-flush).
+_cache_harden() {
+  _require_root "cache:harden"
+  _parse_opts "$@"
+  local no_flush; no_flush=$(_opt "no-flush" "false")
+
+  local conf="/etc/nginx/nginx.conf"
+  [[ -f "$conf" ]] || die "nginx.conf not found: ${conf}"
+
+  if ! grep -qE '^[[:space:]]*fastcgi_ignore_headers' "$conf"; then
+    die "cache:harden: 'fastcgi_ignore_headers' not found in ${conf} — inspect the config manually."
+  fi
+
+  # Idempotent: already hardened when the directive carries no Set-Cookie token.
+  if ! grep -E '^[[:space:]]*fastcgi_ignore_headers' "$conf" | grep -qw 'Set-Cookie'; then
+    ok "Already hardened — fastcgi_ignore_headers does not include Set-Cookie."
+    return 0
+  fi
+
+  local backup="${conf}.harden-bak.$(date +%s)"
+  cp "$conf" "$backup"
+  log "Backed up nginx.conf -> ${backup}"
+
+  # Remove only the Set-Cookie token (with its leading whitespace) from that line.
+  sed -i -E '/^[[:space:]]*fastcgi_ignore_headers/ s/[[:space:]]+Set-Cookie\b//' "$conf"
+
+  if ! nginx -t >> "$CLI_LOG" 2>&1; then
+    cp "$backup" "$conf"
+    warn "nginx -t failed after patch — restored backup. No changes applied."
+    die "cache:harden aborted. Check: nginx -t"
+  fi
+
+  nginx -s reload >> "$CLI_LOG" 2>&1
+  ok "Hardened: removed Set-Cookie from fastcgi_ignore_headers; nginx reloaded."
+
+  if [[ "$no_flush" == "true" ]]; then
+    warn "Skipped cache flush (--no-flush). Already-cached Set-Cookie responses (if any) will expire on their own."
+  elif [[ -d "$NGINX_CACHE_DIR" ]]; then
+    find "$NGINX_CACHE_DIR" -mindepth 1 -delete 2>/dev/null || true
+    ok "Flushed FastCGI cache: ${NGINX_CACHE_DIR}"
+  fi
+
+  ok "cache:harden complete. Backup kept at ${backup}."
+}
+
 _cache_migrate() {
   _require_root "cache:migrate"
   _parse_opts "$@"
@@ -3113,6 +3163,7 @@ main() {
     cache:disable)  _cache_toggle disable "$@" ;;
     cache:config)   _cache_config "$@" ;;
     cache:migrate)       _cache_migrate "$@" ;;
+    cache:harden)        _cache_harden "$@" ;;
     cache:redis-status)  _cache_redis_status "$@" ;;
     cache:redis-enable)  _cache_redis_enable "$@" ;;
     cache:redis-disable) _cache_redis_disable "$@" ;;

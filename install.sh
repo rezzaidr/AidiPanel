@@ -649,7 +649,11 @@ http {
                             http_500 http_503;
     fastcgi_cache_lock        on;
     fastcgi_cache_lock_timeout 5s;
-    fastcgi_ignore_headers    Cache-Control Expires Set-Cookie;
+    # Never ignore Set-Cookie: a response that sets a cookie must not be cached
+    # (it would serve one visitor's session cookie to everyone). Cache-Control and
+    # Expires stay ignored so the page cache still works on apps that blanket-send
+    # no-cache.
+    fastcgi_ignore_headers    Cache-Control Expires;
 
     # --- Rate Limiting ---
     limit_req_zone \$binary_remote_addr zone=aidipanel_req:10m rate=30r/m;
