@@ -672,6 +672,13 @@ NGINX_MAIN
   mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled /etc/nginx/snippets
   rm -f /etc/nginx/conf.d/default.conf /etc/nginx/sites-enabled/default
 
+  # Per-site dedicated cache zones (opt-in via `cache:zone`). Pre-create the include dir
+  # and the http-context shim so an admin can enable a dedicated zone later with no
+  # nginx.conf surgery (conf.d/*.conf is already included inside http{}). A wildcard
+  # include over the empty dir is valid (nginx -t passes).
+  mkdir -p /etc/nginx/aidipanel/cache-zones
+  printf 'include /etc/nginx/aidipanel/cache-zones/*.conf;\n' > /etc/nginx/conf.d/aidipanel-cache-zones.conf
+
   ok "Nginx main config written (optimized, worker_conn=${worker_conn})"
 }
 
@@ -1567,7 +1574,8 @@ export NO_COLOR=1
 cmd="${1:-}"
 case "$cmd" in
   site:add|site:delete|site:list|vhost:save|\
-  cache:page|cache:redis|cache:status|cache:purge|cache:enable|cache:disable|\
+  cache:page|cache:redis|cache:zone|cache:status|cache:purge|cache:enable|cache:disable|\
+  cache:config|cache:redis-enable|cache:redis-disable|cache:redis-flush|cache:opcache-restart|\
   db:add|db:delete|db:list|db:backup|\
   php:list|php:version|php:restart|php:install|\
   ssl:install|ssl:renew|ssl:status|ssl:import|\

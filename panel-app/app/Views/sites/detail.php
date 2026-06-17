@@ -439,28 +439,32 @@ $tabs = [
           <span class="text-sm text-zinc-600"><?= e(t('perf.setup.checklist.3')) ?></span>
         </div>
       </div>
-      <form method="POST" action="/cache/toggle"<?php if ($type === 'php'): ?> x-data="{ confirm: false }"<?php endif; ?>>
+      <form method="POST" action="/cache/toggle" data-op-stream<?php if ($type === 'php'): ?> x-data="{ confirm: false }"<?php endif; ?>>
         <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
         <input type="hidden" name="domain" value="<?= e($domain) ?>">
         <input type="hidden" name="action" value="enable">
-        <?php if ($type === 'wordpress'): ?>
-        <div class="mb-5">
-          <p class="eyebrow mb-2.5">WordPress optimization</p>
-          <label class="flex items-start gap-2.5 p-3 border border-zinc-200 rounded-lg cursor-pointer hover:bg-zinc-50 transition-colors">
-            <input type="checkbox" name="install_nginx_helper" value="1" class="mt-0.5 rounded border-zinc-300 text-indigo-600">
-            <span>
-              <span class="block text-xs font-semibold text-zinc-800"><?= e(t('perf.setup.install_helper')) ?></span>
-              <span class="block text-[11px] text-zinc-400 mt-0.5">Auto-purge the page cache on publish &amp; updates. Configured automatically.</span>
-            </span>
-          </label>
+        <input type="hidden" name="stream" value="1">
+        <div data-op-fields>
+          <?php if ($type === 'wordpress'): ?>
+          <div class="mb-5">
+            <p class="eyebrow mb-2.5">WordPress optimization</p>
+            <label class="flex items-start gap-2.5 p-3 border border-zinc-200 rounded-lg cursor-pointer hover:bg-zinc-50 transition-colors">
+              <input type="checkbox" name="install_nginx_helper" value="1" class="mt-0.5 rounded border-zinc-300 text-indigo-600">
+              <span>
+                <span class="block text-xs font-semibold text-zinc-800"><?= e(t('perf.setup.install_helper')) ?></span>
+                <span class="block text-[11px] text-zinc-400 mt-0.5">Auto-purge the page cache on publish &amp; updates. Configured automatically.</span>
+              </span>
+            </label>
+          </div>
+          <?php endif; ?>
+          <div class="pt-4 border-t border-zinc-100 flex items-center justify-between">
+            <p class="text-[11px] text-zinc-400">Safe defaults applied automatically.</p>
+            <button type="<?= $type === 'php' ? 'button' : 'submit' ?>"<?php if ($type === 'php'): ?> @click="confirm = true"<?php endif; ?> class="btn btn-primary" <?= (!$pcEngineOk && !empty($pageCacheInfo)) ? 'disabled' : '' ?>>
+              <i class="ti ti-bolt text-sm"></i> <?= e(t('perf.enable')) ?>
+            </button>
+          </div>
         </div>
-        <?php endif; ?>
-        <div class="pt-4 border-t border-zinc-100 flex items-center justify-between">
-          <p class="text-[11px] text-zinc-400">Safe defaults applied automatically.</p>
-          <button type="<?= $type === 'php' ? 'button' : 'submit' ?>"<?php if ($type === 'php'): ?> @click="confirm = true"<?php endif; ?> class="btn btn-primary" <?= (!$pcEngineOk && !empty($pageCacheInfo)) ? 'disabled' : '' ?>>
-            <i class="ti ti-bolt text-sm"></i> <?= e(t('perf.enable')) ?>
-          </button>
-        </div>
+        <?php include APP_ROOT . '/Views/partials/op-progress.php'; ?>
         <?php if ($type === 'php'): ?>
         <!-- Modal: confirm caching a dynamic PHP app (#3 — stale CSRF/nonce risk); styled like the other panel modals -->
         <div x-show="confirm" x-cloak class="fixed inset-0 z-50">
@@ -477,7 +481,7 @@ $tabs = [
               <p class="text-sm text-zinc-600 leading-relaxed"><?= e(t('perf.cache.dynamic_modal_body')) ?></p>
               <div class="flex justify-end gap-2 pt-1">
                 <button type="button" @click="confirm=false" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
-                <button type="submit" class="btn btn-primary"><i class="ti ti-bolt text-sm"></i> <?= e(t('perf.cache.dynamic_modal_confirm')) ?></button>
+                <button type="submit" @click="confirm = false" class="btn btn-primary"><i class="ti ti-bolt text-sm"></i> <?= e(t('perf.cache.dynamic_modal_confirm')) ?></button>
               </div>
             </div>
           </div>
@@ -719,6 +723,26 @@ $tabs = [
         .catch(function () { out.className = 'mt-2 text-xs text-rose-600'; out.textContent = 'Request failed.'; });
     });
   })();
+
+  function cacheZone(domain, hasCache) {
+    return {
+      zone: 'shared', zoneName: '', keys: '-', maxSize: '-',
+      load() {
+        if (!hasCache) return;
+        fetch('/api/cache/zone-status?domain=' + encodeURIComponent(domain),
+              { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+          .then(r => r.json())
+          .then(d => {
+            if (!d || !d.ok) return;
+            this.zone = d.zone || 'shared';
+            this.zoneName = d.zone_name || '';
+            this.keys = d.keys || '-';
+            this.maxSize = d.max_size || '-';
+          })
+          .catch(() => {});
+      }
+    };
+  }
   </script>
 
   <!-- Object Cache (Redis) card -->
@@ -745,16 +769,9 @@ $tabs = [
           <p class="text-[11px] text-zinc-400"><?= e(t('perf.object_cache.desc')) ?></p>
         </div>
       </div>
-      <!-- Right: Redis health (same spot in every state) + Flush + on/off toggle -->
+      <!-- Right: Flush + on/off toggle (only when AidiPanel-managed; Redis health now lives in the metrics row) -->
       <div class="flex items-center gap-2">
-        <?php if (!$ocUnsup && !empty($objectCacheInfo)): ?>
-        <span class="badge <?= $ocSvcOk ? 'badge-ok' : 'badge-danger' ?> shrink-0">
-          <span class="dot <?= $ocSvcOk ? 'bg-emerald-500' : 'bg-red-500' ?>"></span>
-          Redis <?= $ocSvcOk ? 'running' : 'down' ?>
-        </span>
-        <?php endif; ?>
         <?php if ($ocActive && $ocManaged): ?>
-        <span class="w-px h-4 bg-zinc-200 mx-1"></span>
         <form method="POST" action="/cache/object" class="inline">
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
           <input type="hidden" name="domain" value="<?= e($domain) ?>">
@@ -811,11 +828,11 @@ $tabs = [
     <?php elseif ($ocActive): ?>
     <!-- ENABLED STATE: status + live metric tiles (actions live in the header) -->
     <div class="grid grid-cols-2 sm:grid-cols-4 divide-x divide-zinc-100 border-b border-zinc-100">
-      <div class="px-5 py-3.5 bg-emerald-50/40">
-        <p class="eyebrow mb-1.5">Status</p>
-        <p class="text-sm font-semibold text-emerald-700 flex items-center gap-1.5">
-          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-none"></span>
-          Enabled
+      <div class="px-5 py-3.5 <?= $ocSvcOk ? 'bg-emerald-50/40' : '' ?>">
+        <p class="eyebrow mb-1.5">Redis</p>
+        <p class="text-sm font-semibold flex items-center gap-1.5 <?= $ocSvcOk ? 'text-emerald-700' : 'text-red-600' ?>">
+          <span class="w-1.5 h-1.5 rounded-full flex-none <?= $ocSvcOk ? 'bg-emerald-500' : 'bg-red-500' ?>"></span>
+          <?= $ocSvcOk ? 'Running' : 'Down' ?>
         </p>
       </div>
       <div class="px-5 py-3.5">
@@ -903,6 +920,113 @@ $tabs = [
         <?php include APP_ROOT . '/Views/partials/op-progress.php'; ?>
       </form>
       <?php endif; ?>
+    </div>
+    <?php endif; ?>
+  </div>
+
+  <!-- Cache zone card -->
+  <div class="card overflow-hidden mb-5"
+       x-data="cacheZone('<?= e($domain) ?>', <?= $pcActive ? 'true' : 'false' ?>)"
+       x-init="load()">
+    <div class="card-head">
+      <div class="flex items-center gap-2.5">
+        <i class="ti ti-stack-2 <?= $pcActive ? 'text-speed' : 'text-zinc-300' ?> text-lg"></i>
+        <div>
+          <h2 class="card-title">
+            <?= e(t('perf.cache.zone_title')) ?>
+            <span class="tag tag-info">Nginx</span>
+            <?php if (!$pcActive): ?>
+              <span class="badge badge-muted">Page cache off</span>
+            <?php else: ?>
+              <span class="badge" :class="zone === 'dedicated' ? 'badge-ok' : 'badge-muted'"
+                    x-text="zone === 'dedicated' ? '<?= e(t('perf.cache.zone_dedicated')) ?>' : '<?= e(t('perf.cache.zone_shared')) ?>'"><?= e(t('perf.cache.zone_shared')) ?></span>
+            <?php endif; ?>
+          </h2>
+          <p class="text-[11px] text-zinc-400"><?= e(t('perf.cache.zone_desc')) ?></p>
+        </div>
+      </div>
+    </div>
+
+    <?php if (!$pcActive): ?>
+    <!-- NEEDS PAGE CACHE -->
+    <div class="px-5 py-5">
+      <div class="flex items-start gap-3 bg-amber-50 border border-amber-200/70 rounded-lg px-4 py-3.5">
+        <i class="ti ti-info-circle text-amber-500 text-sm shrink-0 mt-0.5"></i>
+        <p class="text-[11px] text-amber-800 leading-relaxed"><?= e(t('perf.cache.zone_need_cache')) ?></p>
+      </div>
+    </div>
+
+    <?php else: ?>
+    <!-- DEDICATED: live budget tiles + revert action -->
+    <div x-show="zone === 'dedicated'" x-cloak>
+      <div class="grid grid-cols-2 sm:grid-cols-4 divide-x divide-zinc-100 border-b border-zinc-100">
+        <div class="px-5 py-3.5">
+          <p class="eyebrow mb-1.5"><?= e(t('perf.cache.zone_keys')) ?></p>
+          <p class="text-sm font-semibold text-zinc-800 mono" x-text="keys">—</p>
+        </div>
+        <div class="px-5 py-3.5">
+          <p class="eyebrow mb-1.5"><?= e(t('perf.cache.zone_max_size')) ?></p>
+          <p class="text-sm font-semibold text-zinc-800 mono" x-text="maxSize">—</p>
+        </div>
+        <div class="px-5 py-3.5">
+          <p class="eyebrow mb-1.5"><?= e(t('perf.cache.zone_inactive')) ?></p>
+          <p class="text-sm font-semibold text-zinc-800 mono">60m</p>
+        </div>
+        <div class="px-5 py-3.5">
+          <p class="eyebrow mb-1.5"><?= e(t('perf.cache.zone_name_label')) ?></p>
+          <p class="text-sm font-semibold text-zinc-800 mono truncate" x-text="zoneName" :title="zoneName">—</p>
+        </div>
+      </div>
+      <div class="px-5 py-4">
+        <form method="POST" action="/cache/zone" data-op-stream>
+          <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+          <input type="hidden" name="domain" value="<?= e($domain) ?>">
+          <input type="hidden" name="action" value="disable">
+          <div data-op-fields class="flex items-center justify-between gap-3">
+            <p class="text-[11px] text-zinc-400 leading-relaxed">This site has its own cache budget. Revert it to share the default zone.</p>
+            <button type="submit" class="btn btn-secondary shrink-0">
+              <i class="ti ti-arrow-back-up text-sm"></i> <?= e(t('perf.cache.zone_disable')) ?>
+            </button>
+          </div>
+          <?php include APP_ROOT . '/Views/partials/op-progress.php'; ?>
+        </form>
+      </div>
+    </div>
+
+    <!-- SHARED: explain + enable a dedicated zone -->
+    <div x-show="zone !== 'dedicated'" x-cloak class="px-5 py-4 space-y-3">
+      <p class="text-[11px] text-zinc-500 leading-relaxed"><?= e(t('perf.cache.zone_help')) ?></p>
+      <form method="POST" action="/cache/zone" data-op-stream>
+        <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+        <input type="hidden" name="domain" value="<?= e($domain) ?>">
+        <input type="hidden" name="action" value="enable">
+        <div data-op-fields class="flex flex-wrap items-start gap-3">
+          <div class="flex-1 min-w-[140px]">
+            <label class="lbl"><?= e(t('perf.cache.zone_keys')) ?></label>
+            <select name="keys" class="inp w-full">
+              <option value="16m">16 MB</option>
+              <option value="32m" selected>32 MB</option>
+              <option value="64m">64 MB</option>
+              <option value="128m">128 MB</option>
+            </select>
+            <p class="hint"><?= e(t('perf.cache.zone_keys_hint')) ?></p>
+          </div>
+          <div class="flex-1 min-w-[140px]">
+            <label class="lbl"><?= e(t('perf.cache.zone_max_size')) ?></label>
+            <select name="max_size" class="inp w-full">
+              <option value="1g">1 GB</option>
+              <option value="2g" selected>2 GB</option>
+              <option value="5g">5 GB</option>
+              <option value="10g">10 GB</option>
+            </select>
+            <p class="hint"><?= e(t('perf.cache.zone_max_hint')) ?></p>
+          </div>
+          <button type="submit" class="btn btn-primary shrink-0 mt-[23px]">
+            <i class="ti ti-stack-push text-sm"></i> <?= e(t('perf.cache.zone_enable')) ?>
+          </button>
+        </div>
+        <?php include APP_ROOT . '/Views/partials/op-progress.php'; ?>
+      </form>
     </div>
     <?php endif; ?>
   </div>

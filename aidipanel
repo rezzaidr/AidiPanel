@@ -24,6 +24,9 @@ readonly NGINX_ENABLED_DIR="/etc/nginx/sites-enabled"
 readonly NGINX_SNIPPET_DIR="/etc/nginx/snippets"
 readonly NGINX_CACHE_DIR="/var/cache/nginx/fastcgi"
 readonly NGINX_CACHE_ZONE="aidipanel_fcgi"
+readonly NGINX_ZONE_CONF_DIR="/etc/nginx/aidipanel/cache-zones"
+readonly NGINX_ZONE_SHIM="/etc/nginx/conf.d/aidipanel-cache-zones.conf"
+readonly NGINX_ZONE_CACHE_BASE="/var/cache/nginx/aidipanel"
 readonly CREDENTIALS_FILE="${PANEL_DIR}/credentials.conf"
 readonly CLI_LOG="${PANEL_DIR}/storage/logs/aidipanel-cli.log"
 # PHP policy — single source of truth (/etc/aidipanel/php.conf), with a dev fallback.
@@ -1734,6 +1737,46 @@ _cache_build_cookie_regex() {
   echo "$regex"
 }
 
+# >>> CACHE_ZONE_HELPERS_START
+# Pure, dependency-light helpers for cache:zone. Kept between sentinels and PCRE-free
+# (sed -E / grep -E) so _private/tests/unit/cache_zone_test.sh can source just this block
+# with stubbed NGINX_CONF_DIR / NGINX_CACHE_ZONE.
+
+# Dedicated-zone name for a site user. Single source of truth.
+_cache_zone_name() { echo "${NGINX_CACHE_ZONE}_${1}"; }
+
+# Validate an nginx size token (e.g. 32m, 2g, 512k). Case-insensitive k/m/g suffix.
+_cache_zone_valid_size() { [[ "$1" =~ ^[0-9]+[kKmMgG]$ ]]; }
+
+# Convert an nginx size token to bytes. Echoes 0 + returns 1 on bad input.
+_size_to_bytes() {
+  [[ "$1" =~ ^([0-9]+)([kKmMgG])$ ]] || { echo 0; return 1; }
+  local n="${BASH_REMATCH[1]}" u="${BASH_REMATCH[2]}"
+  case "$u" in
+    k|K) echo $(( n * 1024 )) ;;
+    m|M) echo $(( n * 1024 * 1024 )) ;;
+    g|G) echo $(( n * 1024 * 1024 * 1024 )) ;;
+  esac
+}
+
+# Echo the FastCGI zone referenced by a site's vhost (active OR commented), defaulting
+# to the shared zone when none is found. The space after `fastcgi_cache` excludes
+# `fastcgi_cache_valid` etc.
+_cache_vhost_zone() {
+  local domain="$1"
+  local conf="${NGINX_CONF_DIR}/${domain}.conf" zone
+  [[ -f "$conf" ]] || { echo "$NGINX_CACHE_ZONE"; return 0; }
+  zone=$(sed -nE 's/^[[:space:]]*#?[[:space:]]*fastcgi_cache[[:space:]]+([A-Za-z0-9_-]+)[[:space:]]*;.*/\1/p' "$conf" | head -1)
+  echo "${zone:-$NGINX_CACHE_ZONE}"
+}
+
+# Return 0 iff the vhost has an ACTIVE (uncommented) bare `fastcgi_cache <zone>;` line.
+_cache_vhost_cache_active() {
+  local conf="${NGINX_CONF_DIR}/${1}.conf"
+  grep -qE '^[[:space:]]*fastcgi_cache[[:space:]]+[A-Za-z0-9_-]+[[:space:]]*;' "$conf" 2>/dev/null
+}
+# <<< CACHE_ZONE_HELPERS_END
+
 # Write (or overwrite) a per-site cache snippet from config values.
 # Usage: _cache_snippet_write <domain> <ttl> <exclude_urls> <bypass_cookies> <bypass_query> [stale_revalidate] [debug_header]
 _cache_snippet_write() {
@@ -2135,11 +2178,13 @@ _cache_toggle() {
   fi
 
   if [[ "$action" == "enable" ]]; then
-    if grep -Eq "^[[:space:]]*fastcgi_cache[[:space:]]+${NGINX_CACHE_ZONE}" "$conf"; then
+    if _cache_vhost_cache_active "$domain"; then
+      _progress 100 "done" "Already enabled"
       warn "FastCGI cache is already enabled for: ${domain}"
       return 0
     fi
 
+    _progress 15 cache_snippet "Preparing cache config"
     # 1. Create per-site snippet if absent
     local snippet; snippet=$(_cache_snippet_path "$domain")
     if [[ ! -f "$snippet" ]]; then
@@ -2156,6 +2201,7 @@ _cache_toggle() {
       log "Vhost include migrated to per-site snippet: ${domain}"
     fi
 
+    _progress 45 cache_apply "Enabling cache in nginx"
     # 3. Uncomment cache directives
     _sed_inplace "$conf" \
       's|#\s*fastcgi_cache\s\+|fastcgi_cache |g' \
@@ -2176,9 +2222,19 @@ _cache_toggle() {
     _cache_vhost_debug_header     "$domain" "${saved_debug:-on}"
 
     ok "FastCGI cache enabled for: ${domain}"
+    if [[ "$install_nginx_helper" == "true" || "$install_redis_plugin" == "true" ]]; then
+      _progress 70 wp_plugins "Installing WordPress helper plugin"
+    fi
     _cache_install_wp_plugins "$domain" "$install_nginx_helper" "$install_redis_plugin"
   else
-    # Comment out cache directives
+    _progress 30 cache_disable "Disabling cache"
+    # If the site is on a dedicated zone, revert + tear it down first (back to shared),
+    # so the comment-out below operates on the shared zone and no orphaned zone/dir remains.
+    local _zone; _zone=$(_cache_vhost_zone "$domain")
+    if [[ "$_zone" != "$NGINX_CACHE_ZONE" ]]; then
+      _cache_zone_disable --domain "$domain" >/dev/null 2>&1 || true
+    fi
+    # Comment out cache directives (now guaranteed on the shared zone)
     sed -i \
       -e "s|^\(\s*\)fastcgi_cache\s\+${NGINX_CACHE_ZONE}|\1#fastcgi_cache ${NGINX_CACHE_ZONE}|g" \
       -e 's|^\(\s*\)fastcgi_cache_valid|\1#fastcgi_cache_valid|g' \
@@ -2191,7 +2247,13 @@ _cache_toggle() {
     ok "FastCGI cache disabled for: ${domain}"
   fi
 
+  _progress 90 nginx "Validating and reloading nginx"
   _nginx_test_reload
+  if [[ "$action" == "enable" ]]; then
+    _progress 100 "done" "Page cache enabled"
+  else
+    _progress 100 "done" "Page cache disabled"
+  fi
 }
 
 # cache:harden [--no-flush]
@@ -2262,6 +2324,199 @@ _cache_harden() {
 
   [[ -n "$backup" ]] && ok "Backup kept at ${backup}."
   ok "cache:harden complete."
+}
+
+# ===========================================================================
+# cache:zone — per-site dedicated FastCGI cache zone (opt-in; default is shared)
+# ===========================================================================
+_cache_zone() {
+  _parse_opts "$@"
+  local action; action=$(_opt "action" "status")
+  case "$action" in
+    status)  _cache_zone_status "$@" ;;
+    enable)  _cache_zone_enable "$@" ;;
+    disable) _cache_zone_disable "$@" ;;
+    *) die "cache:zone: unknown action '${action}'. Supported: status, enable, disable" ;;
+  esac
+}
+
+# cache:zone --action status --domain <d>  (read-only; key=value output)
+_cache_zone_status() {
+  _parse_opts "$@"
+  local domain; domain=$(_opt "domain")
+  _require_arg "domain" "$domain" "cache:zone --action status --domain example.com"
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
+  echo "domain=${domain}"
+  if ! _domain_exists "$domain"; then echo "error=domain_not_found"; return 0; fi
+
+  local zone; zone=$(_cache_vhost_zone "$domain")
+  if [[ "$zone" == "$NGINX_CACHE_ZONE" ]]; then
+    echo "zone=shared"; echo "zone_name=${NGINX_CACHE_ZONE}"
+    echo "keys=-"; echo "max_size=-"; echo "cache_dir=-"; echo "error="; return 0
+  fi
+  local user="${zone#${NGINX_CACHE_ZONE}_}"
+  local zfile="${NGINX_ZONE_CONF_DIR}/${user}.conf"
+  local cdir="${NGINX_ZONE_CACHE_BASE}/${user}/fastcgi"
+  local keys="-" max="-"
+  if [[ -f "$zfile" ]]; then
+    keys=$(sed -nE 's/.*keys_zone=[A-Za-z0-9_-]+:([0-9]+[kKmMgG]).*/\1/p' "$zfile" | head -1)
+    max=$(sed -nE 's/.*max_size=([0-9]+[kKmMgG]).*/\1/p' "$zfile" | head -1)
+  fi
+  echo "zone=dedicated"; echo "zone_name=${zone}"
+  echo "keys=${keys:--}"; echo "max_size=${max:--}"; echo "cache_dir=${cdir}"; echo "error="
+}
+
+# cache:zone --action enable --domain <d> [--keys 32m] [--max-size 2g] [--force]
+_cache_zone_enable() {
+  _require_root "cache:zone enable"
+  _parse_opts "$@"
+  local domain; domain=$(_opt "domain")
+  _require_arg "domain" "$domain" "cache:zone --action enable --domain example.com [--keys 32m] [--max-size 2g] [--force]"
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
+  echo "domain=${domain}"
+  _domain_exists "$domain" || { echo "error=domain_not_found"; die "Site not found: ${domain}"; }
+
+  local keys; keys=$(_opt "keys" "32m")
+  local maxsize; maxsize=$(_opt "max-size" "2g")
+  local force; force=$(_opt "force" "false")
+  _cache_zone_valid_size "$keys"    || { echo "error=invalid_size"; die "Invalid --keys '${keys}' (use 32m, 512k, 2g)."; }
+  _cache_zone_valid_size "$maxsize" || { echo "error=invalid_size"; die "Invalid --max-size '${maxsize}' (use 32m, 512k, 2g)."; }
+
+  # Precondition: the page cache must be ACTIVE on this site.
+  _cache_vhost_cache_active "$domain" || { echo "error=cache_not_enabled"; die "Enable the page cache first: aidipanel cache:enable --domain ${domain}"; }
+
+  local conf="${NGINX_CONF_DIR}/${domain}.conf"
+  local site_user; site_user=$(grep -oP '^\s*root\s+/home/\K[^/;]+' "$conf" 2>/dev/null | head -1 || echo "")
+  [[ -n "$site_user" ]] || { echo "error=site_user_unresolved"; die "Could not resolve the site user for ${domain}."; }
+
+  local zone; zone=$(_cache_zone_name "$site_user")
+  local zfile="${NGINX_ZONE_CONF_DIR}/${site_user}.conf"
+  local cdir="${NGINX_ZONE_CACHE_BASE}/${site_user}/fastcgi"
+  local cur_zone; cur_zone=$(_cache_vhost_zone "$domain")
+  local is_resize=0; [[ "$cur_zone" == "$zone" ]] && is_resize=1
+
+  _progress 15 zone_preflight "Checking disk and memory"
+  # 2. Pre-flight (unless --force): disk free >= max_size, RAM available >= keys_zone.
+  if [[ "$force" != "true" ]]; then
+    local need_disk; need_disk=$(_size_to_bytes "$maxsize")
+    local free_disk; free_disk=$(df -PB1 "$NGINX_CACHE_DIR" 2>/dev/null | awk 'NR==2{print $4}')
+    [[ -n "$free_disk" ]] || free_disk=$(df -PB1 /var/cache 2>/dev/null | awk 'NR==2{print $4}')
+    if [[ -n "$free_disk" && "$free_disk" -lt "$need_disk" ]]; then
+      echo "error=insufficient_disk"; die "Not enough free disk for max_size=${maxsize}. Use a smaller --max-size or free space."
+    fi
+    local need_ram; need_ram=$(_size_to_bytes "$keys")
+    local free_ram; free_ram=$(awk '/MemAvailable/{print $2*1024}' /proc/meminfo 2>/dev/null)
+    if [[ -n "$free_ram" && "$free_ram" -lt "$need_ram" ]]; then
+      echo "error=insufficient_ram"; die "Not enough available RAM for keys_zone=${keys}. Use a smaller --keys."
+    fi
+  fi
+
+  _progress 40 zone_write "Writing the dedicated zone"
+  # 3. Create the zone-config dir FIRST, then the cache dir, then the shim (idempotent).
+  mkdir -p "$NGINX_ZONE_CONF_DIR"
+  install -d -o www-data -g www-data -m 0750 "$cdir"
+  local shim_created=0
+  if [[ ! -f "$NGINX_ZONE_SHIM" ]]; then
+    printf 'include %s/*.conf;\n' "$NGINX_ZONE_CONF_DIR" > "$NGINX_ZONE_SHIM"
+    shim_created=1
+  fi
+
+  # 4. On resize, back up the old zone file; then write the zone file.
+  local zbackup=""
+  if [[ -f "$zfile" ]]; then zbackup=$(mktemp); cp "$zfile" "$zbackup"; fi
+  cat > "$zfile" <<ZONE
+# AidiPanel — dedicated FastCGI cache zone for ${domain} (site_user=${site_user})
+fastcgi_cache_path ${cdir}
+    levels=1:2
+    keys_zone=${zone}:${keys}
+    max_size=${maxsize}
+    inactive=60m
+    use_temp_path=off;
+ZONE
+  chmod 644 "$zfile"
+
+  # 5. nginx -t; state-aware rollback (vhost still untouched here).
+  if ! nginx -t >> "$CLI_LOG" 2>&1; then
+    if [[ -n "$zbackup" ]]; then cp "$zbackup" "$zfile"; rm -f "$zbackup"
+    else rm -f "$zfile"; [[ "$shim_created" == 1 ]] && rm -f "$NGINX_ZONE_SHIM"; fi
+    echo "error=nginx_test_failed"; die "cache:zone enable: nginx rejected the zone; reverted."
+  fi
+  rm -f "$zbackup"
+  _progress 65 zone_load "Loading the zone into nginx"
+  # 6. reload so the zone exists in the running config.
+  nginx -s reload >> "$CLI_LOG" 2>&1
+
+  _progress 85 zone_point "Pointing the site at its zone"
+  # 7. repoint the vhost (resolve current zone via the regex; do not assume shared).
+  local vbackup; vbackup=$(mktemp); cp "$conf" "$vbackup"
+  sed -i -E "s|^([[:space:]]*)fastcgi_cache[[:space:]]+[A-Za-z0-9_-]+([[:space:]]*;)|\1fastcgi_cache ${zone}\2|" "$conf"
+  # 8. nginx -t; rollback vhost on failure.
+  if ! nginx -t >> "$CLI_LOG" 2>&1; then
+    cp "$vbackup" "$conf"; rm -f "$vbackup"; nginx -s reload >> "$CLI_LOG" 2>&1
+    echo "error=nginx_test_failed"; die "cache:zone enable: vhost repoint failed; reverted."
+  fi
+  rm -f "$vbackup"
+  # 9. reload.
+  nginx -s reload >> "$CLI_LOG" 2>&1
+
+  # 10. flush this host's now-orphaned shared entries (skip on resize). Best-effort.
+  [[ "$is_resize" == 0 ]] && { _cache_purge_domain "$domain" >/dev/null 2>&1 || true; }
+
+  echo "zone=dedicated"; echo "zone_name=${zone}"; echo "error="
+  _progress 100 "done" "Dedicated zone enabled"
+  ok "Dedicated cache zone enabled for ${domain} (${zone}, keys=${keys}, max_size=${maxsize})."
+}
+
+# cache:zone --action disable --domain <d>  (revert to shared zone + tear down dedicated)
+_cache_zone_disable() {
+  _require_root "cache:zone disable"
+  _parse_opts "$@"
+  local domain; domain=$(_opt "domain")
+  _require_arg "domain" "$domain" "cache:zone --action disable --domain example.com"
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
+  echo "domain=${domain}"
+  _domain_exists "$domain" || { echo "error=domain_not_found"; die "Site not found: ${domain}"; }
+
+  local conf="${NGINX_CONF_DIR}/${domain}.conf"
+  local cur_zone; cur_zone=$(_cache_vhost_zone "$domain")
+  if [[ "$cur_zone" == "$NGINX_CACHE_ZONE" ]]; then
+    echo "zone=shared"; echo "zone_name=${NGINX_CACHE_ZONE}"; echo "error="
+    _progress 100 "done" "Already on the shared zone"
+    ok "${domain} already uses the shared cache zone."; return 0
+  fi
+  local user="${cur_zone#${NGINX_CACHE_ZONE}_}"
+  local zfile="${NGINX_ZONE_CONF_DIR}/${user}.conf"
+
+  _progress 25 zone_revert "Reverting to the shared zone"
+  # 2-3. repoint vhost back to the shared zone; nginx -t; rollback.
+  local vbackup; vbackup=$(mktemp); cp "$conf" "$vbackup"
+  sed -i -E "s|^([[:space:]]*)fastcgi_cache[[:space:]]+[A-Za-z0-9_-]+([[:space:]]*;)|\1fastcgi_cache ${NGINX_CACHE_ZONE}\2|" "$conf"
+  if ! nginx -t >> "$CLI_LOG" 2>&1; then
+    cp "$vbackup" "$conf"; rm -f "$vbackup"; nginx -s reload >> "$CLI_LOG" 2>&1
+    echo "error=nginx_test_failed"; die "cache:zone disable: revert failed; restored."
+  fi
+  rm -f "$vbackup"
+  # 4. reload — nothing references the dedicated zone now.
+  nginx -s reload >> "$CLI_LOG" 2>&1
+
+  _progress 60 zone_cleanup "Removing the dedicated zone"
+  # 5. back up + remove the zone file; nginx -t; restore on failure.
+  if [[ -f "$zfile" ]]; then
+    local zbackup; zbackup=$(mktemp); cp "$zfile" "$zbackup"
+    rm -f "$zfile"
+    if ! nginx -t >> "$CLI_LOG" 2>&1; then
+      cp "$zbackup" "$zfile"; rm -f "$zbackup"; nginx -s reload >> "$CLI_LOG" 2>&1
+      echo "error=nginx_test_failed"; die "cache:zone disable: zone-file removal failed; restored."
+    fi
+    rm -f "$zbackup"
+    nginx -s reload >> "$CLI_LOG" 2>&1
+  fi
+  # 6. remove the per-site cache dir.
+  [[ -n "$user" ]] && rm -rf "${NGINX_ZONE_CACHE_BASE:?}/${user}"
+
+  echo "zone=shared"; echo "zone_name=${NGINX_CACHE_ZONE}"; echo "error="
+  _progress 100 "done" "Back to the shared zone"
+  ok "Dedicated cache zone removed for ${domain}; back to shared."
 }
 
 _cache_migrate() {
@@ -3222,6 +3477,7 @@ main() {
     # Cache — per-site status (Phase 1)
     cache:page)   _cache_page "$@" ;;
     cache:redis)  _cache_redis_per_site "$@" ;;
+    cache:zone)   _cache_zone "$@" ;;
     # Cache — existing commands (unchanged)
     cache:status)   _cache_status "$@" ;;
     cache:purge)    _cache_purge "$@" ;;

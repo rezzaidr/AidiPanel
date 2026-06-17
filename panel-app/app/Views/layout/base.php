@@ -140,7 +140,7 @@ $_hostname = gethostname() ?: 'server';
     </div>
   <?php endif; ?>
   <?php if (!empty($_flash_error ?? '')): ?>
-    <div x-data="{ show: true }" x-show="show" x-transition class="toast toast-error">
+    <div x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 10000)" x-transition class="toast toast-error">
       <i class="ti ti-alert-circle text-base"></i>
       <span class="flex-1"><?= e($_flash_error) ?></span>
       <button type="button" @click="show = false" class="text-red-600/60 hover:text-red-600"><i class="ti ti-x text-sm"></i></button>
