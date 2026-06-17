@@ -672,6 +672,13 @@ NGINX_MAIN
   mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled /etc/nginx/snippets
   rm -f /etc/nginx/conf.d/default.conf /etc/nginx/sites-enabled/default
 
+  # Per-site dedicated cache zones (opt-in via `cache:zone`). Pre-create the include dir
+  # and the http-context shim so an admin can enable a dedicated zone later with no
+  # nginx.conf surgery (conf.d/*.conf is already included inside http{}). A wildcard
+  # include over the empty dir is valid (nginx -t passes).
+  mkdir -p /etc/nginx/aidipanel/cache-zones
+  printf 'include /etc/nginx/aidipanel/cache-zones/*.conf;\n' > /etc/nginx/conf.d/aidipanel-cache-zones.conf
+
   ok "Nginx main config written (optimized, worker_conn=${worker_conn})"
 }
 
