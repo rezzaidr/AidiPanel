@@ -1574,7 +1574,8 @@ export NO_COLOR=1
 cmd="${1:-}"
 case "$cmd" in
   site:add|site:delete|site:list|vhost:save|\
-  cache:page|cache:redis|cache:status|cache:purge|cache:enable|cache:disable|\
+  cache:page|cache:redis|cache:zone|cache:status|cache:purge|cache:enable|cache:disable|\
+  cache:config|cache:redis-enable|cache:redis-disable|cache:redis-flush|cache:opcache-restart|\
   db:add|db:delete|db:list|db:backup|\
   php:list|php:version|php:restart|php:install|\
   ssl:install|ssl:renew|ssl:status|ssl:import|\

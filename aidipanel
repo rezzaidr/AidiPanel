@@ -1766,14 +1766,14 @@ _cache_vhost_zone() {
   local domain="$1"
   local conf="${NGINX_CONF_DIR}/${domain}.conf" zone
   [[ -f "$conf" ]] || { echo "$NGINX_CACHE_ZONE"; return 0; }
-  zone=$(sed -nE 's/^[[:space:]]*#?[[:space:]]*fastcgi_cache[[:space:]]+([A-Za-z0-9_]+)[[:space:]]*;.*/\1/p' "$conf" | head -1)
+  zone=$(sed -nE 's/^[[:space:]]*#?[[:space:]]*fastcgi_cache[[:space:]]+([A-Za-z0-9_-]+)[[:space:]]*;.*/\1/p' "$conf" | head -1)
   echo "${zone:-$NGINX_CACHE_ZONE}"
 }
 
 # Return 0 iff the vhost has an ACTIVE (uncommented) bare `fastcgi_cache <zone>;` line.
 _cache_vhost_cache_active() {
   local conf="${NGINX_CONF_DIR}/${1}.conf"
-  grep -qE '^[[:space:]]*fastcgi_cache[[:space:]]+[A-Za-z0-9_]+[[:space:]]*;' "$conf" 2>/dev/null
+  grep -qE '^[[:space:]]*fastcgi_cache[[:space:]]+[A-Za-z0-9_-]+[[:space:]]*;' "$conf" 2>/dev/null
 }
 # <<< CACHE_ZONE_HELPERS_END
 
@@ -2179,10 +2179,12 @@ _cache_toggle() {
 
   if [[ "$action" == "enable" ]]; then
     if _cache_vhost_cache_active "$domain"; then
+      _progress 100 "done" "Already enabled"
       warn "FastCGI cache is already enabled for: ${domain}"
       return 0
     fi
 
+    _progress 15 cache_snippet "Preparing cache config"
     # 1. Create per-site snippet if absent
     local snippet; snippet=$(_cache_snippet_path "$domain")
     if [[ ! -f "$snippet" ]]; then
@@ -2199,6 +2201,7 @@ _cache_toggle() {
       log "Vhost include migrated to per-site snippet: ${domain}"
     fi
 
+    _progress 45 cache_apply "Enabling cache in nginx"
     # 3. Uncomment cache directives
     _sed_inplace "$conf" \
       's|#\s*fastcgi_cache\s\+|fastcgi_cache |g' \
@@ -2219,8 +2222,12 @@ _cache_toggle() {
     _cache_vhost_debug_header     "$domain" "${saved_debug:-on}"
 
     ok "FastCGI cache enabled for: ${domain}"
+    if [[ "$install_nginx_helper" == "true" || "$install_redis_plugin" == "true" ]]; then
+      _progress 70 wp_plugins "Installing WordPress helper plugin"
+    fi
     _cache_install_wp_plugins "$domain" "$install_nginx_helper" "$install_redis_plugin"
   else
+    _progress 30 cache_disable "Disabling cache"
     # If the site is on a dedicated zone, revert + tear it down first (back to shared),
     # so the comment-out below operates on the shared zone and no orphaned zone/dir remains.
     local _zone; _zone=$(_cache_vhost_zone "$domain")
@@ -2240,7 +2247,13 @@ _cache_toggle() {
     ok "FastCGI cache disabled for: ${domain}"
   fi
 
+  _progress 90 nginx "Validating and reloading nginx"
   _nginx_test_reload
+  if [[ "$action" == "enable" ]]; then
+    _progress 100 "done" "Page cache enabled"
+  else
+    _progress 100 "done" "Page cache disabled"
+  fi
 }
 
 # cache:harden [--no-flush]
@@ -2346,7 +2359,7 @@ _cache_zone_status() {
   local cdir="${NGINX_ZONE_CACHE_BASE}/${user}/fastcgi"
   local keys="-" max="-"
   if [[ -f "$zfile" ]]; then
-    keys=$(sed -nE 's/.*keys_zone=[A-Za-z0-9_]+:([0-9]+[kKmMgG]).*/\1/p' "$zfile" | head -1)
+    keys=$(sed -nE 's/.*keys_zone=[A-Za-z0-9_-]+:([0-9]+[kKmMgG]).*/\1/p' "$zfile" | head -1)
     max=$(sed -nE 's/.*max_size=([0-9]+[kKmMgG]).*/\1/p' "$zfile" | head -1)
   fi
   echo "zone=dedicated"; echo "zone_name=${zone}"
@@ -2382,6 +2395,7 @@ _cache_zone_enable() {
   local cur_zone; cur_zone=$(_cache_vhost_zone "$domain")
   local is_resize=0; [[ "$cur_zone" == "$zone" ]] && is_resize=1
 
+  _progress 15 zone_preflight "Checking disk and memory"
   # 2. Pre-flight (unless --force): disk free >= max_size, RAM available >= keys_zone.
   if [[ "$force" != "true" ]]; then
     local need_disk; need_disk=$(_size_to_bytes "$maxsize")
@@ -2397,6 +2411,7 @@ _cache_zone_enable() {
     fi
   fi
 
+  _progress 40 zone_write "Writing the dedicated zone"
   # 3. Create the zone-config dir FIRST, then the cache dir, then the shim (idempotent).
   mkdir -p "$NGINX_ZONE_CONF_DIR"
   install -d -o www-data -g www-data -m 0750 "$cdir"
@@ -2427,12 +2442,14 @@ ZONE
     echo "error=nginx_test_failed"; die "cache:zone enable: nginx rejected the zone; reverted."
   fi
   rm -f "$zbackup"
+  _progress 65 zone_load "Loading the zone into nginx"
   # 6. reload so the zone exists in the running config.
   nginx -s reload >> "$CLI_LOG" 2>&1
 
+  _progress 85 zone_point "Pointing the site at its zone"
   # 7. repoint the vhost (resolve current zone via the regex; do not assume shared).
   local vbackup; vbackup=$(mktemp); cp "$conf" "$vbackup"
-  sed -i -E "s|^([[:space:]]*)fastcgi_cache[[:space:]]+[A-Za-z0-9_]+([[:space:]]*;)|\1fastcgi_cache ${zone}\2|" "$conf"
+  sed -i -E "s|^([[:space:]]*)fastcgi_cache[[:space:]]+[A-Za-z0-9_-]+([[:space:]]*;)|\1fastcgi_cache ${zone}\2|" "$conf"
   # 8. nginx -t; rollback vhost on failure.
   if ! nginx -t >> "$CLI_LOG" 2>&1; then
     cp "$vbackup" "$conf"; rm -f "$vbackup"; nginx -s reload >> "$CLI_LOG" 2>&1
@@ -2446,6 +2463,7 @@ ZONE
   [[ "$is_resize" == 0 ]] && { _cache_purge_domain "$domain" >/dev/null 2>&1 || true; }
 
   echo "zone=dedicated"; echo "zone_name=${zone}"; echo "error="
+  _progress 100 "done" "Dedicated zone enabled"
   ok "Dedicated cache zone enabled for ${domain} (${zone}, keys=${keys}, max_size=${maxsize})."
 }
 
@@ -2463,14 +2481,16 @@ _cache_zone_disable() {
   local cur_zone; cur_zone=$(_cache_vhost_zone "$domain")
   if [[ "$cur_zone" == "$NGINX_CACHE_ZONE" ]]; then
     echo "zone=shared"; echo "zone_name=${NGINX_CACHE_ZONE}"; echo "error="
+    _progress 100 "done" "Already on the shared zone"
     ok "${domain} already uses the shared cache zone."; return 0
   fi
   local user="${cur_zone#${NGINX_CACHE_ZONE}_}"
   local zfile="${NGINX_ZONE_CONF_DIR}/${user}.conf"
 
+  _progress 25 zone_revert "Reverting to the shared zone"
   # 2-3. repoint vhost back to the shared zone; nginx -t; rollback.
   local vbackup; vbackup=$(mktemp); cp "$conf" "$vbackup"
-  sed -i -E "s|^([[:space:]]*)fastcgi_cache[[:space:]]+[A-Za-z0-9_]+([[:space:]]*;)|\1fastcgi_cache ${NGINX_CACHE_ZONE}\2|" "$conf"
+  sed -i -E "s|^([[:space:]]*)fastcgi_cache[[:space:]]+[A-Za-z0-9_-]+([[:space:]]*;)|\1fastcgi_cache ${NGINX_CACHE_ZONE}\2|" "$conf"
   if ! nginx -t >> "$CLI_LOG" 2>&1; then
     cp "$vbackup" "$conf"; rm -f "$vbackup"; nginx -s reload >> "$CLI_LOG" 2>&1
     echo "error=nginx_test_failed"; die "cache:zone disable: revert failed; restored."
@@ -2479,6 +2499,7 @@ _cache_zone_disable() {
   # 4. reload — nothing references the dedicated zone now.
   nginx -s reload >> "$CLI_LOG" 2>&1
 
+  _progress 60 zone_cleanup "Removing the dedicated zone"
   # 5. back up + remove the zone file; nginx -t; restore on failure.
   if [[ -f "$zfile" ]]; then
     local zbackup; zbackup=$(mktemp); cp "$zfile" "$zbackup"
@@ -2494,6 +2515,7 @@ _cache_zone_disable() {
   [[ -n "$user" ]] && rm -rf "${NGINX_ZONE_CACHE_BASE:?}/${user}"
 
   echo "zone=shared"; echo "zone_name=${NGINX_CACHE_ZONE}"; echo "error="
+  _progress 100 "done" "Back to the shared zone"
   ok "Dedicated cache zone removed for ${domain}; back to shared."
 }
 

@@ -78,6 +78,35 @@ class CacheController extends BaseController
         if ($action === 'enable' && $installNginxHelper) {
             $args[] = '--install-nginx-helper';
         }
+        $tab = "/sites/{$domain}?tab=performance";
+
+        // Streamed (live progress bar) when the form opts in — mirrors objectCache().
+        // The DB update + Nginx Helper outcome are folded into the success frame's message.
+        if ($this->request->post('stream') === '1') {
+            $this->streamCli(
+                "cache:{$action}",
+                $args,
+                function (array $r) use ($domain, $action, $installNginxHelper, $tab): array {
+                    $enabled = $action === 'enable' ? 1 : 0;
+                    $this->db->run('UPDATE sites SET cache_enabled = ? WHERE domain = ?', [$enabled, $domain]);
+                    \Core\DB::log("cache:{$action}", "Cache {$action}d for: {$domain}");
+                    $msg = "FastCGI cache {$action}d for {$domain}.";
+                    if ($action === 'enable' && $installNginxHelper) {
+                        $nh = parse_kv_output($r['output'])['nginx_helper'] ?? '';
+                        $msg .= match ($nh) {
+                            'configured'               => ' Nginx Helper installed and configured.',
+                            'installed_not_configured' => ' Nginx Helper installed — finish setup in WP Admin → Nginx Helper.',
+                            'install_failed'           => ' (Nginx Helper could not be installed.)',
+                            'skipped_no_wordpress'     => ' (Nginx Helper skipped: WordPress not found at the web root.)',
+                            'skipped_no_wpcli'         => ' (Nginx Helper skipped: WP-CLI is not installed.)',
+                            default                    => '',
+                        };
+                    }
+                    return ['redirect' => $tab, 'message' => $msg];
+                },
+                fn(string $out): string => "Could not {$action} the page cache. Please try again."
+            );
+        }
 
         // Installing Nginx Helper / enabling FastCGI can take a few seconds; release the
         // session lock first so concurrent same-session requests don't exhaust the pool.
