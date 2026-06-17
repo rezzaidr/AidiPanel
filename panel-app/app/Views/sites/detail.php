@@ -307,6 +307,9 @@ $tabs = [
   $debugOn      = ($cacheConfig['debug-header'] ?? 'on') === 'on';
   $bypassQOn    = ($cacheConfig['bypass-query'] ?? 'off') === 'on';
   $excludeLines = implode("\n", array_filter(array_map('trim', explode(',', $cacheConfig['exclude-urls'] ?? ''))));
+  // URL bypass baseline: always enforced server-side; shown as locked chips above the
+  // editable exclude list (mirrors the cookie baseline below).
+  $baselineExcludeUrls = cache_baseline_exclude_urls();
   // Bypass cookies: the baseline is always enforced server-side, so show it as locked
   // chips and let the user edit only their own additions (stored list minus baseline).
   $baselineCookies = cache_baseline_cookies();
@@ -579,6 +582,14 @@ $tabs = [
         <!-- Exclude URLs -->
         <div>
           <label class="lbl"><?= e(t('perf.cache.exclude')) ?></label>
+          <!-- Non-removable security baseline: shown locked, enforced server-side -->
+          <div class="flex flex-wrap gap-1.5 mb-2">
+            <?php foreach ($baselineExcludeUrls as $bu): ?>
+              <span class="tag tag-muted" title="<?= e(t('perf.cache.exclude.baseline_hint')) ?>">
+                <i class="ti ti-lock"></i><?= e($bu) ?>
+              </span>
+            <?php endforeach; ?>
+          </div>
           <textarea name="exclude_urls" rows="5" class="inp w-full font-mono text-xs"><?= e($excludeLines) ?></textarea>
           <p class="hint"><?= e(t('perf.cache.exclude.desc')) ?></p>
         </div>
@@ -612,6 +623,12 @@ $tabs = [
             <button type="button" data-seg-opt="0" class="px-3 py-1 text-xs font-semibold rounded-md transition">Off</button>
           </div>
           <input type="hidden" name="bypass_query" value="<?= $bypassQOn ? '1' : '0' ?>" data-seg-input>
+        </div>
+
+        <!-- Always-on cache policy (display only; enforced server-side) -->
+        <div class="rounded-lg border border-zinc-200 bg-zinc-50/60 px-3 py-2.5 space-y-1.5">
+          <p class="hint flex items-start gap-1.5"><i class="ti ti-info-circle mt-0.5 flex-none"></i><span><?= e(t('perf.cache.policy.always_bypass')) ?></span></p>
+          <p class="hint flex items-start gap-1.5"><i class="ti ti-info-circle mt-0.5 flex-none"></i><span><?= e(t('perf.cache.policy.status_codes')) ?></span></p>
         </div>
       </div>
 

@@ -252,6 +252,18 @@ function cache_baseline_cookies(): array
 }
 
 /**
+ * The non-removable page-cache bypass baseline for URLs: paths whose responses are
+ * dynamic, authenticated, or an attack surface and must never be cached (REST API,
+ * XML-RPC). The CLI enforces this regardless (see _cache_baseline_exclude_urls /
+ * _cache_snippet_write in `aidipanel`); the panel mirrors it only to render the
+ * locked baseline chips. Keep this list in sync with the CLI.
+ */
+function cache_baseline_exclude_urls(): array
+{
+    return ['/wp-json/', '/xmlrpc.php'];
+}
+
+/**
  * PHP version policy from /etc/aidipanel/php.conf (Patch A single source of truth).
  * Parsed directly (no sudo) for speed; falls back to a sane built-in if the file
  * is missing. Returns: ['default'=>'8.4', 'available'=>['8.2','8.3','8.4','8.5']].
