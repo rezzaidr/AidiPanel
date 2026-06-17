@@ -439,7 +439,7 @@ $tabs = [
           <span class="text-sm text-zinc-600"><?= e(t('perf.setup.checklist.3')) ?></span>
         </div>
       </div>
-      <form method="POST" action="/cache/toggle">
+      <form method="POST" action="/cache/toggle"<?php if ($type === 'php'): ?> x-data="{ confirm: false }"<?php endif; ?>>
         <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
         <input type="hidden" name="domain" value="<?= e($domain) ?>">
         <input type="hidden" name="action" value="enable">
@@ -457,10 +457,32 @@ $tabs = [
         <?php endif; ?>
         <div class="pt-4 border-t border-zinc-100 flex items-center justify-between">
           <p class="text-[11px] text-zinc-400">Safe defaults applied automatically.</p>
-          <button type="submit" class="btn btn-primary" <?= (!$pcEngineOk && !empty($pageCacheInfo)) ? 'disabled' : '' ?>>
+          <button type="<?= $type === 'php' ? 'button' : 'submit' ?>"<?php if ($type === 'php'): ?> @click="confirm = true"<?php endif; ?> class="btn btn-primary" <?= (!$pcEngineOk && !empty($pageCacheInfo)) ? 'disabled' : '' ?>>
             <i class="ti ti-bolt text-sm"></i> <?= e(t('perf.enable')) ?>
           </button>
         </div>
+        <?php if ($type === 'php'): ?>
+        <!-- Modal: confirm caching a dynamic PHP app (#3 — stale CSRF/nonce risk); styled like the other panel modals -->
+        <div x-show="confirm" x-cloak class="fixed inset-0 z-50">
+          <div class="absolute inset-0 bg-zinc-900/40" @click="confirm=false"></div>
+          <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl text-left"
+               @keydown.escape.window="confirm=false">
+            <div class="card-head flex items-center gap-2">
+              <span class="w-8 h-8 rounded-lg bg-amber-50 flex items-center justify-center shrink-0">
+                <i class="ti ti-alert-triangle text-amber-500"></i>
+              </span>
+              <h3 class="card-title"><?= e(t('perf.cache.dynamic_modal_title')) ?></h3>
+            </div>
+            <div class="p-5 space-y-4">
+              <p class="text-sm text-zinc-600 leading-relaxed"><?= e(t('perf.cache.dynamic_modal_body')) ?></p>
+              <div class="flex justify-end gap-2 pt-1">
+                <button type="button" @click="confirm=false" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
+                <button type="submit" class="btn btn-primary"><i class="ti ti-bolt text-sm"></i> <?= e(t('perf.cache.dynamic_modal_confirm')) ?></button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <?php endif; ?>
       </form>
     </div>
 
