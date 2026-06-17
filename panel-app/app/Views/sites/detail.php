@@ -719,6 +719,25 @@ $tabs = [
         .catch(function () { out.className = 'mt-2 text-xs text-rose-600'; out.textContent = 'Request failed.'; });
     });
   })();
+
+  function cacheZone(domain, hasCache) {
+    return {
+      zone: 'shared', keys: '-', maxSize: '-', busy: false,
+      load() {
+        if (!hasCache) return;
+        fetch('/api/cache/zone-status?domain=' + encodeURIComponent(domain),
+              { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+          .then(r => r.json())
+          .then(d => {
+            if (!d || !d.ok) return;
+            this.zone = d.zone || 'shared';
+            this.keys = d.keys || '-';
+            this.maxSize = d.max_size || '-';
+          })
+          .catch(() => {});
+      }
+    };
+  }
   </script>
 
   <!-- Object Cache (Redis) card -->
@@ -905,6 +924,60 @@ $tabs = [
       <?php endif; ?>
     </div>
     <?php endif; ?>
+  </div>
+
+  <!-- Cache zone card -->
+  <div class="card overflow-hidden mb-5"
+       x-data="cacheZone('<?= e($domain) ?>', <?= $hasCache ? 'true' : 'false' ?>)"
+       x-init="load()">
+    <div class="px-5 py-4 border-b border-zinc-100 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <i class="ti ti-stack-2 text-zinc-500"></i>
+        <h3 class="card-title"><?= e(t('perf.cache.zone_title')) ?></h3>
+      </div>
+      <span class="badge" :class="zone === 'dedicated' ? 'badge-ok' : 'badge-muted'"
+            x-text="zone === 'dedicated' ? '<?= e(t('perf.cache.zone_dedicated')) ?>' : '<?= e(t('perf.cache.zone_shared')) ?>'"></span>
+    </div>
+    <div class="px-5 py-4 space-y-3">
+      <p class="text-sm text-zinc-600 leading-relaxed"><?= e(t('perf.cache.zone_help')) ?></p>
+
+      <?php if (!$hasCache): ?>
+        <p class="text-[12px] text-amber-600"><?= e(t('perf.cache.zone_need_cache')) ?></p>
+      <?php else: ?>
+        <div x-show="zone === 'dedicated'" class="flex flex-wrap gap-4 text-[12px] text-zinc-500">
+          <span><?= e(t('perf.cache.zone_keys')) ?>: <b x-text="keys"></b></span>
+          <span><?= e(t('perf.cache.zone_max_size')) ?>: <b x-text="maxSize"></b></span>
+        </div>
+
+        <form method="POST" action="/cache/zone" @submit="busy = true" class="flex flex-wrap items-end gap-2">
+          <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+          <input type="hidden" name="domain" value="<?= e($domain) ?>">
+          <input type="hidden" name="stream" value="1">
+
+          <template x-if="zone !== 'dedicated'">
+            <div class="flex items-end gap-2">
+              <label class="text-[11px] text-zinc-500">
+                <?= e(t('perf.cache.zone_keys')) ?>
+                <input type="text" name="keys" value="32m" class="input input-sm w-20" placeholder="32m">
+              </label>
+              <label class="text-[11px] text-zinc-500">
+                <?= e(t('perf.cache.zone_max_size')) ?>
+                <input type="text" name="max_size" value="2g" class="input input-sm w-20" placeholder="2g">
+              </label>
+              <button type="submit" name="action" value="enable" class="btn btn-primary" :disabled="busy">
+                <i class="ti ti-stack-push text-sm"></i> <?= e(t('perf.cache.zone_enable')) ?>
+              </button>
+            </div>
+          </template>
+
+          <template x-if="zone === 'dedicated'">
+            <button type="submit" name="action" value="disable" class="btn btn-ghost" :disabled="busy">
+              <i class="ti ti-arrow-back-up text-sm"></i> <?= e(t('perf.cache.zone_disable')) ?>
+            </button>
+          </template>
+        </form>
+      <?php endif; ?>
+    </div>
   </div>
 
   <!-- OPcache card — read-only (manage via Admin Area → PHP) -->

@@ -222,7 +222,7 @@ function web_cli_allowed_commands(): array
     return [
         'site:add', 'site:delete', 'site:list',
         'vhost:save',
-        'cache:page', 'cache:redis',
+        'cache:page', 'cache:redis', 'cache:zone',
         'cache:status', 'cache:purge', 'cache:enable', 'cache:disable',
         'cache:config', 'cache:redis-enable', 'cache:redis-disable', 'cache:redis-flush', 'cache:opcache-restart',
         'db:add', 'db:delete', 'db:list', 'db:backup',

@@ -343,6 +343,100 @@ class CacheController extends BaseController
         $this->success("Purged {$purged} URL(s)" . ($notfound ? ", {$notfound} not cached" : '') . '.', $tab);
     }
 
+    /**
+     * Per-site dedicated FastCGI cache zone (opt-in). Streamed when stream=1.
+     * Never passes --force; pre-flight failures surface as a friendly error.
+     */
+    public function zone(array $params = []): void
+    {
+        $domain  = strtolower(trim((string) $this->request->post('domain', '')));
+        $action  = (string) $this->request->post('action', '');
+        $keys    = trim((string) $this->request->post('keys', ''));
+        $maxSize = trim((string) $this->request->post('max_size', ''));
+
+        if (!in_array($action, ['enable', 'disable'], true)) {
+            $this->error('Invalid action.');
+        }
+        if (!is_valid_domain($domain)) {
+            $this->error('Invalid domain name.');
+        }
+        if (!$this->db->row('SELECT id FROM sites WHERE domain = ?', [$domain])) {
+            $this->error("Site not found: {$domain}");
+        }
+
+        $args = ['--action', $action, '--domain', $domain];
+        if ($action === 'enable') {
+            if ($keys !== '')    { $args[] = '--keys';     $args[] = $keys; }
+            if ($maxSize !== '') { $args[] = '--max-size'; $args[] = $maxSize; }
+            // Deliberately never pass --force from the panel.
+        }
+        $tab   = "/sites/{$domain}?tab=performance";
+        $okMsg = $action === 'enable'
+            ? "Dedicated cache zone enabled for {$domain}."
+            : "Reverted {$domain} to the shared cache zone.";
+
+        if ($this->request->post('stream') === '1') {
+            $this->streamCli(
+                'cache:zone',
+                $args,
+                function (array $r) use ($domain, $action, $tab, $okMsg): array {
+                    \Core\DB::log("cache:zone:{$action}", "Cache zone {$action} for: {$domain}");
+                    return ['redirect' => $tab, 'message' => $okMsg];
+                },
+                fn(string $out): string => $this->zoneError($out)
+            );
+        }
+
+        $this->unlockForLongOp();
+        $result = run_cli('cache:zone', $args);
+        if (!$result['success']) {
+            $this->error($this->zoneError($result['output']), $tab);
+        }
+        \Core\DB::log("cache:zone:{$action}", "Cache zone {$action} for: {$domain}");
+        $this->success($okMsg, $tab);
+    }
+
+    /** Read-only cache-zone status (shared vs dedicated + budget) as JSON. */
+    public function zoneStatus(array $params = []): void
+    {
+        $domain = strtolower(trim((string) $this->request->get('domain', '')));
+        if (!is_valid_domain($domain)) {
+            $this->json(['ok' => false, 'error' => 'invalid_domain'], 400);
+        }
+        if (!$this->db->row('SELECT id FROM sites WHERE domain = ?', [$domain])) {
+            $this->json(['ok' => false, 'error' => 'not_found'], 404);
+        }
+
+        $result = run_cli('cache:zone', ['--action', 'status', '--domain', $domain]);
+        if (!$result['success']) {
+            $this->json(['ok' => false, 'error' => 'cli_failed']);
+        }
+        $kv = parse_kv_output($result['output']);
+        $this->json([
+            'ok'        => true,
+            'zone'      => $kv['zone']      ?? 'shared',
+            'zone_name' => $kv['zone_name'] ?? '',
+            'keys'      => $kv['keys']      ?? '-',
+            'max_size'  => $kv['max_size']  ?? '-',
+        ]);
+    }
+
+    /** Map a cache:zone `error=<code>` line to friendly text (no mention of --force). */
+    private function zoneError(string $output): string
+    {
+        $code = preg_match('/^error=(\S+)/m', $output, $m) ? $m[1] : '';
+        return match ($code) {
+            'cache_not_enabled'    => "Enable the page cache for this site first, then add a dedicated zone.",
+            'insufficient_disk'    => "Not enough free disk for that cache size. Try a smaller Max size.",
+            'insufficient_ram'     => "Not enough available memory for that keys size. Try a smaller Keys size.",
+            'invalid_size'         => "Size must look like 32m, 512k, or 2g.",
+            'site_user_unresolved' => "AidiPanel couldn't resolve this site's system user.",
+            'domain_not_found'     => "Site not found.",
+            'nginx_test_failed'    => "The web server rejected the change, so it was rolled back.",
+            default                => "Cache zone operation failed. Please try again.",
+        };
+    }
+
     public function opcacheRestart(array $params = []): void
     {
         $php    = (string) $this->request->post('php', '');

@@ -81,6 +81,7 @@ $router->post('/cache/redis',           'CacheController@redis');
 $router->post('/cache/object',          'CacheController@objectCache');
 $router->post('/cache/purge-urls',      'CacheController@purgeUrls');
 $router->post('/cache/opcache-restart', 'CacheController@opcacheRestart');
+$router->post('/cache/zone',            'CacheController@zone');
 
 // Databases
 $router->get('/databases',         'DatabaseController@index');
@@ -118,6 +119,7 @@ $router->get('/api/services',     'ServiceController@apiStatus');
 $router->get('/api/cache/stats',  'CacheController@apiStats');
 $router->get('/api/cache/object-metrics', 'CacheController@objectCacheMetrics');
 $router->get('/api/cache/check',   'CacheController@checkUrl');
+$router->get('/api/cache/zone-status', 'CacheController@zoneStatus');
 $router->post('/api/cli',         'SystemController@apiCli');
 
 // ── Dispatch ─────────────────────────────────────────────────────────────────
