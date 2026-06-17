@@ -24,6 +24,9 @@ readonly NGINX_ENABLED_DIR="/etc/nginx/sites-enabled"
 readonly NGINX_SNIPPET_DIR="/etc/nginx/snippets"
 readonly NGINX_CACHE_DIR="/var/cache/nginx/fastcgi"
 readonly NGINX_CACHE_ZONE="aidipanel_fcgi"
+readonly NGINX_ZONE_CONF_DIR="/etc/nginx/aidipanel/cache-zones"
+readonly NGINX_ZONE_SHIM="/etc/nginx/conf.d/aidipanel-cache-zones.conf"
+readonly NGINX_ZONE_CACHE_BASE="/var/cache/nginx/aidipanel"
 readonly CREDENTIALS_FILE="${PANEL_DIR}/credentials.conf"
 readonly CLI_LOG="${PANEL_DIR}/storage/logs/aidipanel-cli.log"
 # PHP policy — single source of truth (/etc/aidipanel/php.conf), with a dev fallback.
@@ -1734,6 +1737,46 @@ _cache_build_cookie_regex() {
   echo "$regex"
 }
 
+# >>> CACHE_ZONE_HELPERS_START
+# Pure, dependency-light helpers for cache:zone. Kept between sentinels and PCRE-free
+# (sed -E / grep -E) so _private/tests/unit/cache_zone_test.sh can source just this block
+# with stubbed NGINX_CONF_DIR / NGINX_CACHE_ZONE.
+
+# Dedicated-zone name for a site user. Single source of truth.
+_cache_zone_name() { echo "${NGINX_CACHE_ZONE}_${1}"; }
+
+# Validate an nginx size token (e.g. 32m, 2g, 512k). Case-insensitive k/m/g suffix.
+_cache_zone_valid_size() { [[ "$1" =~ ^[0-9]+[kKmMgG]$ ]]; }
+
+# Convert an nginx size token to bytes. Echoes 0 + returns 1 on bad input.
+_size_to_bytes() {
+  [[ "$1" =~ ^([0-9]+)([kKmMgG])$ ]] || { echo 0; return 1; }
+  local n="${BASH_REMATCH[1]}" u="${BASH_REMATCH[2]}"
+  case "$u" in
+    k|K) echo $(( n * 1024 )) ;;
+    m|M) echo $(( n * 1024 * 1024 )) ;;
+    g|G) echo $(( n * 1024 * 1024 * 1024 )) ;;
+  esac
+}
+
+# Echo the FastCGI zone referenced by a site's vhost (active OR commented), defaulting
+# to the shared zone when none is found. The space after `fastcgi_cache` excludes
+# `fastcgi_cache_valid` etc.
+_cache_vhost_zone() {
+  local domain="$1"
+  local conf="${NGINX_CONF_DIR}/${domain}.conf" zone
+  [[ -f "$conf" ]] || { echo "$NGINX_CACHE_ZONE"; return 0; }
+  zone=$(sed -nE 's/^[[:space:]]*#?[[:space:]]*fastcgi_cache[[:space:]]+([A-Za-z0-9_]+)[[:space:]]*;.*/\1/p' "$conf" | head -1)
+  echo "${zone:-$NGINX_CACHE_ZONE}"
+}
+
+# Return 0 iff the vhost has an ACTIVE (uncommented) bare `fastcgi_cache <zone>;` line.
+_cache_vhost_cache_active() {
+  local conf="${NGINX_CONF_DIR}/${1}.conf"
+  grep -qE '^[[:space:]]*fastcgi_cache[[:space:]]+[A-Za-z0-9_]+[[:space:]]*;' "$conf" 2>/dev/null
+}
+# <<< CACHE_ZONE_HELPERS_END
+
 # Write (or overwrite) a per-site cache snippet from config values.
 # Usage: _cache_snippet_write <domain> <ttl> <exclude_urls> <bypass_cookies> <bypass_query> [stale_revalidate] [debug_header]
 _cache_snippet_write() {
@@ -2262,6 +2305,46 @@ _cache_harden() {
 
   [[ -n "$backup" ]] && ok "Backup kept at ${backup}."
   ok "cache:harden complete."
+}
+
+# ===========================================================================
+# cache:zone — per-site dedicated FastCGI cache zone (opt-in; default is shared)
+# ===========================================================================
+_cache_zone() {
+  _parse_opts "$@"
+  local action; action=$(_opt "action" "status")
+  case "$action" in
+    status)  _cache_zone_status "$@" ;;
+    enable)  _cache_zone_enable "$@" ;;
+    disable) _cache_zone_disable "$@" ;;
+    *) die "cache:zone: unknown action '${action}'. Supported: status, enable, disable" ;;
+  esac
+}
+
+# cache:zone --action status --domain <d>  (read-only; key=value output)
+_cache_zone_status() {
+  _parse_opts "$@"
+  local domain; domain=$(_opt "domain")
+  _require_arg "domain" "$domain" "cache:zone --action status --domain example.com"
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
+  echo "domain=${domain}"
+  if ! _domain_exists "$domain"; then echo "error=domain_not_found"; return 0; fi
+
+  local zone; zone=$(_cache_vhost_zone "$domain")
+  if [[ "$zone" == "$NGINX_CACHE_ZONE" ]]; then
+    echo "zone=shared"; echo "zone_name=${NGINX_CACHE_ZONE}"
+    echo "keys=-"; echo "max_size=-"; echo "cache_dir=-"; echo "error="; return 0
+  fi
+  local user="${zone#${NGINX_CACHE_ZONE}_}"
+  local zfile="${NGINX_ZONE_CONF_DIR}/${user}.conf"
+  local cdir="${NGINX_ZONE_CACHE_BASE}/${user}/fastcgi"
+  local keys="-" max="-"
+  if [[ -f "$zfile" ]]; then
+    keys=$(sed -nE 's/.*keys_zone=[A-Za-z0-9_]+:([0-9]+[kKmMgG]).*/\1/p' "$zfile" | head -1)
+    max=$(sed -nE 's/.*max_size=([0-9]+[kKmMgG]).*/\1/p' "$zfile" | head -1)
+  fi
+  echo "zone=dedicated"; echo "zone_name=${zone}"
+  echo "keys=${keys:--}"; echo "max_size=${max:--}"; echo "cache_dir=${cdir}"; echo "error="
 }
 
 _cache_migrate() {
@@ -3222,6 +3305,7 @@ main() {
     # Cache — per-site status (Phase 1)
     cache:page)   _cache_page "$@" ;;
     cache:redis)  _cache_redis_per_site "$@" ;;
+    cache:zone)   _cache_zone "$@" ;;
     # Cache — existing commands (unchanged)
     cache:status)   _cache_status "$@" ;;
     cache:purge)    _cache_purge "$@" ;;
