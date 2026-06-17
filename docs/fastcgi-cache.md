@@ -203,3 +203,33 @@ aidipanel cache:purge --domain example.com
    - Redis Object Cache: database query caching inside PHP
 4. **Exclude WooCommerce cart/checkout** — already done by default snippet
 5. **Monitor** with `aidipanel cache:status` to ensure high hit rate (>80% is good)
+
+## Dedicated cache zones (noisy neighbour)
+
+By default every site shares one FastCGI cache zone (`aidipanel_fcgi`, 200m keys / 10g
+disk). The cache key is host-scoped, so entries never collide between sites — but the
+eviction budget is shared, so a very busy site can evict a quieter site's cached pages.
+
+For a noisy or high-traffic site you can give it its own **dedicated zone** (its own
+`keys_zone` + `max_size` + cache directory), so its eviction is contained:
+
+```bash
+# give a site its own zone (defaults: 32m keys / 2g disk)
+aidipanel cache:zone --action enable --domain example.com
+# custom budget
+aidipanel cache:zone --action enable --domain example.com --keys 64m --max-size 5g
+# inspect
+aidipanel cache:zone --action status --domain example.com
+# revert to the shared zone (tears the dedicated zone down)
+aidipanel cache:zone --action disable --domain example.com
+```
+
+Notes:
+- **Opt-in.** It is not a default and most sites don't need it.
+- The page cache must already be enabled (`cache:enable`) first.
+- A dedicated zone is **additive** RAM/disk on top of the shared zone. `enable` refuses if
+  there isn't enough free disk / RAM (override on the CLI with `--force`; the panel never
+  forces — it asks you to use a smaller size instead).
+- Zones are declared per-site under `/etc/nginx/aidipanel/cache-zones/` and loaded via a
+  shim in `/etc/nginx/conf.d/`; enabling/disabling never edits `nginx.conf` and is
+  validated with `nginx -t` + rollback.
