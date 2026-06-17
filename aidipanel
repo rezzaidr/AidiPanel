@@ -566,7 +566,7 @@ _site_add() {
 
   # Create per-site cache snippet (cache OFF by default; enables on cache:enable)
   _cache_snippet_write "$domain" "1h" \
-    "/wp-admin/,/wp-login.php,/checkout/,/cart/,/my-account/,/?wc-ajax=" \
+    "$(_cache_default_exclude_urls)" \
     "$(_cache_baseline_cookies)" \
     "off" "off" "on"
   wrote_snippet=1
@@ -666,6 +666,10 @@ _site_write_vhost() {
         include fastcgi_params;
 
         #fastcgi_cache        ${NGINX_CACHE_ZONE};
+        # AidiPanel caches public 404 responses for 60 seconds when the FastCGI
+        # page cache is enabled. This short TTL absorbs repeated bot/scanner probes
+        # without keeping stale 404s for long. Server errors are never cached —
+        # only the codes listed below are.
         #fastcgi_cache_valid  200 301 302 1h;
         #fastcgi_cache_valid  404 1m;
         #fastcgi_cache_use_stale error timeout updating http_500 http_503;
@@ -1655,6 +1659,39 @@ _cache_build_uri_regex() {
   echo "$regex"
 }
 
+# The non-removable URL bypass baseline: paths whose responses are dynamic,
+# authenticated, or an attack surface and must never be cached, whatever a site's
+# configured exclude list says. Single source of truth, enforced in
+# _cache_snippet_write (mirrors _cache_baseline_cookies).
+_cache_baseline_exclude_urls() {
+  echo "/wp-json/,/xmlrpc.php"
+}
+
+# The default per-site exclude list for new / reset sites (tunable extras on top
+# of the baseline). Single source — replaces the literal that was duplicated
+# across create / cache:config / cache:enable / cache:migrate.
+_cache_default_exclude_urls() {
+  echo "/wp-admin/,/wp-login.php,/checkout/,/cart/,/my-account/,/?wc-ajax="
+}
+
+# Merge the URL baseline with a user comma list: baseline first, then extras,
+# de-duplicated, blanks dropped. Guarantees the baseline can never be removed
+# regardless of what the caller (or the panel form) passes.
+_cache_merge_exclude_urls() {
+  local user="$1"
+  local parts=() out=() seen=" " u
+  IFS=',' read -ra parts <<< "$(_cache_baseline_exclude_urls),${user}"
+  for u in "${parts[@]}"; do
+    u="${u#"${u%%[![:space:]]*}"}"; u="${u%"${u##*[![:space:]]}"}"  # trim whitespace
+    [[ -z "$u" ]] && continue
+    case "$seen" in *" ${u} "*) continue ;; esac
+    out+=("$u")
+    seen+="${u} "
+  done
+  local IFS=','
+  echo "${out[*]}"
+}
+
 # The non-removable cache-bypass baseline: session/login cookies that MUST always
 # bypass the page cache or a logged-in/checkout response could be cached and served
 # to other visitors. Single source of truth (mirrored in the panel by
@@ -1709,7 +1746,12 @@ _cache_snippet_write() {
   # always safe even if a caller (or the panel form) omits the session cookies.
   bypass_cookies=$(_cache_merge_cookies "$bypass_cookies")
 
-  local uri_regex; uri_regex=$(_cache_build_uri_regex "$exclude_urls")
+  # URLs: enforce the security baseline (/wp-json/, /xmlrpc.php) in the compiled
+  # regex, but persist only the caller's list in the header below. Cookies store
+  # the merged value; URLs store unmerged so the panel form shows just the tunable
+  # extras and a baseline path can't be shown-then-deleted in the UI.
+  local enforced_urls; enforced_urls=$(_cache_merge_exclude_urls "$exclude_urls")
+  local uri_regex; uri_regex=$(_cache_build_uri_regex "$enforced_urls")
   local cookie_regex; cookie_regex=$(_cache_build_cookie_regex "$bypass_cookies")
 
   local query_block=""
@@ -1847,7 +1889,7 @@ _cache_config() {
     local cur_debug;   cur_debug=$(_cache_snippet_read "$domain" "DEBUG_HEADER")
 
     local final_ttl="${set_ttl:-${cur_ttl:-1h}}"
-    local final_excl="${set_exclude:-${cur_excl:-/wp-admin/,/wp-login.php,/checkout/,/cart/,/my-account/,/?wc-ajax=}}"
+    local final_excl="${set_exclude:-${cur_excl:-$(_cache_default_exclude_urls)}}"
     local final_cookies="${set_cookies:-$cur_cookies}"  # baseline enforced in _cache_snippet_write
     local final_bq="${set_bypass_q:-${cur_bq:-off}}"
     local final_stale="${set_stale:-${cur_stale:-off}}"
@@ -2102,7 +2144,7 @@ _cache_toggle() {
     local snippet; snippet=$(_cache_snippet_path "$domain")
     if [[ ! -f "$snippet" ]]; then
       _cache_snippet_write "$domain" "1h" \
-        "/wp-admin/,/wp-login.php,/checkout/,/cart/,/my-account/,/?wc-ajax=" \
+        "$(_cache_default_exclude_urls)" \
         "$(_cache_baseline_cookies)" \
         "off" "off" "on"
       log "Per-site cache snippet created: ${snippet}"
@@ -2169,36 +2211,57 @@ _cache_harden() {
     die "cache:harden: 'fastcgi_ignore_headers' not found in ${conf} — inspect the config manually."
   fi
 
-  # Idempotent: already hardened when the directive carries no Set-Cookie token.
-  if ! grep -E '^[[:space:]]*fastcgi_ignore_headers' "$conf" | grep -qw 'Set-Cookie'; then
-    ok "Already hardened — fastcgi_ignore_headers does not include Set-Cookie."
-    return 0
+  # 1. Drop Set-Cookie from fastcgi_ignore_headers so cookie-setting responses are
+  #    never cached (idempotent).
+  local backup=""
+  if grep -E '^[[:space:]]*fastcgi_ignore_headers' "$conf" | grep -qw 'Set-Cookie'; then
+    backup="${conf}.harden-bak.$(date +%s)"
+    cp "$conf" "$backup"
+    log "Backed up nginx.conf -> ${backup}"
+    sed -i -E '/^[[:space:]]*fastcgi_ignore_headers/ s/[[:space:]]+Set-Cookie\b//' "$conf"
+    ok "Removed Set-Cookie from fastcgi_ignore_headers."
+  else
+    ok "fastcgi_ignore_headers already excludes Set-Cookie."
   fi
 
-  local backup; backup="${conf}.harden-bak.$(date +%s)"
-  cp "$conf" "$backup"
-  log "Backed up nginx.conf -> ${backup}"
+  # 2. Retrofit every per-site cache snippet to the current bypass policy (e.g. the
+  #    /wp-json/ + /xmlrpc.php baseline). Re-write each from its stored config;
+  #    _cache_snippet_write re-applies the baseline. Idempotent and structurally
+  #    identical to the original write, so it adds no nginx -t risk.
+  local rewritten=0 sn dom
+  for sn in "${NGINX_SNIPPET_DIR}"/cache-*.conf; do
+    [[ -f "$sn" ]] || continue
+    dom=$(basename "$sn" .conf); dom="${dom#cache-}"
+    _cache_snippet_write "$dom" \
+      "$(_cache_snippet_read "$dom" TTL)" \
+      "$(_cache_snippet_read "$dom" EXCLUDE_URLS)" \
+      "$(_cache_snippet_read "$dom" BYPASS_COOKIES)" \
+      "$(_cache_snippet_read "$dom" BYPASS_QUERY)" \
+      "$(_cache_snippet_read "$dom" STALE_REVALIDATE)" \
+      "$(_cache_snippet_read "$dom" DEBUG_HEADER)"
+    rewritten=$((rewritten + 1))
+  done
+  [[ "$rewritten" -gt 0 ]] && ok "Retrofitted ${rewritten} per-site cache snippet(s) to the current policy."
 
-  # Remove only the Set-Cookie token (with its leading whitespace) from that line.
-  sed -i -E '/^[[:space:]]*fastcgi_ignore_headers/ s/[[:space:]]+Set-Cookie\b//' "$conf"
-
+  # 3. Validate everything, then reload (rollback nginx.conf on failure).
   if ! nginx -t >> "$CLI_LOG" 2>&1; then
-    cp "$backup" "$conf"
-    warn "nginx -t failed after patch — restored backup. No changes applied."
+    [[ -n "$backup" ]] && cp "$backup" "$conf"
+    warn "nginx -t failed after harden — restored nginx.conf backup."
     die "cache:harden aborted. Check: nginx -t"
   fi
-
   nginx -s reload >> "$CLI_LOG" 2>&1
-  ok "Hardened: removed Set-Cookie from fastcgi_ignore_headers; nginx reloaded."
+  ok "cache:harden applied; nginx reloaded."
 
+  # 4. Flush so any entry cached under the old policy is evicted (skip with --no-flush).
   if [[ "$no_flush" == "true" ]]; then
-    warn "Skipped cache flush (--no-flush). Already-cached Set-Cookie responses (if any) will expire on their own."
+    warn "Skipped cache flush (--no-flush)."
   elif [[ -d "$NGINX_CACHE_DIR" ]]; then
     find "$NGINX_CACHE_DIR" -mindepth 1 -delete 2>/dev/null || true
     ok "Flushed FastCGI cache: ${NGINX_CACHE_DIR}"
   fi
 
-  ok "cache:harden complete. Backup kept at ${backup}."
+  [[ -n "$backup" ]] && ok "Backup kept at ${backup}."
+  ok "cache:harden complete."
 }
 
 _cache_migrate() {
@@ -2225,7 +2288,7 @@ _cache_migrate() {
 
       if [[ ! -f "$snippet" ]]; then
         _cache_snippet_write "$domain" "1h" \
-          "/wp-admin/,/wp-login.php,/checkout/,/cart/,/my-account/,/?wc-ajax=" \
+          "$(_cache_default_exclude_urls)" \
           "$(_cache_baseline_cookies)" \
           "off" "off" "on"
       fi

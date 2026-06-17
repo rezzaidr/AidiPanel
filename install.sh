@@ -699,7 +699,7 @@ if ($request_method = POST)          { set $skip_cache 1; }
 if ($query_string != "")             { set $skip_cache 1; }
 
 # WordPress: skip admin, login, cart, checkout
-if ($request_uri ~* "(/wp-admin/|/wp-login\.php|/cart|/checkout|/my-account|/xmlrpc\.php)") {
+if ($request_uri ~* "(/wp-admin/|/wp-login\.php|/wp-json/|/cart|/checkout|/my-account|/xmlrpc\.php)") {
     set $skip_cache 1;
 }
 
@@ -1245,6 +1245,10 @@ server {
         include fastcgi_params;
 
         #fastcgi_cache        aidipanel_fcgi;
+        # AidiPanel caches public 404 responses for 60 seconds when the FastCGI
+        # page cache is enabled. This short TTL absorbs repeated bot/scanner probes
+        # without keeping stale 404s for long. Server errors are never cached —
+        # only the codes listed below are.
         #fastcgi_cache_valid  200 301 302 1h;
         #fastcgi_cache_valid  404 1m;
         #fastcgi_cache_bypass  $skip_cache;
