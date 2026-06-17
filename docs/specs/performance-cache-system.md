@@ -1,13 +1,17 @@
 # Performance & Cache System — Design Specification
 
 **Version:** 1.0
-**Status:** Approved for Phase 1
+**Status:** Phases 1–3 shipped (the section text below still describes the original phased rollout)
 
-> **Implementation status (2026-06-15):** Phase 1 (read-only status, both layers) and
-> Page Cache per-site enable / disable / config / purge are complete. Object Cache
-> (per-site Redis) **enable / disable is now implemented**; Phase 3 (per-site flush and
-> metrics) remains pending. Page Cache custom purge-by-URL and the cache-status check
-> are also pending.
+> **Implementation status (2026-06-17):** All three cache layers are live. Page Cache:
+> per-site enable / disable / config, purge, purge-by-URL, and the URL cache-status check
+> are shipped; cookie-setting responses are never cached, and a non-removable
+> session-cookie + URL bypass baseline is enforced. Object Cache (per-site Redis):
+> enable / disable / flush and read-only metrics are shipped. WordPress sites are
+> provisioned with a real WP-CLI install. PHP OPcache and the protocol/compression layer
+> are unchanged. Sections 5 (CLI contract) and 13 (Phase Plan) still describe the original
+> phased rollout and will be refreshed to a Shipped / Current / Future framing in a
+> forthcoming update.
 
 ---
 
