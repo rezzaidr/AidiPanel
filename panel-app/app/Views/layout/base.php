@@ -24,6 +24,13 @@ foreach (['/admin', '/services', '/php', '/cache', '/ssl', '/logs', '/users'] as
 $_username = (string) ($_user['username'] ?? 'admin');
 $_initials = strtoupper(mb_substr($_username, 0, 2, 'UTF-8'));
 $_hostname = gethostname() ?: 'server';
+// Server IP for the top-bar chip (click-to-copy). SERVER_ADDR is the address this
+// panel was reached on — the public droplet IP in the usual setup.
+$_ip = (string) ($_SERVER['SERVER_ADDR'] ?? '');
+if ($_ip === '' || $_ip === '127.0.0.1' || $_ip === '::1') {
+    $_ip = (string) (@gethostbyname($_hostname) ?: '');
+}
+if ($_ip === '') { $_ip = $_hostname; }
 ?>
 <!DOCTYPE html>
 <html lang="<?= e(current_locale()) ?>" class="h-full">
@@ -74,18 +81,16 @@ $_hostname = gethostname() ?: 'server';
   </nav>
 
   <div class="ml-auto flex items-center gap-2.5">
-    <button type="button" class="hidden md:flex items-center gap-2 text-xs text-zinc-400 bg-zinc-100/70 hover:bg-zinc-100 border border-zinc-200/70 rounded-lg pl-2.5 pr-2 py-1.5" title="⌘K">
-      <i class="ti ti-search text-sm"></i> <?= e(t('topbar.search')) ?>
-      <span class="mono text-[10px] bg-white border border-zinc-200 rounded px-1 py-0.5 text-zinc-400">⌘K</span>
+    <button type="button" x-data="{ copied: false }" data-ip="<?= e($_ip) ?>"
+            @click="navigator.clipboard && navigator.clipboard.writeText($el.dataset.ip); copied = true; setTimeout(() => copied = false, 1200)"
+            class="flex items-center gap-2 text-xs font-medium text-zinc-700 bg-zinc-50 hover:bg-zinc-100 border border-zinc-200 rounded-lg px-2.5 py-1.5 cursor-pointer transition"
+            title="<?= e(t('topbar.copy_ip')) ?>">
+      <span class="pulse"></span>
+      <span class="mono" x-show="!copied"><?= e($_ip) ?></span>
+      <span class="mono text-emerald-600" x-show="copied" x-cloak><?= e(t('topbar.copied')) ?></span>
     </button>
 
-    <div class="flex items-center gap-2 text-xs font-medium text-zinc-700 bg-zinc-50 border border-zinc-200 rounded-lg px-2.5 py-1.5" title="<?= e(t('topbar.server_tooltip')) ?>">
-      <span class="pulse"></span>
-      <span class="mono"><?= e($_hostname) ?></span>
-    </div>
-
     <button type="button" class="w-8 h-8 rounded-lg hover:bg-zinc-100 flex items-center justify-center text-zinc-400" title="<?= e(t('topbar.theme')) ?>"><i class="ti ti-moon text-[18px]"></i></button>
-    <button type="button" class="w-8 h-8 rounded-lg hover:bg-zinc-100 flex items-center justify-center text-zinc-400" title="<?= e(t('topbar.settings')) ?>"><i class="ti ti-settings text-[18px]"></i></button>
 
     <!-- account menu -->
     <div class="relative">
@@ -99,6 +104,9 @@ $_hostname = gethostname() ?: 'server';
           <p class="text-sm font-semibold text-zinc-900 truncate"><?= e($_username) ?></p>
           <p class="text-[11px] text-zinc-400"><?= !empty($_is_admin) ? 'Administrator' : 'Read-only' ?></p>
         </div>
+        <a href="/settings" class="flex items-center gap-2 px-3.5 py-2 text-sm text-zinc-600 hover:bg-zinc-50">
+          <i class="ti ti-settings text-base text-zinc-400"></i> <?= e(t('topbar.settings')) ?>
+        </a>
         <a href="/logout" class="flex items-center gap-2 px-3.5 py-2 text-sm text-zinc-600 hover:bg-zinc-50">
           <i class="ti ti-logout text-base text-zinc-400"></i> <?= e(t('topbar.logout')) ?>
         </a>

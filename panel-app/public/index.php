@@ -117,6 +117,9 @@ $router->post('/users/passwd',     'UserController@changePassword');
 // Logs
 $router->get('/logs', 'SystemController@logs');
 
+// Account settings (self-service profile + security; reached from the profile menu)
+$router->get('/settings', 'SettingsController@index');
+
 // API (JSON responses for Alpine.js fetch calls)
 $router->get('/api/metrics',         'DashboardController@apiMetrics');
 $router->get('/api/metrics/history', 'DashboardController@apiHistory');
