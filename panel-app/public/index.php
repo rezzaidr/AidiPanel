@@ -71,6 +71,11 @@ $router->post('/sites/{domain}/nginx','SiteController@saveNginx');
 $router->post('/sites/{domain}/ssl/install', 'SiteSslController@install');
 $router->post('/sites/{domain}/ssl/renew',   'SiteSslController@renew');
 $router->post('/sites/{domain}/ssl/import',  'SiteSslController@import');
+$router->post('/sites/{domain}/ssl/force-https', 'SiteSslController@forceHttps');
+$router->post('/sites/{domain}/ssl/hsts',    'SiteSslController@hsts');
+$router->post('/sites/{domain}/ssl/autorenew', 'SiteSslController@autoRenew');
+$router->post('/sites/{domain}/ssl/use',     'SiteSslController@useCert');
+$router->get('/api/ssl/check',               'SiteSslController@check');
 
 // Cache
 $router->get('/cache',         'CacheController@index');

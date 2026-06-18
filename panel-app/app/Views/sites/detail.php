@@ -582,7 +582,7 @@ $tabs = [
             <p class="text-sm font-medium text-zinc-800"><?= e(t('perf.cache.stale')) ?></p>
             <p class="hint"><?= e(t('perf.cache.stale.desc')) ?></p>
           </div>
-          <div class="inline-flex flex-none rounded-lg border border-zinc-200 bg-zinc-50 p-0.5" role="group">
+          <div class="inline-flex flex-none rounded-lg border border-zinc-200 bg-zinc-100 p-0.5" role="group">
             <button type="button" data-seg-opt="1" class="px-3 py-1 text-xs font-semibold rounded-md transition">On</button>
             <button type="button" data-seg-opt="0" class="px-3 py-1 text-xs font-semibold rounded-md transition">Off</button>
           </div>
@@ -595,7 +595,7 @@ $tabs = [
             <p class="text-sm font-medium text-zinc-800"><?= e(t('perf.cache.debug')) ?></p>
             <p class="hint"><?= e(t('perf.cache.debug.desc')) ?></p>
           </div>
-          <div class="inline-flex flex-none rounded-lg border border-zinc-200 bg-zinc-50 p-0.5" role="group">
+          <div class="inline-flex flex-none rounded-lg border border-zinc-200 bg-zinc-100 p-0.5" role="group">
             <button type="button" data-seg-opt="1" class="px-3 py-1 text-xs font-semibold rounded-md transition">On</button>
             <button type="button" data-seg-opt="0" class="px-3 py-1 text-xs font-semibold rounded-md transition">Off</button>
           </div>
@@ -644,7 +644,7 @@ $tabs = [
             <p class="text-sm font-medium text-zinc-800"><?= e(t('perf.cache.bypass_q')) ?></p>
             <p class="hint"><?= e(t('perf.cache.bypass_q.desc')) ?></p>
           </div>
-          <div class="inline-flex flex-none rounded-lg border border-zinc-200 bg-zinc-50 p-0.5" role="group">
+          <div class="inline-flex flex-none rounded-lg border border-zinc-200 bg-zinc-100 p-0.5" role="group">
             <button type="button" data-seg-opt="1" class="px-3 py-1 text-xs font-semibold rounded-md transition">On</button>
             <button type="button" data-seg-opt="0" class="px-3 py-1 text-xs font-semibold rounded-md transition">Off</button>
           </div>
@@ -676,12 +676,14 @@ $tabs = [
       opts.forEach(function (b) {
         var sel  = b.getAttribute('data-seg-opt') === String(input.value);
         var isOn = b.getAttribute('data-seg-opt') === '1';
-        // On = green, Off = grey; only the selected side is filled.
-        b.classList.remove('bg-emerald-500', 'bg-zinc-500', 'text-white', 'shadow-sm', 'text-zinc-500');
+        // On = green, Off = grey; only the selected side is filled. Inactive side
+        // gets a clear hover affordance + pointer so it reads as a real button.
+        b.classList.add('cursor-pointer');
+        b.classList.remove('bg-emerald-500', 'bg-zinc-500', 'bg-zinc-600', 'text-white', 'shadow-sm', 'text-zinc-500', 'hover:bg-white', 'hover:text-zinc-900');
         if (sel) {
-          b.classList.add('text-white', 'shadow-sm', isOn ? 'bg-emerald-500' : 'bg-zinc-500');
+          b.classList.add('text-white', 'shadow-sm', isOn ? 'bg-emerald-500' : 'bg-zinc-600');
         } else {
-          b.classList.add('text-zinc-500');
+          b.classList.add('text-zinc-500', 'hover:bg-white', 'hover:text-zinc-900');
         }
       });
     }
@@ -1251,20 +1253,54 @@ $tabs = [
 
 <?php elseif ($activeTab === 'ssl'): ?>
 <!-- ──────────────── SSL / TLS ──────────────── -->
-  <div class="max-w-2xl" x-data="{ modal: null, submitting: false, domains: ['<?= e($domain) ?>'] }">
+<?php
+  $sslDomains  = !empty($ssl['domains']) ? array_values($ssl['domains']) : [$domain];
+  $domainsAttr = e(json_encode($sslDomains));
+  $autoRenew   = $httpsOptions['auto_renew'] ?? null;   // bool|null (null = no LE cert)
+  $forceHttps  = !empty($httpsOptions['force_https']);
+  $hstsOn      = !empty($httpsOptions['hsts']);
+?>
+  <div x-data="sslTab(<?= $domainsAttr ?>)">
 
-    <div class="card overflow-hidden">
+    <!-- SSL/TLS — single consolidated card -->
+    <div class="card mb-5">
+
+      <!-- header + Manage SSL -->
       <div class="card-head">
-        <div>
-          <h2 class="card-title"><i class="ti <?= $hasTrustedSsl ? 'ti-lock-check text-emerald-500' : 'ti-lock-open text-amber-500' ?>"></i> <?= e(t('site.ssl.title')) ?></h2>
-          <p class="text-[11px] text-zinc-400 mt-0.5"><?= e(t('site.ssl.subtitle')) ?></p>
+        <div class="flex items-center gap-2.5">
+          <i class="ti <?= $hasTrustedSsl ? 'ti-lock-check text-emerald-500' : 'ti-lock-open text-amber-500' ?> text-lg"></i>
+          <div>
+            <h2 class="card-title">
+              <?= e(t('site.ssl.title')) ?>
+              <span class="badge <?= $hasTrustedSsl ? 'badge-ok' : 'badge-warn' ?>"><?php if ($hasTrustedSsl): ?><span class="dot bg-emerald-500"></span> <?php endif; ?><?= e($hasTrustedSsl ? t('site.ssl.protected') : t('site.ssl.not_secure')) ?></span>
+            </h2>
+            <p class="text-[11px] text-zinc-400 mt-0.5"><?= e(t('site.ssl.manage_desc', ['domain' => $domain])) ?></p>
+          </div>
         </div>
-        <span class="badge <?= $hasTrustedSsl ? 'badge-ok' : 'badge-warn' ?>"><?= e($sslTypeLabel) ?></span>
+
+        <div class="relative" @click.outside="manage=false">
+          <button type="button" @click="manage=!manage" class="btn btn-secondary btn-sm">
+            <i class="ti ti-settings text-sm"></i> <?= e(t('site.ssl.manage')) ?>
+            <i class="ti ti-chevron-down text-xs"></i>
+          </button>
+          <div x-show="manage" x-cloak x-transition.opacity
+               class="absolute right-0 mt-1 w-56 bg-white border border-zinc-200 rounded-lg shadow-lg py-1 z-30">
+            <?php if ($sslState === 'letsencrypt'): ?>
+            <button type="button" @click="manage=false; modal='renew'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-refresh text-zinc-400"></i> <?= e(t('site.ssl.renew_cert')) ?></button>
+            <button type="button" @click="manage=false; modal='le'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-rosette-discount-check text-zinc-400"></i> <?= e(t('site.ssl.reissue')) ?></button>
+            <?php else: ?>
+            <button type="button" @click="manage=false; modal='le'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-lock-check text-zinc-400"></i> <?= e(t('site.ssl.issue_le')) ?></button>
+            <?php endif; ?>
+            <button type="button" @click="manage=false; modal='import'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-certificate text-zinc-400"></i> <?= e(t('site.ssl.import')) ?></button>
+            <div class="h-px bg-zinc-100 my-1"></div>
+            <button type="button" @click="manage=false; runCheck()" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-shield-search text-zinc-400"></i> <?= e(t('site.ssl.run_check')) ?></button>
+          </div>
+        </div>
       </div>
 
-      <div class="p-5">
-        <?php if (!$hasTrustedSsl): ?>
-        <div class="flex items-start gap-2.5 bg-amber-50 border border-amber-200/70 rounded-lg px-4 py-3 mb-5">
+      <?php if (!$hasTrustedSsl): ?>
+      <div class="px-5 pt-4">
+        <div class="flex items-start gap-2.5 bg-amber-50 border border-amber-200/70 rounded-lg px-4 py-3">
           <i class="ti ti-alert-triangle text-amber-500 mt-0.5 shrink-0"></i>
           <div>
             <?php if ($sslReason !== null): ?>
@@ -1273,45 +1309,140 @@ $tabs = [
             <p class="text-xs text-amber-800 leading-relaxed"><?= e(t('site.ssl.warn_untrusted')) ?></p>
           </div>
         </div>
-        <?php endif; ?>
-        <div class="grid grid-cols-3 gap-4">
-          <div>
-            <p class="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1"><?= e(t('site.ssl.f.type')) ?></p>
-            <p class="text-sm font-medium text-zinc-800"><?= e($sslTypeLabel) ?></p>
-            <?php if (!empty($ssl['issuer'])): ?>
-            <p class="text-[11px] text-zinc-400 mt-0.5 truncate" title="<?= e($ssl['issuer']) ?>"><?= e(t('site.ssl.f.issuer')) ?>: <?= e($ssl['issuer']) ?></p>
+      </div>
+      <?php endif; ?>
+
+      <!-- metric tiles: Valid until · Provider · Auto-renew -->
+      <div class="grid grid-cols-3 divide-x divide-zinc-100 border-t border-b border-zinc-100">
+        <div class="px-5 py-3.5">
+          <p class="eyebrow mb-1.5"><?= e(t('site.ssl.f.valid_until')) ?></p>
+          <p class="text-sm font-semibold text-zinc-800">
+            <?= !empty($ssl['expiry']) ? e(date('M j, Y', strtotime((string) $ssl['expiry']))) : '—' ?>
+            <?php if (!empty($ssl['expiry']) && $ssl['daysLeft'] !== null): ?>
+            <span class="text-[11px] font-normal text-zinc-400 ml-1"><?= e(t('site.ssl.days_left', ['n' => $ssl['daysLeft']])) ?></span>
             <?php endif; ?>
-          </div>
-          <div>
-            <p class="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1"><?= e(t('site.ssl.f.domains')) ?></p>
-            <p class="text-sm mono text-zinc-800 leading-relaxed">
-              <?php foreach ((!empty($ssl['domains']) ? $ssl['domains'] : [$domain]) as $i => $cd): ?><?= $i ? '<br>' : '' ?><?= e($cd) ?><?php endforeach; ?>
-            </p>
-          </div>
-          <div>
-            <p class="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1"><?= e(t('site.ssl.f.valid_until')) ?></p>
-            <p class="text-sm font-medium text-zinc-800">
-              <?php if (!empty($ssl['expiry'])): ?><?= e($ssl['expiry']) ?> <span class="text-zinc-400">(<?= e(t('site.ssl.days_left', ['n' => $ssl['daysLeft']])) ?>)</span><?php else: ?>—<?php endif; ?>
-            </p>
-          </div>
+          </p>
+        </div>
+        <div class="px-5 py-3.5">
+          <p class="eyebrow mb-1.5"><?= e(t('site.ssl.provider')) ?></p>
+          <p class="text-sm font-semibold text-zinc-800">
+            <?= e($sslTypeLabel) ?>
+            <?php if (!empty($ssl['issuer'])): ?>
+            <span class="text-[11px] font-normal text-zinc-400 ml-1" title="<?= e($ssl['issuer']) ?>"><?= e($ssl['issuer']) ?></span>
+            <?php endif; ?>
+          </p>
+        </div>
+        <div class="px-5 py-3.5">
+          <p class="eyebrow mb-1.5"><?= e(t('site.ssl.opt.auto_renew')) ?></p>
+          <p class="text-sm font-semibold <?= $autoRenew ? 'text-emerald-700' : 'text-zinc-800' ?>"><?= $autoRenew === null ? '—' : e($autoRenew ? t('site.ssl.enabled') : t('site.ssl.disabled')) ?></p>
         </div>
       </div>
 
-      <div class="flex items-center gap-2.5 px-5 py-3.5 border-t border-zinc-100 bg-zinc-50/60">
-        <?php if ($sslState === 'letsencrypt'): ?>
-        <form method="POST" action="/sites/<?= e($domain) ?>/ssl/renew" data-op-stream class="flex-1">
-          <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
-          <div data-op-fields>
-            <button type="submit" class="btn btn-primary">
-              <i class="ti ti-refresh text-sm"></i> <?= e(t('site.ssl.renew')) ?>
-            </button>
+      <!-- async SSL check result -->
+      <div x-show="check" x-cloak class="px-5 pt-3">
+        <p class="text-xs font-semibold" :class="check ? check.cls : ''" x-text="check ? check.text : ''"></p>
+      </div>
+
+      <!-- Certificates -->
+      <div class="px-5 pt-4 pb-1"><p class="eyebrow"><?= e(t('site.ssl.certs_title')) ?></p></div>
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th class="pl-5"><?= e(t('site.ssl.f.type')) ?></th>
+            <th><?= e(t('site.ssl.f.domains')) ?></th>
+            <th><?= e(t('site.ssl.f.expiration')) ?></th>
+            <th><?= e(t('site.ssl.f.installed')) ?></th>
+            <th class="pr-5 text-center" style="text-align:center"><?= e(t('site.ssl.f.action')) ?></th>
+          </tr>
+        </thead>
+        <tbody>
+          <?php foreach ($certs as $c): ?>
+          <tr>
+            <td class="pl-5 font-medium text-zinc-900"><?= e($c['type']) ?></td>
+            <td><span class="mono text-xs text-zinc-600 break-all"><?= e(implode(', ', $c['domains'])) ?></span></td>
+            <td class="text-zinc-700"><?= !empty($c['expiry']) ? e(date('M j, Y', strtotime((string) $c['expiry']))) : '—' ?></td>
+            <td>
+              <?php if (!empty($c['installed'])): ?>
+                <span class="badge badge-ok"><span class="dot bg-emerald-500"></span> <?= e(t('site.ssl.installed_yes')) ?></span>
+              <?php else: ?>
+                <span class="badge badge-muted"><?= e(t('site.ssl.installed_backup')) ?></span>
+              <?php endif; ?>
+            </td>
+            <td class="text-center">
+              <?php if (empty($c['active'])): ?>
+              <div class="relative inline-block text-left" x-data="{ row:false }" @click.outside="row=false">
+                <button type="button" @click="row=!row" class="w-7 h-7 grid place-items-center rounded-md hover:bg-zinc-100 text-zinc-400" title="<?= e(t('site.ssl.use_cert')) ?>"><i class="ti ti-dots-vertical"></i></button>
+                <div x-show="row" x-cloak class="absolute right-0 mt-1 w-44 bg-white border border-zinc-200 rounded-lg shadow-lg py-1 z-30">
+                  <form method="POST" action="/sites/<?= e($domain) ?>/ssl/use">
+                    <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+                    <input type="hidden" name="type" value="<?= e($c['state']) ?>">
+                    <button type="submit" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-check text-zinc-400"></i> <?= e(t('site.ssl.use_cert')) ?></button>
+                  </form>
+                </div>
+              </div>
+              <?php endif; ?>
+            </td>
+          </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+
+      <!-- HTTPS options: stacked rows, On/Off applies immediately -->
+      <div class="px-5 pt-4 pb-2 border-t border-zinc-100"><p class="eyebrow"><?= e(t('site.ssl.https_options')) ?></p></div>
+      <div class="divide-y divide-zinc-100">
+
+        <!-- Force HTTPS -->
+        <div class="flex items-center justify-between gap-4 px-5 py-3.5">
+          <div class="pr-2">
+            <p class="text-sm font-medium text-zinc-800"><?= e(t('site.ssl.opt.force_https')) ?></p>
+            <p class="hint"><?= e(t('site.ssl.opt.force_https_desc')) ?></p>
           </div>
-          <?php include APP_ROOT . '/Views/partials/op-progress.php'; ?>
-        </form>
-        <?php else: ?>
-        <button type="button" @click="modal='le'" class="btn btn-primary"><i class="ti ti-lock-check text-sm"></i> <?= e(t('site.ssl.install_le')) ?></button>
-        <?php endif; ?>
-        <button type="button" @click="modal='import'" class="btn btn-secondary"><i class="ti ti-certificate text-sm"></i> <?= e(t('site.ssl.import')) ?></button>
+          <form method="POST" action="/sites/<?= e($domain) ?>/ssl/force-https" class="flex-none">
+            <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+            <div class="inline-flex rounded-lg border border-zinc-200 bg-zinc-100 p-0.5" role="group">
+              <button type="submit" name="action" value="on"  class="px-3 py-1 text-xs font-semibold rounded-md transition cursor-pointer <?= $forceHttps ? 'bg-emerald-500 text-white shadow-sm' : 'text-zinc-500 hover:bg-white hover:text-zinc-900' ?>">On</button>
+              <button type="submit" name="action" value="off" class="px-3 py-1 text-xs font-semibold rounded-md transition cursor-pointer <?= !$forceHttps ? 'bg-zinc-600 text-white shadow-sm' : 'text-zinc-500 hover:bg-white hover:text-zinc-900' ?>">Off</button>
+            </div>
+          </form>
+        </div>
+
+        <!-- HSTS -->
+        <div class="flex items-center justify-between gap-4 px-5 py-3.5">
+          <div class="pr-2">
+            <p class="text-sm font-medium text-zinc-800"><?= e(t('site.ssl.opt.hsts')) ?></p>
+            <p class="hint"><?= e(t('site.ssl.opt.hsts_desc')) ?></p>
+          </div>
+          <form method="POST" action="/sites/<?= e($domain) ?>/ssl/hsts" class="flex-none">
+            <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+            <div class="inline-flex rounded-lg border border-zinc-200 bg-zinc-100 p-0.5" role="group">
+              <button type="submit" name="action" value="on"  class="px-3 py-1 text-xs font-semibold rounded-md transition cursor-pointer <?= $hstsOn ? 'bg-emerald-500 text-white shadow-sm' : 'text-zinc-500 hover:bg-white hover:text-zinc-900' ?>">On</button>
+              <button type="submit" name="action" value="off" class="px-3 py-1 text-xs font-semibold rounded-md transition cursor-pointer <?= !$hstsOn ? 'bg-zinc-600 text-white shadow-sm' : 'text-zinc-500 hover:bg-white hover:text-zinc-900' ?>">Off</button>
+            </div>
+          </form>
+        </div>
+
+        <!-- Auto Renew -->
+        <div class="flex items-center justify-between gap-4 px-5 py-3.5">
+          <div class="pr-2">
+            <p class="text-sm font-medium text-zinc-800"><?= e(t('site.ssl.opt.auto_renew')) ?></p>
+            <p class="hint"><?= $autoRenew === null ? e(t('site.ssl.opt.na')) : e(t('site.ssl.opt.auto_renew_desc')) ?></p>
+          </div>
+          <?php if ($autoRenew === null): ?>
+          <div class="inline-flex flex-none rounded-lg border border-zinc-200 bg-zinc-100 p-0.5 opacity-50" role="group">
+            <span class="px-3 py-1 text-xs font-semibold text-zinc-400">On</span>
+            <span class="px-3 py-1 text-xs font-semibold text-zinc-400">Off</span>
+          </div>
+          <?php else: ?>
+          <form method="POST" action="/sites/<?= e($domain) ?>/ssl/autorenew" class="flex-none">
+            <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+            <div class="inline-flex rounded-lg border border-zinc-200 bg-zinc-100 p-0.5" role="group">
+              <button type="submit" name="action" value="on"  class="px-3 py-1 text-xs font-semibold rounded-md transition cursor-pointer <?= $autoRenew ? 'bg-emerald-500 text-white shadow-sm' : 'text-zinc-500 hover:bg-white hover:text-zinc-900' ?>">On</button>
+              <button type="submit" name="action" value="off" class="px-3 py-1 text-xs font-semibold rounded-md transition cursor-pointer <?= !$autoRenew ? 'bg-zinc-600 text-white shadow-sm' : 'text-zinc-500 hover:bg-white hover:text-zinc-900' ?>">Off</button>
+            </div>
+          </form>
+          <?php endif; ?>
+        </div>
+
       </div>
     </div>
 
@@ -1406,6 +1537,54 @@ $tabs = [
         </form>
       </div>
     </div>
+
+    <!-- Modal: Renew certificate -->
+    <div x-show="modal==='renew'" x-cloak class="fixed inset-0 z-50">
+      <div class="absolute inset-0 bg-zinc-900/40" @click="modal=null"></div>
+      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl" @keydown.escape.window="modal=null">
+        <div class="card-head">
+          <h3 class="card-title"><i class="ti ti-refresh text-speed"></i> <?= e(t('site.ssl.renew_cert')) ?></h3>
+          <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
+        </div>
+        <form method="POST" action="/sites/<?= e($domain) ?>/ssl/renew" data-op-stream>
+          <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+          <div data-op-fields class="p-5">
+            <p class="text-sm text-zinc-600 leading-relaxed mb-4"><?= e(t('site.ssl.renew')) ?> · <span class="mono"><?= e($domain) ?></span></p>
+            <div class="flex justify-end gap-2">
+              <button type="button" @click="modal=null" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
+              <button type="submit" class="btn btn-primary"><i class="ti ti-refresh text-sm"></i> <?= e(t('site.ssl.renew_cert')) ?></button>
+            </div>
+          </div>
+          <div class="px-5 pb-5"><?php include APP_ROOT . '/Views/partials/op-progress.php'; ?></div>
+        </form>
+      </div>
+    </div>
+
+    <script>
+    function sslTab(domains) {
+      return {
+        manage: false,
+        modal: null,
+        submitting: false,
+        domains: domains,
+        check: null,
+        runCheck() {
+          var self = this;
+          this.check = { cls: 'text-zinc-500', text: <?= json_encode(t('site.ssl.check_running')) ?> };
+          fetch('/api/ssl/check?domain=' + encodeURIComponent(<?= json_encode($domain) ?>),
+                { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+              if (!d || !d.ok) { self.check = { cls: 'text-rose-600', text: <?= json_encode(t('site.ssl.check_fail')) ?> }; return; }
+              var parts = [d.state, d.expiry ? ('exp ' + d.expiry) : '', (d.days_left || 0) + 'd',
+                           'Force HTTPS ' + d.force_https, 'HSTS ' + d.hsts];
+              self.check = { cls: d.trusted ? 'text-emerald-600' : 'text-amber-600', text: parts.filter(Boolean).join(' · ') };
+            })
+            .catch(function () { self.check = { cls: 'text-rose-600', text: <?= json_encode(t('site.ssl.check_fail')) ?> }; });
+        }
+      };
+    }
+    </script>
 
   </div>
 

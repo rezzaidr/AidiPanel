@@ -406,6 +406,11 @@ _usage() {
   echo "  ssl:renew       Renew certificates (all or per domain)"
   echo "  ssl:import      Import your own certificate (--cert <f> --key <f> [--chain <f>])"
   echo "  ssl:status      Show SSL certificate status"
+  echo "  ssl:force-https Toggle HTTP→HTTPS redirect for a site (--action on|off)"
+  echo "  ssl:hsts        Toggle the HSTS security header for a site (--action on|off)"
+  echo "  ssl:autorenew   Toggle per-site Let's Encrypt auto-renew (--action on|off|status)"
+  echo "  ssl:check       Print machine-readable SSL status (JSON) for a site"
+  echo "  ssl:use         Switch a site to an installed cert (--type letsencrypt|custom|self-signed)"
 
   echo -e "\n${BOLD}${BLUE}Service Management${RESET}"
   echo "  service:status  Show status of all AidiPanel services"
@@ -567,6 +572,17 @@ _site_add() {
   _progress 35 vhost "Writing nginx configuration"
   _site_write_vhost "$domain" "$php_ver" "$webroot" "$site_type" "$site_user" "$wp_multisite"; wrote_vhost=1
 
+  # New sites carry only a self-signed cert until the user installs Let's Encrypt,
+  # so don't force HTTPS yet — keep plain http serving so visitors don't hit an
+  # untrusted-cert warning (HSTS is likewise shipped off in the template). Both are
+  # one-click panel toggles once a trusted cert is in place. Reuse the same serve
+  # block builder as `ssl:force-https off`; keep the redirect if it yields nothing.
+  local _p80; _p80=$(mktemp)
+  if _vhost_port80_serve "$domain" "${NGINX_CONF_DIR}/${domain}.conf" > "$_p80" && [[ -s "$_p80" ]]; then
+    _vhost_replace_first_server "${NGINX_CONF_DIR}/${domain}.conf" "$_p80"
+  fi
+  rm -f "$_p80"
+
   # Create per-site cache snippet (cache OFF by default; enables on cache:enable)
   _cache_snippet_write "$domain" "1h" \
     "$(_cache_default_exclude_urls)" \
@@ -684,8 +700,6 @@ _site_write_vhost() {
         fastcgi_read_timeout    180s;
         fastcgi_buffer_size     64k;
         fastcgi_buffers         8 128k;
-
-        add_header X-FastCGI-Cache \$upstream_cache_status always;
     }
 PHPLOC
 )
@@ -796,16 +810,28 @@ server {
     ssl_session_cache   shared:SSL_${domain}:10m;
     ssl_session_timeout 1d;
 
-    # Security headers
-    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+    # Security headers (HSTS shipped off until a trusted cert is installed — toggle in panel)
+    # add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
     add_header X-Content-Type-Options    "nosniff" always;
     add_header X-Frame-Options           "SAMEORIGIN" always;
     add_header Referrer-Policy           "strict-origin-when-cross-origin" always;
+
+    # Cache-status debug header at SERVER scope on purpose: nginx add_header does
+    # not merge across levels, so putting it inside `location ~ \.php$` would
+    # suppress every security header above for PHP/WordPress responses. Empty
+    # value unless the FastCGI page cache is enabled.
+    add_header X-FastCGI-Cache \$upstream_cache_status always;
 
     # Static file caching
     location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot|webp|avif|mp4|webm)\$ {
         expires 30d;
         add_header Cache-Control "public, immutable";
+        # This location's own add_header suppresses the inherited security headers,
+        # so repeat the one that actually matters for assets: nosniff stops the
+        # browser MIME-sniffing CSS/JS/SVG/uploads. HSTS (already host-wide once the
+        # document sets it), X-Frame-Options and Referrer-Policy add nothing on
+        # assets, so they are intentionally not duplicated here.
+        add_header X-Content-Type-Options "nosniff" always;
         access_log off;
         log_not_found off;
     }
@@ -3170,6 +3196,8 @@ _ssl_install() {
     "/etc/letsencrypt/live/${primary}/fullchain.pem" \
     "/etc/letsencrypt/live/${primary}/privkey.pem"
   _progress 100 "done" "Done"
+  # LE certs auto-renew via the global cron; mark it so the panel can show it.
+  _vhost_marker_set "${NGINX_CONF_DIR}/${primary}.conf" "AUTORENEW" "on"
   ok "SSL certificate installed for: ${domains[*]}"
   info "Auto-renewal is managed by: /etc/cron.d/aidipanel"
 }
@@ -3232,6 +3260,335 @@ _ssl_status() {
   done
   _hr
   echo ""
+}
+
+# ---------------------------------------------------------------------------
+# SSL — HTTPS options (force-https / HSTS / per-site auto-renew) + JSON check
+# ---------------------------------------------------------------------------
+
+# Read/replace a managed marker comment (e.g. # AIDIPANEL_AUTORENEW=on) in a
+# vhost. Markers are top-level comments, so they never affect nginx parsing.
+_vhost_marker_get() {
+  grep -oP "^# AIDIPANEL_$2=\K\S+" "$1" 2>/dev/null | head -1 || true
+}
+_vhost_marker_set() {
+  local conf="$1" key="$2" val="$3" tmp; tmp=$(mktemp)
+  if grep -q "^# AIDIPANEL_${key}=" "$conf" 2>/dev/null; then
+    sed -E "s/^# AIDIPANEL_${key}=.*/# AIDIPANEL_${key}=${val}/" "$conf" > "$tmp"
+  else
+    sed -E "1a # AIDIPANEL_${key}=${val}" "$conf" > "$tmp"
+  fi
+  cp "$tmp" "$conf"; rm -f "$tmp"
+}
+
+# Atomically swap a vhost with an edited copy: back up, install, nginx -t, then
+# restore + die on failure (so a bad edit never takes the site offline), else
+# reload. Mirrors the safety of _ssl_point_vhost. Removes $newfile when done.
+_vhost_commit() {
+  local conf="$1" newfile="$2" bak; bak=$(mktemp)
+  cp "$conf" "$bak"; cp "$newfile" "$conf"
+  if ! nginx -t >> "$CLI_LOG" 2>&1; then
+    cp "$bak" "$conf"; rm -f "$bak" "$newfile"
+    die "The web server rejected the change for $(basename "$conf"); it was reverted."
+  fi
+  rm -f "$bak" "$newfile"
+  systemctl reload nginx >> "$CLI_LOG" 2>&1
+}
+
+# Replace the FIRST top-level `server { … }` block (always the port-80 block in
+# AidiPanel vhosts) with the contents of $blockfile. Brace-aware so nested
+# location/if blocks toggle cleanly between redirect and serve forms.
+_vhost_replace_first_server() {
+  local conf="$1" blockfile="$2" tmp; tmp=$(mktemp)
+  awk -v bf="$blockfile" '
+    BEGIN { depth=0; inblock=0; done=0 }
+    !done && !inblock && /^server[[:space:]]*\{/ {
+      inblock=1
+      depth += gsub(/\{/,"{") - gsub(/\}/,"}")
+      while ((getline l < bf) > 0) print l
+      close(bf)
+      if (depth<=0) { inblock=0; done=1 }
+      next
+    }
+    inblock {
+      depth += gsub(/\{/,"{") - gsub(/\}/,"}")
+      if (depth<=0) { inblock=0; done=1 }
+      next
+    }
+    { print }
+  ' "$conf" > "$tmp" && cp "$tmp" "$conf"
+  rm -f "$tmp"
+}
+
+# Port-80 block, redirect form (Force HTTPS = on): bounce everything to https,
+# keeping the ACME challenge path reachable for certbot.
+_vhost_port80_redirect() {
+  local domain="$1"
+  cat <<REDIR
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${domain} www.${domain};
+
+    # ACME challenge for Let's Encrypt
+    location /.well-known/acme-challenge/ { root /var/www/letsencrypt; }
+    location / { return 301 https://\$host\$request_uri; }
+}
+REDIR
+}
+
+# Port-80 block, serve form (Force HTTPS = off): also answer plain HTTP. Built
+# from the live vhost's own facts (type/root/index/socket) so it tracks the
+# real site. Keep the essentials in sync with _site_write_vhost's 443 block.
+_vhost_port80_serve() {
+  local domain="$1" conf="$2"
+  local type webroot index sock
+  type=$(grep -oP '# Type: \K\w+' "$conf" 2>/dev/null || echo php)
+  webroot=$(awk '/^[[:space:]]*root[[:space:]]/{print $2; exit}' "$conf" | tr -d ';')
+  index=$(awk '/^[[:space:]]*index[[:space:]]/{sub(/^[[:space:]]*index[[:space:]]+/,""); sub(/;[[:space:]]*$/,""); print; exit}' "$conf")
+  [[ -n "$index" ]] || index="index.php index.html"
+  sock=$(grep -oP 'fastcgi_pass[[:space:]]+unix:\K[^;]+' "$conf" 2>/dev/null | head -1)
+
+  local body
+  if [[ "$type" == "proxy" ]]; then
+    local proxy_pass; proxy_pass=$(grep -oP 'proxy_pass[[:space:]]+\K\S+' "$conf" 2>/dev/null | head -1 | tr -d ';')
+    body=$(cat <<PROXY
+    location / {
+        proxy_pass         ${proxy_pass};
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade \$http_upgrade;
+        proxy_set_header   Connection 'upgrade';
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto \$scheme;
+        proxy_cache_bypass \$http_upgrade;
+    }
+PROXY
+)
+  else
+    local try="try_files \$uri \$uri/ =404;"
+    [[ "$type" == "wordpress" ]] && try="try_files \$uri \$uri/ /index.php?\$args;"
+    local php_loc=""
+    if [[ "$type" != "static" && -n "$sock" ]]; then
+      php_loc=$(cat <<PHPL
+
+    location ~ \.php\$ {
+        try_files \$uri =404;
+        fastcgi_split_path_info ^(.+\.php)(/.+)\$;
+        fastcgi_pass unix:${sock};
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        include fastcgi_params;
+    }
+PHPL
+)
+    fi
+    local wp_deny=""
+    if [[ "$type" == "wordpress" ]]; then
+      wp_deny=$(cat <<'WPD'
+
+    location ~ ^/(wp-config\.php|xmlrpc\.php|wp-cron\.php)$ { deny all; }
+    location ~* /(?:uploads|files)/.*\.php$ { deny all; }
+WPD
+)
+    fi
+    body=$(cat <<MAIN
+    location / {
+        ${try}
+    }${wp_deny}${php_loc}
+MAIN
+)
+  fi
+
+  cat <<SERVE
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${domain} www.${domain};
+
+    root ${webroot};
+    index ${index};
+
+    # ACME challenge for Let's Encrypt
+    location /.well-known/acme-challenge/ { root /var/www/letsencrypt; }
+
+    # Deny hidden files
+    location ~ /\. {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+
+${body}
+}
+SERVE
+}
+
+_ssl_force_https() {
+  _require_root "ssl:force-https"
+  _parse_opts "$@"
+  local domain action conf
+  domain=$(_opt "domain"); action=$(_opt "action")
+  _require_arg "domain" "$domain" "ssl:force-https --domain example.com --action on"
+  _require_arg "action" "$action" "ssl:force-https --domain example.com --action on|off"
+  _domain_valid "$domain"  || die "Invalid domain name: ${domain}"
+  _domain_exists "$domain" || die "Site not found: ${domain}"
+  [[ "$action" == "on" || "$action" == "off" ]] || die "Action must be 'on' or 'off'."
+  conf="${NGINX_CONF_DIR}/${domain}.conf"
+  [[ -f "$conf" ]] || die "Vhost not found: ${conf}"
+
+  local blockfile newconf; blockfile=$(mktemp); newconf=$(mktemp)
+  if [[ "$action" == "on" ]]; then
+    _vhost_port80_redirect "$domain" > "$blockfile"
+  else
+    _vhost_port80_serve "$domain" "$conf" > "$blockfile"
+  fi
+  cp "$conf" "$newconf"
+  _vhost_replace_first_server "$newconf" "$blockfile"
+  rm -f "$blockfile"
+  _vhost_commit "$conf" "$newconf"
+  ok "Force HTTPS turned ${action} for ${domain}"
+}
+
+_ssl_hsts() {
+  _require_root "ssl:hsts"
+  _parse_opts "$@"
+  local domain action conf
+  domain=$(_opt "domain"); action=$(_opt "action")
+  _require_arg "domain" "$domain" "ssl:hsts --domain example.com --action on"
+  _require_arg "action" "$action" "ssl:hsts --domain example.com --action on|off"
+  _domain_valid "$domain"  || die "Invalid domain name: ${domain}"
+  _domain_exists "$domain" || die "Site not found: ${domain}"
+  [[ "$action" == "on" || "$action" == "off" ]] || die "Action must be 'on' or 'off'."
+  conf="${NGINX_CONF_DIR}/${domain}.conf"
+  [[ -f "$conf" ]] || die "Vhost not found: ${conf}"
+
+  local newconf; newconf=$(mktemp); cp "$conf" "$newconf"
+  local hsts='add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;'
+  # Use '|' as the sed delimiter: the comment marker '#' appears in the replacement.
+  if [[ "$action" == "off" ]]; then
+    # Comment any active HSTS line (idempotent: already-commented lines won't match).
+    sed -E -i 's|^([[:space:]]*)(add_header[[:space:]]+Strict-Transport-Security.*)|\1# \2|' "$newconf"
+  else
+    # Uncomment a commented HSTS line; if none exists at all, inject one in the 443 block.
+    sed -E -i 's|^([[:space:]]*)#[[:space:]]*(add_header[[:space:]]+Strict-Transport-Security.*)|\1\2|' "$newconf"
+    if ! grep -Eq '^[[:space:]]*add_header[[:space:]]+Strict-Transport-Security' "$newconf"; then
+      sed -E -i "s|^([[:space:]]*)(ssl_session_timeout[[:space:]].*)|\1\2\n\1${hsts}|" "$newconf"
+    fi
+  fi
+  _vhost_commit "$conf" "$newconf"
+  ok "HSTS turned ${action} for ${domain}"
+}
+
+_ssl_autorenew() {
+  _parse_opts "$@"
+  local domain action
+  domain=$(_opt "domain"); action=$(_opt "action")
+  _require_arg "domain" "$domain" "ssl:autorenew --domain example.com --action on"
+  _require_arg "action" "$action" "ssl:autorenew --domain example.com --action on|off|status"
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
+  local renewal="/etc/letsencrypt/renewal/${domain}.conf"
+  local disabled="${renewal}.disabled"
+
+  if [[ "$action" == "status" ]]; then
+    if [[ -f "$renewal" ]]; then echo "on"
+    elif [[ -f "$disabled" ]]; then echo "off"
+    else echo "none"; fi
+    return 0
+  fi
+
+  _require_root "ssl:autorenew"
+  _domain_exists "$domain" || die "Site not found: ${domain}"
+  [[ "$action" == "on" || "$action" == "off" ]] || die "Action must be 'on', 'off' or 'status'."
+  [[ -f "$renewal" || -f "$disabled" ]] || die "No Let's Encrypt certificate to manage for ${domain}."
+
+  # Disabling moves the renewal config aside so the global `certbot renew` skips
+  # just this site; enabling moves it back. Mirror the state into a vhost marker
+  # so the panel (www-data) can show it without reading the root-only renewal dir.
+  if [[ "$action" == "off" ]]; then
+    [[ -f "$renewal" ]] && mv "$renewal" "$disabled"
+  else
+    [[ -f "$disabled" ]] && mv "$disabled" "$renewal"
+  fi
+  local conf="${NGINX_CONF_DIR}/${domain}.conf"
+  [[ -f "$conf" ]] && _vhost_marker_set "$conf" "AUTORENEW" "$action"
+  ok "Auto-renew turned ${action} for ${domain}"
+}
+
+# Machine-readable status for the panel's "Run SSL check". One JSON line.
+_ssl_check() {
+  _parse_opts "$@"
+  local domain; domain=$(_opt "domain")
+  _require_arg "domain" "$domain" "ssl:check --domain example.com"
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
+  local conf="${NGINX_CONF_DIR}/${domain}.conf"
+
+  # Prefer the certificate actually wired into the vhost (ssl_certificate), so the
+  # reported state follows "Use this cert" switches instead of file priority.
+  local state="none" certfile="" wired=""
+  if [[ -f "$conf" ]]; then
+    wired=$(grep -E '^[[:space:]]*ssl_certificate[[:space:]]' "$conf" 2>/dev/null | head -1 \
+            | sed -E 's/^[[:space:]]*ssl_certificate[[:space:]]+([^;]+);.*/\1/' | tr -d '[:space:]')
+  fi
+  if [[ "$wired" == "/etc/letsencrypt/live/${domain}/fullchain.pem" ]]; then
+    state="letsencrypt"; certfile="$wired"
+  elif [[ "$wired" == "/etc/ssl/aidipanel-custom/${domain}/fullchain.pem" ]]; then
+    state="custom"; certfile="$wired"
+  elif [[ "$wired" == "/etc/ssl/aidipanel-self/${domain}.crt" ]]; then
+    state="self-signed"; certfile="$wired"
+  elif [[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" ]]; then
+    state="letsencrypt"; certfile="/etc/letsencrypt/live/${domain}/fullchain.pem"
+  elif [[ -f "/etc/ssl/aidipanel-custom/${domain}/fullchain.pem" ]]; then
+    state="custom"; certfile="/etc/ssl/aidipanel-custom/${domain}/fullchain.pem"
+  elif [[ -f "/etc/ssl/aidipanel-self/${domain}.crt" ]]; then
+    state="self-signed"; certfile="/etc/ssl/aidipanel-self/${domain}.crt"
+  fi
+
+  local expiry="" days=0 issuer="" trusted="false"
+  if [[ -n "$certfile" ]]; then
+    local end; end=$(openssl x509 -enddate -noout -in "$certfile" 2>/dev/null | cut -d= -f2)
+    if [[ -n "$end" ]]; then
+      expiry=$(date -d "$end" '+%Y-%m-%d' 2>/dev/null || echo "")
+      days=$(( ( $(date -d "$end" +%s 2>/dev/null || echo 0) - $(date +%s) ) / 86400 ))
+    fi
+    issuer=$(openssl x509 -issuer -noout -in "$certfile" 2>/dev/null | sed -E 's/^issuer=//')
+    issuer="${issuer//\"/}"; issuer="${issuer//\\/}"
+    [[ "$state" != "self-signed" && "$days" -gt 0 ]] && trusted="true"
+  fi
+
+  local force_https="off" hsts="off" autorenew="none"
+  if [[ -f "$conf" ]]; then
+    grep -q 'return 301 https' "$conf" 2>/dev/null && force_https="on"
+    grep -Eq '^[[:space:]]*add_header[[:space:]]+Strict-Transport-Security' "$conf" 2>/dev/null && hsts="on"
+  fi
+  if [[ -f "/etc/letsencrypt/renewal/${domain}.conf" ]]; then autorenew="on"
+  elif [[ -f "/etc/letsencrypt/renewal/${domain}.conf.disabled" ]]; then autorenew="off"; fi
+
+  printf '{"domain":"%s","state":"%s","expiry":"%s","days_left":%s,"issuer":"%s","trusted":%s,"force_https":"%s","hsts":"%s","auto_renew":"%s"}\n' \
+    "$domain" "$state" "$expiry" "$days" "$issuer" "$trusted" "$force_https" "$hsts" "$autorenew"
+}
+
+# Switch the vhost to an already-present certificate (Let's Encrypt / imported /
+# self-signed). Drives the certificates table's "Use this cert" action.
+_ssl_use() {
+  _require_root "ssl:use"
+  _parse_opts "$@"
+  local domain type; domain=$(_opt "domain"); type=$(_opt "type")
+  _require_arg "domain" "$domain" "ssl:use --domain example.com --type letsencrypt"
+  _require_arg "type"   "$type"   "ssl:use --domain example.com --type letsencrypt|custom|self-signed"
+  _domain_valid "$domain"  || die "Invalid domain name: ${domain}"
+  _domain_exists "$domain" || die "Site not found: ${domain}"
+  local fullchain privkey
+  case "$type" in
+    letsencrypt) fullchain="/etc/letsencrypt/live/${domain}/fullchain.pem"; privkey="/etc/letsencrypt/live/${domain}/privkey.pem" ;;
+    custom)      fullchain="/etc/ssl/aidipanel-custom/${domain}/fullchain.pem"; privkey="/etc/ssl/aidipanel-custom/${domain}/privkey.pem" ;;
+    self-signed) fullchain="/etc/ssl/aidipanel-self/${domain}.crt"; privkey="/etc/ssl/aidipanel-self/${domain}.key" ;;
+    *) die "Unknown certificate type: ${type}" ;;
+  esac
+  [[ -f "$fullchain" && -f "$privkey" ]] || die "No ${type} certificate is available for ${domain}."
+  _ssl_point_vhost "$domain" "$fullchain" "$privkey"
+  ok "Now using the ${type} certificate for ${domain}"
 }
 
 # ===========================================================================
@@ -3510,6 +3867,11 @@ main() {
     ssl:renew)      _ssl_renew "$@" ;;
     ssl:status)     _ssl_status "$@" ;;
     ssl:import)     _ssl_import "$@" ;;
+    ssl:force-https) _ssl_force_https "$@" ;;
+    ssl:hsts)       _ssl_hsts "$@" ;;
+    ssl:autorenew)  _ssl_autorenew "$@" ;;
+    ssl:check)      _ssl_check "$@" ;;
+    ssl:use)        _ssl_use "$@" ;;
 
     # Service
     service:status)  _service_status "$@" ;;

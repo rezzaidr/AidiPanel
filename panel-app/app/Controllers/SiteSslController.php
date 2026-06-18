@@ -132,6 +132,104 @@ class SiteSslController extends BaseController
         $this->success("Certificate imported for {$domain}.", $this->tab($domain));
     }
 
+    /** Toggle the HTTP→HTTPS redirect for this site. */
+    public function forceHttps(array $params = []): void
+    {
+        $domain = (string) ($params['domain'] ?? '');
+        $this->requireSite($domain);
+        $action = $this->requireAction($domain);
+
+        $result = run_cli('ssl:force-https', ['--domain', $domain, '--action', $action]);
+        if (!$result['success']) {
+            $this->error('Could not update Force HTTPS: ' . $result['output'], $this->tab($domain));
+        }
+        \Core\DB::log('ssl:force-https', "Force HTTPS {$action} for: {$domain}");
+        $this->success("Force HTTPS turned {$action} for {$domain}.", $this->tab($domain));
+    }
+
+    /** Toggle the HSTS security header for this site. */
+    public function hsts(array $params = []): void
+    {
+        $domain = (string) ($params['domain'] ?? '');
+        $this->requireSite($domain);
+        $action = $this->requireAction($domain);
+
+        $result = run_cli('ssl:hsts', ['--domain', $domain, '--action', $action]);
+        if (!$result['success']) {
+            $this->error('Could not update HSTS: ' . $result['output'], $this->tab($domain));
+        }
+        \Core\DB::log('ssl:hsts', "HSTS {$action} for: {$domain}");
+        $this->success("HSTS turned {$action} for {$domain}.", $this->tab($domain));
+    }
+
+    /** Toggle per-site Let's Encrypt auto-renew. */
+    public function autoRenew(array $params = []): void
+    {
+        $domain = (string) ($params['domain'] ?? '');
+        $this->requireSite($domain);
+        $action = $this->requireAction($domain);
+
+        $result = run_cli('ssl:autorenew', ['--domain', $domain, '--action', $action]);
+        if (!$result['success']) {
+            $this->error('Could not update auto-renew: ' . $result['output'], $this->tab($domain));
+        }
+        \Core\DB::log('ssl:autorenew', "Auto-renew {$action} for: {$domain}");
+        $this->success("Auto-renew turned {$action} for {$domain}.", $this->tab($domain));
+    }
+
+    /** Switch the vhost to an already-installed certificate (from the certs table). */
+    public function useCert(array $params = []): void
+    {
+        $domain = (string) ($params['domain'] ?? '');
+        $this->requireSite($domain);
+        $type = strtolower(trim((string) $this->request->post('type', '')));
+        if (!in_array($type, ['letsencrypt', 'custom', 'self-signed'], true)) {
+            $this->error('Unknown certificate type.', $this->tab($domain));
+        }
+
+        $result = run_cli('ssl:use', ['--domain', $domain, '--type', $type]);
+        if (!$result['success']) {
+            $this->error('Could not switch certificate: ' . $result['output'], $this->tab($domain));
+        }
+        $this->db->run('UPDATE sites SET ssl_type = ? WHERE domain = ?', [$type, $domain]);
+        \Core\DB::log('ssl:use', "Switched to {$type} certificate for: {$domain}");
+        $this->success("Now using the {$type} certificate for {$domain}.", $this->tab($domain));
+    }
+
+    /** Machine-readable SSL status for the "Run SSL check" action (JSON). */
+    public function check(array $params = []): void
+    {
+        $domain = strtolower(trim((string) $this->request->get('domain', '')));
+        if (!is_valid_domain($domain)) {
+            $this->json(['ok' => false, 'error' => 'invalid_domain'], 400);
+        }
+        if (!$this->db->row('SELECT id FROM sites WHERE domain = ?', [$domain])) {
+            $this->json(['ok' => false, 'error' => 'not_found'], 404);
+        }
+
+        $result = run_cli('ssl:check', ['--domain', $domain]);
+        $out    = trim((string) $result['output']);
+        // Isolate the JSON object in case the sudo wrapper adds any stray output.
+        if (preg_match('/\{.*\}/s', $out, $m)) {
+            $out = $m[0];
+        }
+        $data = json_decode($out, true);
+        if (!$result['success'] || !is_array($data)) {
+            $this->json(['ok' => false, 'error' => 'cli_failed']);
+        }
+        $this->json(['ok' => true] + $data);
+    }
+
+    /** Validate the on/off action shared by the HTTPS-option toggles. */
+    private function requireAction(string $domain): string
+    {
+        $action = strtolower(trim((string) $this->request->post('action', '')));
+        if ($action !== 'on' && $action !== 'off') {
+            $this->error('Invalid action.', $this->tab($domain));
+        }
+        return $action;
+    }
+
     private function requireSite(string $domain): void
     {
         if (!is_valid_domain($domain) || !$this->db->row('SELECT id FROM sites WHERE domain = ?', [$domain])) {

@@ -1579,6 +1579,7 @@ case "$cmd" in
   db:add|db:delete|db:list|db:backup|\
   php:list|php:version|php:restart|php:install|\
   ssl:install|ssl:renew|ssl:status|ssl:import|\
+  ssl:force-https|ssl:hsts|ssl:autorenew|ssl:check|ssl:use|\
   service:status|service:start|service:stop|service:restart|\
   system:info)
     ;;
@@ -1587,6 +1588,39 @@ case "$cmd" in
     exit 126
     ;;
 esac
+
+# Defense-in-depth: reject dangerous argument content (the CLI validates too,
+# but this wrapper is the privilege boundary).
+for arg in "$@"; do
+  case "$arg" in
+    *';'*|*'`'*|*'$('*|*$'\n'*)
+      echo "AidiPanel: rejected argument with unsafe characters" >&2
+      exit 125
+      ;;
+  esac
+done
+
+# vhost:save may only read from the panel's managed temp dir.
+if [[ "$cmd" == "vhost:save" ]]; then
+  prev=""
+  for arg in "$@"; do
+    if [[ "$prev" == "--file" ]]; then
+      case "$arg" in
+        *..*)
+          echo "AidiPanel: vhost:save --file must not contain '..'" >&2
+          exit 125
+          ;;
+        /opt/aidipanel/storage/tmp/vhost/*) ;;
+        *)
+          echo "AidiPanel: vhost:save --file must be under /opt/aidipanel/storage/tmp/vhost/" >&2
+          exit 125
+          ;;
+      esac
+    fi
+    prev="$arg"
+  done
+fi
+
 if [[ ! -x /usr/local/bin/aidipanel ]]; then
   echo "AidiPanel CLI not found: /usr/local/bin/aidipanel" >&2
   exit 127

@@ -249,7 +249,7 @@ class SiteController extends BaseController
             $nginxConf = file_get_contents($confFile);
         }
 
-        $ssl         = $this->getSslInfo($domain);
+        $ssl         = $this->getSslInfo($domain, $nginxConf);
         $sslExpiry   = $ssl['expiry'];
         $sslDaysLeft = $ssl['daysLeft'];
         if ($ssl['state'] === 'letsencrypt' || $ssl['state'] === 'custom') {
@@ -271,6 +271,8 @@ class SiteController extends BaseController
         $cacheConfig   = [];
         $lastPurge     = null;
         $cacheZoneSize = null;
+        $httpsOptions  = [];
+        $certs         = [];
 
         if ($activeTab === 'performance') {
             $pageCacheInfo   = $this->getPageCacheInfo($domain);
@@ -300,6 +302,11 @@ class SiteController extends BaseController
             }
         }
 
+        if ($activeTab === 'ssl') {
+            $httpsOptions = $this->getHttpsOptions($domain, $nginxConf);
+            $certs        = $this->getCertificates($domain, $ssl);
+        }
+
         // hasCache is still needed for the Overview tab cache card (cheap DB read)
         $hasCache = (bool) ($site['cache_enabled'] ?? false);
 
@@ -307,7 +314,7 @@ class SiteController extends BaseController
             'site', 'nginxConf', 'ssl', 'sslExpiry', 'sslDaysLeft',
             'logs', 'activeTab', 'diskSize', 'hasCache',
             'pageCacheInfo', 'objectCacheInfo', 'opcacheInfo', 'protocolInfo',
-            'cacheConfig', 'lastPurge', 'cacheZoneSize'
+            'cacheConfig', 'lastPurge', 'cacheZoneSize', 'httpsOptions', 'certs'
         ) + ['_full_bleed' => true]);
     }
 
@@ -579,7 +586,7 @@ class SiteController extends BaseController
     }
 
     /** Detect the active certificate for a site (files are the source of truth). */
-    private function getSslInfo(string $domain): array
+    private function getSslInfo(string $domain, string $nginxConf = ''): array
     {
         $candidates = [
             'letsencrypt' => "/etc/letsencrypt/live/{$domain}/fullchain.pem",
@@ -592,12 +599,28 @@ class SiteController extends BaseController
             'domains' => [], 'trusted' => false,
         ];
 
+        // The active cert is whichever one the vhost actually points at (its
+        // ssl_certificate directive), so the panel follows "Use this cert"
+        // switches instead of always preferring Let's Encrypt by file priority.
+        $active = null;
+        if ($nginxConf !== '' && preg_match('/^\s*ssl_certificate\s+([^;]+);/mi', $nginxConf, $m)) {
+            $wired = trim($m[1]);
+            foreach ($candidates as $state => $p) {
+                if ($p === $wired) { $active = $state; break; }
+            }
+        }
+
         // is_readable (not file_exists): the panel runs as www-data, so a cert it
         // cannot read is a cert it cannot vouch for. The CLI now makes the public
         // cert + its directory readable, keeping only the private key root-only.
         $path = null;
-        foreach ($candidates as $state => $p) {
-            if (is_readable($p)) { $info['state'] = $state; $path = $p; break; }
+        if ($active !== null) {
+            $info['state'] = $active;                        // trust the vhost pointer
+            if (is_readable($candidates[$active])) { $path = $candidates[$active]; }
+        } else {
+            foreach ($candidates as $state => $p) {
+                if (is_readable($p)) { $info['state'] = $state; $path = $p; break; }
+            }
         }
         if ($path === null) {
             return $info;
@@ -656,6 +679,83 @@ class SiteController extends BaseController
             }
         }
         return false;
+    }
+
+    /**
+     * Per-site HTTPS options for the SSL tab. force_https + hsts are detected
+     * straight from the vhost; auto_renew comes from the CLI-managed marker
+     * (the renewal dir is root-only). auto_renew is null when not applicable
+     * (no Let's Encrypt cert to renew).
+     */
+    private function getHttpsOptions(string $domain, string $nginxConf): array
+    {
+        $forceHttps = (bool) preg_match('/return\s+301\s+https/i', $nginxConf);
+        $hsts       = (bool) preg_match('/^\s*add_header\s+Strict-Transport-Security/mi', $nginxConf);
+
+        $autoRenew = null;
+        if (is_readable("/etc/letsencrypt/live/{$domain}/fullchain.pem")) {
+            $autoRenew = preg_match('/^#\s*AIDIPANEL_AUTORENEW=(\w+)/mi', $nginxConf, $m)
+                ? (strtolower($m[1]) === 'on')
+                : true; // the global cron renews unless a marker says otherwise
+        }
+        return ['force_https' => $forceHttps, 'hsts' => $hsts, 'auto_renew' => $autoRenew];
+    }
+
+    /**
+     * Rows for the certificates table: the active managed cert (if any) plus the
+     * always-present self-signed fallback shown as a "Backup" row. `active` marks
+     * the cert currently wired into the vhost (its row hides the ⋮ menu).
+     */
+    private function getCertificates(string $domain, array $ssl): array
+    {
+        $parse = function (string $path, string $type, string $state) use ($domain): ?array {
+            if (!is_readable($path)) {
+                return null;
+            }
+            $cert = openssl_x509_parse((string) file_get_contents($path));
+            if (!$cert) {
+                return null;
+            }
+            $names = [];
+            if (!empty($cert['subject']['CN'])) {
+                $names[] = strtolower((string) $cert['subject']['CN']);
+            }
+            foreach (explode(',', (string) ($cert['extensions']['subjectAltName'] ?? '')) as $san) {
+                $san = trim($san);
+                if (stripos($san, 'DNS:') === 0) {
+                    $names[] = strtolower(substr($san, 4));
+                }
+            }
+            $ts = $cert['validTo_time_t'] ?? null;
+            return [
+                'type'     => $type,
+                'state'    => $state,
+                'domains'  => $names ? array_values(array_unique($names)) : [$domain],
+                'expiry'   => $ts ? date('Y-m-d', $ts) : null,
+                'daysLeft' => $ts ? (int) ceil(($ts - time()) / 86400) : null,
+            ];
+        };
+
+        $active = $ssl['state'] ?? 'none';
+        $rows   = [];
+
+        // List every certificate present on disk so the user can switch between
+        // them; the one wired into the vhost is `active` (its row hides the ⋮),
+        // every other present cert offers "Use this cert".
+        $defs = [
+            ["/etc/letsencrypt/live/{$domain}/fullchain.pem",     "Let's Encrypt", 'letsencrypt'],
+            ["/etc/ssl/aidipanel-custom/{$domain}/fullchain.pem", 'Imported',      'custom'],
+            ["/etc/ssl/aidipanel-self/{$domain}.crt",             'Self-signed',   'self-signed'],
+        ];
+        foreach ($defs as [$path, $label, $state]) {
+            $row = $parse($path, $label, $state);
+            if (!$row) { continue; }
+            $row['active']    = ($state === $active);
+            $row['installed'] = ($state === $active);
+            $rows[] = $row;
+        }
+
+        return $rows;
     }
 
     private function getSiteDiskUsage(string $path): string

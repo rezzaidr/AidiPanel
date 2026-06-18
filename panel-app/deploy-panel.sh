@@ -143,7 +143,8 @@ case "$cmd" in
   db:add|db:delete|db:list|db:backup|\
   php:list|php:version|php:restart|php:install|\
   ssl:install|ssl:renew|ssl:status|ssl:import|\
-  service:status|service:start|service:restart|\
+  ssl:force-https|ssl:hsts|ssl:autorenew|ssl:check|ssl:use|\
+  service:status|service:start|service:stop|service:restart|\
   system:info)
     ;;
   *)

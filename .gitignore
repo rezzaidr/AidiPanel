@@ -6,6 +6,7 @@ credentials.conf
 .env
 *.key
 *.pem
+*.crt
 panel-app/storage/db/*.sqlite
 
 # Private / internal working files (kept local, never published)
