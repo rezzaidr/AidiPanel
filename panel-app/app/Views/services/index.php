@@ -54,7 +54,7 @@ $sections = [
 <?php else: ?>
 
 <?php foreach ($sections as $section): if (empty($section['rows'])) continue; ?>
-<div class="card overflow-hidden mb-6">
+<div class="card mb-6">
   <div class="card-head">
     <div class="card-title">
       <i class="ti <?= e($section['icon']) ?> text-base text-zinc-400"></i> <?= e($section['title']) ?>
@@ -80,6 +80,7 @@ $sections = [
         [$icon, $iconBg, $iconColor] = $svcIcon($name);
         $active  = (bool) ($svc['active'] ?? false);
         $enabled = (bool) ($svc['enabled'] ?? false);
+        $canReload = $name === 'nginx' || (bool) preg_match('/^php\d+\.\d+-fpm$/', $name);
     ?>
       <tr>
         <td class="px-5 py-3">
@@ -106,35 +107,50 @@ $sections = [
           <?php endif; ?>
         </td>
         <td class="px-5 py-3">
-          <div class="flex items-center justify-end gap-2">
-            <form method="POST" action="/services/action">
-              <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
-              <input type="hidden" name="service" value="<?= e($name) ?>">
-              <input type="hidden" name="action" value="restart">
-              <button type="submit" class="btn btn-ghost btn-sm">
-                <i class="ti ti-refresh text-sm"></i> <?= e(t('svc.restart')) ?>
-              </button>
-            </form>
-            <?php if ($active): ?>
-            <form method="POST" action="/services/action"
-                  onsubmit="return confirm('<?= e(t('svc.stop_confirm', ['svc' => $name])) ?>')">
-              <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
-              <input type="hidden" name="service" value="<?= e($name) ?>">
-              <input type="hidden" name="action" value="stop">
-              <button type="submit" class="btn btn-sm bg-red-50 border border-red-200 text-red-600 hover:bg-red-100">
-                <i class="ti ti-player-stop-filled text-sm"></i> <?= e(t('svc.stop')) ?>
-              </button>
-            </form>
-            <?php else: ?>
-            <form method="POST" action="/services/action">
-              <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
-              <input type="hidden" name="service" value="<?= e($name) ?>">
-              <input type="hidden" name="action" value="start">
-              <button type="submit" class="btn btn-sm bg-emerald-50 border border-emerald-200 text-emerald-700 hover:bg-emerald-100">
-                <i class="ti ti-player-play-filled text-sm"></i> <?= e(t('svc.start')) ?>
-              </button>
-            </form>
-            <?php endif; ?>
+          <div class="relative flex justify-end" x-data="{ open: false }" @click.outside="open = false" @keydown.escape.window="open = false">
+            <button type="button" @click="open = !open" :aria-expanded="open" aria-label="<?= e(t('svc.col_actions')) ?>" class="btn btn-ghost btn-sm px-2">
+              <i class="ti ti-dots-vertical text-base"></i>
+            </button>
+            <div x-show="open" x-cloak x-transition.opacity class="absolute right-0 top-full mt-1 z-30 min-w-[10rem] card shadow-xl py-1">
+              <?php if ($canReload): ?>
+              <form method="POST" action="/services/action">
+                <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+                <input type="hidden" name="service" value="<?= e($name) ?>">
+                <input type="hidden" name="action" value="reload">
+                <button type="submit" class="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50">
+                  <i class="ti ti-reload text-sm text-sky-600"></i> <?= e(t('svc.reload')) ?>
+                </button>
+              </form>
+              <?php endif; ?>
+              <form method="POST" action="/services/action">
+                <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+                <input type="hidden" name="service" value="<?= e($name) ?>">
+                <input type="hidden" name="action" value="restart">
+                <button type="submit" class="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50">
+                  <i class="ti ti-refresh text-sm text-zinc-400"></i> <?= e(t('svc.restart')) ?>
+                </button>
+              </form>
+              <?php if ($active): ?>
+              <form method="POST" action="/services/action"
+                    onsubmit="return confirm('<?= e(t('svc.stop_confirm', ['svc' => $name])) ?>')">
+                <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+                <input type="hidden" name="service" value="<?= e($name) ?>">
+                <input type="hidden" name="action" value="stop">
+                <button type="submit" class="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-red-600 hover:bg-red-50">
+                  <i class="ti ti-player-stop-filled text-sm"></i> <?= e(t('svc.stop')) ?>
+                </button>
+              </form>
+              <?php else: ?>
+              <form method="POST" action="/services/action">
+                <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+                <input type="hidden" name="service" value="<?= e($name) ?>">
+                <input type="hidden" name="action" value="start">
+                <button type="submit" class="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50">
+                  <i class="ti ti-player-play-filled text-sm"></i> <?= e(t('svc.start')) ?>
+                </button>
+              </form>
+              <?php endif; ?>
+            </div>
           </div>
         </td>
       </tr>

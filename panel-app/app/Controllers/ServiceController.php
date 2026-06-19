@@ -36,7 +36,7 @@ class ServiceController extends BaseController
 
         $allowed = array_merge(['nginx', db_service(), 'redis', 'redis-server'], $this->phpFpmServices());
         if (!in_array($service, $allowed, true)) $this->error('Invalid service.');
-        if (!in_array($action, ['start', 'stop', 'restart'], true)) $this->error('Invalid action.');
+        if (!in_array($action, ['start', 'stop', 'restart', 'reload'], true)) $this->error('Invalid action.');
 
         $result = run_cli("service:{$action}", [$service]);
 

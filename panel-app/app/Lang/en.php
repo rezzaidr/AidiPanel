@@ -315,6 +315,7 @@ return [
 
     // Admin sub-pages — shared
     'svc.restart'           => 'Restart',
+    'svc.reload'            => 'Reload',
     'svc.start'             => 'Start',
     'svc.stop'              => 'Stop',
     'svc.stop_confirm'      => 'Stop {svc}?',

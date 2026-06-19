@@ -144,7 +144,7 @@ case "$cmd" in
   php:list|php:version|php:restart|php:install|\
   ssl:install|ssl:renew|ssl:status|ssl:import|\
   ssl:force-https|ssl:hsts|ssl:autorenew|ssl:check|ssl:use|\
-  service:status|service:start|service:stop|service:restart|\
+  service:status|service:start|service:stop|service:restart|service:reload|\
   system:info)
     ;;
   *)
