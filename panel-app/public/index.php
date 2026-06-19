@@ -81,6 +81,8 @@ $router->get('/api/ssl/check',               'SiteSslController@check');
 $router->post('/sites/{domain}/database/add',         'SiteDatabaseController@addDatabase');
 $router->post('/sites/{domain}/database/user/add',    'SiteDatabaseController@addUser');
 $router->post('/sites/{domain}/database/user/edit',   'SiteDatabaseController@editUser');
+$router->post('/sites/{domain}/database/phpmyadmin/install', 'SiteDatabaseController@installPhpMyAdmin');
+$router->post('/sites/{domain}/database/phpmyadmin/open',    'SiteDatabaseController@openPhpMyAdmin');
 $router->post('/sites/{domain}/database/delete',      'SiteDatabaseController@deleteDatabase');
 $router->post('/sites/{domain}/database/user/delete', 'SiteDatabaseController@deleteUser');
 

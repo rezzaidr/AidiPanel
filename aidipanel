@@ -29,6 +29,14 @@ readonly NGINX_ZONE_SHIM="/etc/nginx/conf.d/aidipanel-cache-zones.conf"
 readonly NGINX_ZONE_CACHE_BASE="/var/cache/nginx/aidipanel"
 readonly CREDENTIALS_FILE="${PANEL_DIR}/credentials.conf"
 readonly CLI_LOG="${PANEL_DIR}/storage/logs/aidipanel-cli.log"
+readonly PMA_VERSION="5.2.3"
+readonly PMA_DIR="/usr/share/phpmyadmin"
+readonly PMA_CONF="/etc/aidipanel/phpmyadmin.conf"
+readonly PMA_NGINX_SNIPPET="/etc/nginx/snippets/aidipanel-phpmyadmin.conf"
+readonly PMA_URL_PATH="/phpmyadmin/index.php"
+readonly DB_SECRET_DIR="/var/lib/aidipanel/db-secrets"
+readonly DB_SECRET_STORE="/var/lib/aidipanel/db-secrets/passwords.tsv"
+readonly DB_SECRET_KEY="/etc/aidipanel/db-secret.key"
 # PHP policy — single source of truth (/etc/aidipanel/php.conf), with a dev fallback.
 if [[ -f "/etc/aidipanel/php.conf" ]]; then
   # shellcheck source=/dev/null
@@ -403,6 +411,7 @@ _usage() {
   echo "  db:user-add     Add a database user to an existing database (--site --name --db)"
   echo "  db:user-edit    Change a user's permission/password (--site --name)"
   echo "  db:user-delete  Delete a database user (--site --name)"
+  echo "  db:pma-install  Install phpMyAdmin for the Database tab"
   echo "  db:backup       Backup a database to file"
 
   echo -e "\n${BOLD}${BLUE}PHP Management${RESET}"
@@ -628,6 +637,8 @@ _site_add() {
     log "Provisioning database for WordPress: ${db_name} (user: ${db_user})..."
     _db_provision "$db_name" "$db_user" "$db_pass" \
       || { _site_add_rollback; die "Database provisioning failed for ${domain}."; }
+    _db_secret_put "$domain" "$db_name" "$db_user" "$db_pass" \
+      || { _site_add_rollback; die "Could not store the encrypted database credential for ${domain}."; }
     wrote_db=1
     _progress 60 wp_setup "Setting up WordPress"
     log "Installing WordPress (${domain}, multisite=${wp_multisite})..."
@@ -2738,6 +2749,115 @@ _db_grant() {
   fi
 }
 
+_db_secret_init() {
+  mkdir -p "$DB_SECRET_DIR" "$(dirname "$DB_SECRET_KEY")" || return 1
+  chown root:root "$DB_SECRET_DIR" "$(dirname "$DB_SECRET_KEY")" 2>/dev/null || true
+  chmod 700 "$DB_SECRET_DIR" || return 1
+
+  if [[ ! -f "$DB_SECRET_KEY" ]]; then
+    local old_umask
+    old_umask=$(umask)
+    umask 177
+    openssl rand -hex 32 > "$DB_SECRET_KEY" || { umask "$old_umask"; return 1; }
+    umask "$old_umask"
+  fi
+  chown root:root "$DB_SECRET_KEY" 2>/dev/null || true
+  chmod 600 "$DB_SECRET_KEY" || return 1
+
+  if [[ ! -f "$DB_SECRET_STORE" ]]; then
+    : > "$DB_SECRET_STORE" || return 1
+  fi
+  chown root:root "$DB_SECRET_STORE" 2>/dev/null || true
+  chmod 600 "$DB_SECRET_STORE" || return 1
+}
+
+_db_secret_encrypt() {
+  _db_secret_init || return 1
+  printf '%s' "$1" | openssl enc -aes-256-cbc -pbkdf2 -salt -a -A -pass "file:${DB_SECRET_KEY}"
+}
+
+_db_secret_decrypt() {
+  _db_secret_init || return 1
+  printf '%s' "$1" | openssl enc -d -aes-256-cbc -pbkdf2 -a -A -pass "file:${DB_SECRET_KEY}" 2>/dev/null
+}
+
+_db_secret_put() {
+  local site="$1" db_name="$2" db_user="$3" db_pass="$4"
+  [[ -n "$site" && -n "$db_name" && -n "$db_user" && -n "$db_pass" ]] || return 1
+  local cipher tmp
+  cipher=$(_db_secret_encrypt "$db_pass") || return 1
+  tmp=$(mktemp) || return 1
+  awk -F '\t' -v s="$site" -v d="$db_name" -v u="$db_user" \
+    'BEGIN { OFS = FS } !($1 == s && $2 == d && $3 == u) { print }' \
+    "$DB_SECRET_STORE" > "$tmp" || { rm -f "$tmp"; return 1; }
+  printf '%s\t%s\t%s\t%s\n' "$site" "$db_name" "$db_user" "$cipher" >> "$tmp"
+  chown root:root "$tmp" 2>/dev/null || true
+  chmod 600 "$tmp" || { rm -f "$tmp"; return 1; }
+  mv "$tmp" "$DB_SECRET_STORE"
+}
+
+_db_secret_get() {
+  local site="$1" db_name="$2" db_user="$3" cipher=""
+  _db_secret_init || return 1
+  cipher=$(awk -F '\t' -v s="$site" -v d="$db_name" -v u="$db_user" \
+    '$1 == s && $2 == d && $3 == u { print $4; exit }' "$DB_SECRET_STORE")
+  [[ -n "$cipher" ]] || return 1
+  _db_secret_decrypt "$cipher"
+}
+
+_db_secret_delete_db() {
+  local site="$1" db_name="$2" tmp
+  _db_secret_init || return 0
+  tmp=$(mktemp) || return 0
+  awk -F '\t' -v s="$site" -v d="$db_name" \
+    'BEGIN { OFS = FS } !($1 == s && $2 == d) { print }' \
+    "$DB_SECRET_STORE" > "$tmp" || { rm -f "$tmp"; return 0; }
+  chown root:root "$tmp" 2>/dev/null || true
+  chmod 600 "$tmp" 2>/dev/null || true
+  mv "$tmp" "$DB_SECRET_STORE" 2>/dev/null || true
+}
+
+_db_secret_delete_user() {
+  local site="$1" db_user="$2" tmp
+  _db_secret_init || return 0
+  tmp=$(mktemp) || return 0
+  awk -F '\t' -v s="$site" -v u="$db_user" \
+    'BEGIN { OFS = FS } !($1 == s && $3 == u) { print }' \
+    "$DB_SECRET_STORE" > "$tmp" || { rm -f "$tmp"; return 0; }
+  chown root:root "$tmp" 2>/dev/null || true
+  chmod 600 "$tmp" 2>/dev/null || true
+  mv "$tmp" "$DB_SECRET_STORE" 2>/dev/null || true
+}
+
+_db_user_grant_dbs() {
+  local db_user="$1"
+  _mysql_exec "SELECT Db FROM mysql.db WHERE User = '$(_sql_escape_literal "$db_user")' AND Host = 'localhost';" 2>/dev/null \
+    | awk 'NR > 1 && NF { print $1 }'
+}
+
+_db_wp_config_value() {
+  local file="$1" key="$2"
+  grep -E "define\([[:space:]]*['\"]${key}['\"]" "$file" 2>/dev/null \
+    | head -1 \
+    | sed -E "s/.*define\([[:space:]]*['\"]${key}['\"][[:space:]]*,[[:space:]]*['\"]([^'\"]*)['\"].*/\1/"
+}
+
+_db_secret_backfill_wp() {
+  local site="$1" db_name="$2" db_user="$3"
+  local conf="${NGINX_CONF_DIR}/${site}.conf"
+  [[ -f "$conf" ]] || return 1
+  local webroot; webroot=$(_vhost_webroot "$conf")
+  local wp_config="${webroot}/wp-config.php"
+  [[ -f "$wp_config" ]] || return 1
+  local wp_db wp_user wp_pass
+  wp_db=$(_db_wp_config_value "$wp_config" "DB_NAME")
+  wp_user=$(_db_wp_config_value "$wp_config" "DB_USER")
+  wp_pass=$(_db_wp_config_value "$wp_config" "DB_PASSWORD")
+  [[ "$wp_db" == "$db_name" && "$wp_user" == "$db_user" && -n "$wp_pass" ]] || return 1
+  _db_secret_put "$site" "$db_name" "$db_user" "$wp_pass" || return 1
+  printf '%s' "$wp_pass"
+}
+
 # Provision / deprovision a MySQL database + user. Shared by db:add and WordPress
 # provisioning so both go through one code path.
 _db_provision() {
@@ -2805,6 +2925,10 @@ _db_add() {
   log "Creating database: ${db_name} (user: ${db_user}, ${perm})..."
 
   _db_provision "$db_name" "$db_user" "$db_pass" "$perm"
+  if [[ -n "$site" ]]; then
+    _db_secret_put "$site" "$db_name" "$db_user" "$db_pass" \
+      || warn "Could not store encrypted phpMyAdmin credential; reset the user password before using Manage."
+  fi
 
   ok "Database created: ${db_name}"
   echo ""
@@ -2837,6 +2961,7 @@ _db_delete() {
   [[ "$force" == "true" ]] || _confirm "Delete database '${db_name}' and its user '${db_user}'?" || { log "Cancelled."; return 0; }
 
   _db_deprovision "$db_name" "$db_user"
+  [[ -n "$site" ]] && _db_secret_delete_db "$site" "$db_name"
   ok "Database deleted: ${db_name} (user: ${db_user})"
 }
 
@@ -2974,6 +3099,8 @@ _db_user_add() {
   _mysql_exec "ALTER USER '${db_user}'@'localhost' IDENTIFIED BY '${db_pass_sql}';" || die "Could not set the user password."
   _db_grant "$db_name" "$db_user" "$perm" || die "Could not grant privileges on ${db_name}."
   _mysql_exec "FLUSH PRIVILEGES;"
+  _db_secret_put "$site" "$db_name" "$db_user" "$db_pass" \
+    || warn "Could not store encrypted phpMyAdmin credential; reset the user password before using Manage."
 
   ok "Database user created: ${db_user}"
   echo ""
@@ -3031,6 +3158,12 @@ _db_user_edit() {
     local p_sql; p_sql=$(_sql_escape_literal "$new_pass")
     _mysql_exec "ALTER USER '${db_user}'@'localhost' IDENTIFIED BY '${p_sql}';" || die "Could not set the new password."
     did=1
+    local grant_db
+    while IFS= read -r grant_db; do
+      [[ -n "$grant_db" ]] || continue
+      _db_secret_put "$site" "$grant_db" "$db_user" "$new_pass" \
+        || warn "Could not store encrypted phpMyAdmin credential for ${db_user} on ${grant_db}."
+    done <<< "$(_db_user_grant_dbs "$db_user")"
 
     if [[ -n "$wp_config" ]]; then
       if [[ -w "$wp_config" ]]; then
@@ -3075,7 +3208,172 @@ _db_user_delete() {
 
   _mysql_exec "DROP USER IF EXISTS '${db_user}'@'localhost';" || die "Could not delete user ${db_user}."
   _mysql_exec "FLUSH PRIVILEGES;"
+  _db_secret_delete_user "$site" "$db_user"
   ok "Database user deleted: ${db_user}"
+}
+
+_db_pma_credentials() {
+  _require_root "db:pma-credentials"
+  _parse_opts "$@"
+  local site;    site=$(_opt "site");    _require_arg "site" "$site" "db:pma-credentials --site example.com --user <user> --db <database>"
+  local db_user; db_user=$(_opt "user"); _require_arg "user" "$db_user" "db:pma-credentials --user <user>"
+  local db_name; db_name=$(_opt "db");   _require_arg "db" "$db_name" "db:pma-credentials --db <database>"
+
+  [[ "$db_user" =~ ^[a-zA-Z0-9_]+$ ]] || die "Database user must contain only letters, numbers, underscores"
+  [[ "$db_name" =~ ^[a-zA-Z0-9_]+$ ]] || die "Database name must contain only letters, numbers, underscores"
+  local prefix; prefix=$(_db_site_prefix "$site")
+  _db_require_prefix "$db_user" "$prefix"
+  _db_require_prefix "$db_name" "$prefix"
+
+  local has_grant
+  has_grant=$(_mysql_exec "SELECT 1 FROM mysql.db WHERE User = '$(_sql_escape_literal "$db_user")' AND Host = 'localhost' AND Db = '$(_sql_escape_literal "$db_name")' LIMIT 1;" 2>/dev/null | awk 'NR>1{print $1}')
+  [[ "$has_grant" == "1" ]] || die "Database user '${db_user}' has no grant on '${db_name}'."
+
+  local db_pass=""
+  db_pass=$(_db_secret_get "$site" "$db_name" "$db_user" 2>/dev/null || true)
+  if [[ -z "$db_pass" ]]; then
+    db_pass=$(_db_secret_backfill_wp "$site" "$db_name" "$db_user" 2>/dev/null || true)
+  fi
+  [[ -n "$db_pass" ]] || die "No stored password for '${db_user}'. Reset the database user password, then open phpMyAdmin again."
+
+  echo "pma_user=${db_user}"
+  echo "pma_db=${db_name}"
+  echo "pma_password=${db_pass}"
+  echo "pma_host=127.0.0.1"
+  echo "pma_port=3306"
+}
+
+_db_pma_write_config() {
+  mkdir -p /etc/aidipanel /var/lib/phpmyadmin/tmp
+  chown www-data:www-data /var/lib/phpmyadmin/tmp
+  chmod 700 /var/lib/phpmyadmin/tmp
+
+  local secret
+  secret=$(openssl rand -hex 16)
+  cat > "${PMA_DIR}/config.inc.php" <<PHP
+<?php
+\$cfg['blowfish_secret'] = '${secret}';
+
+\$i = 0;
+\$i++;
+\$cfg['Servers'][\$i]['auth_type'] = 'signon';
+\$cfg['Servers'][\$i]['SignonSession'] = 'AIDIPANEL_PMA_SIGNON';
+\$cfg['Servers'][\$i]['SignonURL'] = '/sites';
+\$cfg['Servers'][\$i]['host'] = '127.0.0.1';
+\$cfg['Servers'][\$i]['compress'] = false;
+\$cfg['Servers'][\$i]['AllowNoPassword'] = false;
+\$cfg['Servers'][\$i]['AllowRoot'] = false;
+\$cfg['Servers'][\$i]['hide_db'] = '^(information_schema|performance_schema)$';
+
+\$cfg['TempDir'] = '/var/lib/phpmyadmin/tmp';
+PHP
+  chown root:www-data "${PMA_DIR}/config.inc.php"
+  chmod 640 "${PMA_DIR}/config.inc.php"
+
+  cat > "$PMA_CONF" <<PMA
+PMA_VERSION=${PMA_VERSION}
+PMA_DIR=${PMA_DIR}
+PMA_URL=${PMA_URL_PATH}
+PMA
+  chmod 644 "$PMA_CONF"
+}
+
+_db_pma_write_nginx() {
+  local fpm_sock; fpm_sock=$(_php_sock "$PHP_DEFAULT_VERSION")
+  [[ -S "$fpm_sock" ]] || die "PHP-FPM socket not found: ${fpm_sock}"
+
+  cat > "$PMA_NGINX_SNIPPET" <<NGINX
+    location = /phpmyadmin {
+        return 302 /phpmyadmin/index.php;
+    }
+
+    location ~ ^/phpmyadmin/(config\\.inc\\.php|setup/|libraries/|templates/|tmp/) {
+        deny all;
+    }
+
+    location ~ ^/phpmyadmin/(.+\\.php)$ {
+        alias ${PMA_DIR}/\$1;
+        fastcgi_pass unix:${fpm_sock};
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME ${PMA_DIR}/\$1;
+        include fastcgi_params;
+        fastcgi_read_timeout 300;
+    }
+
+    location /phpmyadmin/ {
+        alias ${PMA_DIR}/;
+        index index.php;
+    }
+NGINX
+  chmod 644 "$PMA_NGINX_SNIPPET"
+}
+
+_db_pma_wire_panel_vhost() {
+  local vhost="/etc/nginx/sites-available/aidipanel-ui.conf"
+  [[ -f "$vhost" ]] || die "Panel vhost not found: ${vhost}"
+
+  if ! grep -Fq "$PMA_NGINX_SNIPPET" "$vhost"; then
+    local tmp include_line
+    tmp=$(mktemp)
+    include_line="    include ${PMA_NGINX_SNIPPET};"
+    if ! awk -v inc="$include_line" '
+      !done && $0 ~ /^[[:space:]]*location[[:space:]]+\/[[:space:]]*\{/ {
+        print inc;
+        print "";
+        done=1;
+      }
+      { print }
+      END { if (!done) exit 42 }
+    ' "$vhost" > "$tmp"; then
+      rm -f "$tmp"
+      die "Could not insert phpMyAdmin location into panel vhost."
+    fi
+    cp -- "$vhost" "${vhost}.aidipanel-bak"
+    cp -- "$tmp" "$vhost"
+    rm -f "$tmp"
+  fi
+}
+
+_db_pma_install() {
+  _require_root "db:pma-install"
+  _parse_opts "$@"
+
+  local archive="/tmp/phpMyAdmin-${PMA_VERSION}-all-languages.tar.gz"
+  local extracted="/tmp/phpMyAdmin-${PMA_VERSION}-all-languages"
+  local url="https://files.phpmyadmin.net/phpMyAdmin/${PMA_VERSION}/phpMyAdmin-${PMA_VERSION}-all-languages.tar.gz"
+
+  _progress 10 preflight "Checking phpMyAdmin"
+  if [[ ! -f "${PMA_DIR}/index.php" ]]; then
+    _progress 25 download "Downloading phpMyAdmin ${PMA_VERSION}"
+    log "Downloading phpMyAdmin ${PMA_VERSION}..."
+    curl -fsSL "$url" -o "$archive" || die "Could not download phpMyAdmin ${PMA_VERSION}."
+    _progress 45 extract "Extracting phpMyAdmin"
+    rm -rf "$extracted" "${PMA_DIR}.new"
+    tar -xzf "$archive" -C /tmp || die "Could not extract phpMyAdmin archive."
+    mv "$extracted" "${PMA_DIR}.new"
+    rm -rf "$PMA_DIR"
+    mv "${PMA_DIR}.new" "$PMA_DIR"
+    _progress 60 permissions "Securing phpMyAdmin files"
+    chown -R root:root "$PMA_DIR"
+    find "$PMA_DIR" -type d -exec chmod 755 {} \;
+    find "$PMA_DIR" -type f -exec chmod 644 {} \;
+    rm -rf "${PMA_DIR}/setup"
+  fi
+
+  _progress 70 config "Writing phpMyAdmin signon config"
+  _db_pma_write_config
+  _progress 80 nginx "Writing nginx configuration"
+  _db_pma_write_nginx
+  _db_pma_wire_panel_vhost
+
+  _progress 90 reload "Testing and reloading nginx"
+  nginx -t >> "$CLI_LOG" 2>&1 || die "Nginx rejected the phpMyAdmin configuration. Check: ${CLI_LOG}"
+  systemctl reload nginx >> "$CLI_LOG" 2>&1 || die "Could not reload nginx."
+
+  ok "phpMyAdmin installed: ${PMA_URL_PATH}"
+  echo "pma_url=${PMA_URL_PATH}"
+  echo "pma_version=${PMA_VERSION}"
+  _progress 100 "done" "Done"
 }
 
 # ===========================================================================
@@ -4121,6 +4419,8 @@ main() {
     db:user-add)    _db_user_add "$@" ;;
     db:user-edit)   _db_user_edit "$@" ;;
     db:user-delete) _db_user_delete "$@" ;;
+    db:pma-credentials) _db_pma_credentials "$@" ;;
+    db:pma-install) _db_pma_install "$@" ;;
     db:backup)      _db_backup "$@" ;;
 
     # PHP

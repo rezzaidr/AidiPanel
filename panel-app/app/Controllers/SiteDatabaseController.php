@@ -12,6 +12,8 @@ namespace Controllers;
  */
 class SiteDatabaseController extends BaseController
 {
+    private const PMA_SIGNON_SESSION = 'AIDIPANEL_PMA_SIGNON';
+
     /** Create a database, optionally with a matching user (Add Database modal). */
     public function addDatabase(array $params = []): void
     {
@@ -140,6 +142,61 @@ class SiteDatabaseController extends BaseController
         $this->success("Database user '{$user}' updated.", $this->tab($domain));
     }
 
+    /** Install phpMyAdmin globally, then expose it in this site's Database tab. */
+    public function installPhpMyAdmin(array $params = []): void
+    {
+        $domain = (string) ($params['domain'] ?? '');
+        $this->requireSite($domain);
+
+        if ($this->request->post('stream') === '1') {
+            $this->streamCli('db:pma-install', [], function (array $result) use ($domain): array {
+                \Core\DB::log('db:pma-install', "Installed phpMyAdmin from {$domain}");
+                return [
+                    'redirect' => $this->tab($domain),
+                    'message'  => 'phpMyAdmin installed.',
+                ];
+            });
+        }
+
+        $this->unlockForLongOp();
+        $result = run_cli('db:pma-install', []);
+        if (!$result['success']) {
+            $this->error('Could not install phpMyAdmin: ' . $result['output'], $this->tab($domain));
+        }
+
+        \Core\DB::log('db:pma-install', "Installed phpMyAdmin from {$domain}");
+        $this->success('phpMyAdmin installed.', $this->tab($domain));
+    }
+
+    /** Create a phpMyAdmin signon session for one site-scoped DB user, then redirect. */
+    public function openPhpMyAdmin(array $params = []): void
+    {
+        $domain = (string) ($params['domain'] ?? '');
+        $this->requireSite($domain);
+
+        $user = $this->cleanName((string) $this->request->post('user', ''));
+        $db   = $this->cleanName((string) $this->request->post('database', ''));
+        if ($user === '' || $db === '') {
+            $this->error('Database user and database are required.', $this->tab($domain));
+        }
+
+        $result = run_cli('db:pma-credentials', ['--site', $domain, '--user', $user, '--db', $db]);
+        if (!$result['success']) {
+            $this->error('Could not open phpMyAdmin: ' . $result['output'], $this->tab($domain));
+        }
+
+        $cred = $this->parseKeyValues($result['output']);
+        foreach (['pma_user', 'pma_password', 'pma_db', 'pma_host', 'pma_port'] as $key) {
+            if (($cred[$key] ?? '') === '') {
+                $this->error('Could not open phpMyAdmin: incomplete signon credential.', $this->tab($domain));
+            }
+        }
+
+        $this->writePhpMyAdminSignonSession($cred);
+        \Core\DB::log('db:pma-open', "Opened phpMyAdmin for {$cred['pma_user']} on {$cred['pma_db']} from {$domain}");
+        $this->redirect('/phpmyadmin/index.php?db=' . rawurlencode($cred['pma_db']));
+    }
+
     /** Delete a database (type-to-confirm). */
     public function deleteDatabase(array $params = []): void
     {
@@ -222,6 +279,44 @@ class SiteDatabaseController extends BaseController
                 'pass'     => $m[1],
             ]));
         }
+    }
+
+    private function parseKeyValues(string $output): array
+    {
+        $out = [];
+        foreach (preg_split('/\R/', trim($output)) ?: [] as $line) {
+            if (preg_match('/^([a-z_]+)=(.*)$/', trim($line), $m)) {
+                $out[$m[1]] = $m[2];
+            }
+        }
+        return $out;
+    }
+
+    private function writePhpMyAdminSignonSession(array $cred): void
+    {
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            @session_write_close();
+        }
+
+        $secure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+            || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https')
+            || (($_SERVER['SERVER_PORT'] ?? '') === '8443');
+
+        session_name(self::PMA_SIGNON_SESSION);
+        session_set_cookie_params([
+            'lifetime' => 0,
+            'path'     => '/',
+            'secure'   => $secure,
+            'httponly' => true,
+            'samesite' => 'Lax',
+        ]);
+        @session_start();
+        $_SESSION['PMA_single_signon_user'] = (string) $cred['pma_user'];
+        $_SESSION['PMA_single_signon_password'] = (string) $cred['pma_password'];
+        $_SESSION['PMA_single_signon_host'] = (string) $cred['pma_host'];
+        $_SESSION['PMA_single_signon_port'] = (string) $cred['pma_port'];
+        $_SESSION['PMA_single_signon_HMAC_secret'] = bin2hex(random_bytes(32));
+        @session_write_close();
     }
 
     private function requireSite(string $domain): void

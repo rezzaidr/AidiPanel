@@ -225,7 +225,7 @@ function web_cli_allowed_commands(): array
         'cache:page', 'cache:redis', 'cache:zone',
         'cache:status', 'cache:purge', 'cache:enable', 'cache:disable',
         'cache:config', 'cache:redis-enable', 'cache:redis-disable', 'cache:redis-flush', 'cache:opcache-restart',
-        'db:add', 'db:delete', 'db:list', 'db:users', 'db:user-add', 'db:user-edit', 'db:user-delete', 'db:backup',
+        'db:add', 'db:delete', 'db:list', 'db:users', 'db:user-add', 'db:user-edit', 'db:user-delete', 'db:pma-install', 'db:pma-credentials', 'db:backup',
         'php:list', 'php:version', 'php:restart', 'php:install',
         'ssl:install', 'ssl:renew', 'ssl:status', 'ssl:import',
         'ssl:force-https', 'ssl:hsts', 'ssl:autorenew', 'ssl:check', 'ssl:use',

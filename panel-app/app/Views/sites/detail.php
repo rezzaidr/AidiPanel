@@ -1594,6 +1594,7 @@ $tabs = [
   $databases = $databases ?? [];
   $dbUsers   = $dbUsers ?? [];
   $dbPrefix  = $dbPrefix ?? '';
+  $pmaInstalled = !empty($pmaInstalled);
   $creds     = flash('db_credentials');
   $creds     = $creds ? json_decode($creds, true) : null;
   // "<prefix>wp" is reserved for the auto-provisioned WordPress database, so the
@@ -1630,11 +1631,13 @@ $tabs = [
 
     <?php if (!empty($wpDbInfo)): ?>
     <!-- WordPress detection -->
-    <div class="flex items-start gap-2.5 bg-ink-pale border border-ink/15 rounded-lg px-4 py-3 mb-5">
-      <i class="ti ti-brand-wordpress text-ink mt-0.5 shrink-0"></i>
-      <div class="text-xs leading-relaxed min-w-0">
-        <p class="font-semibold text-zinc-700"><?= e(t('site.database.wp_detected')) ?></p>
-        <p class="text-zinc-500 mono break-all"><?= e(t('site.database.f.database')) ?>: <?= e($wpDbInfo['db']) ?> · <?= e(t('site.database.f.user')) ?>: <?= e($wpDbInfo['user']) ?> · <?= e(t('site.database.wp_prefix')) ?>: <?= e($wpDbInfo['prefix']) ?></p>
+    <div class="bg-ink-pale border border-ink/15 rounded-lg px-5 py-3 mb-5">
+      <div class="flex items-center gap-2.5">
+        <i class="ti ti-brand-wordpress text-ink text-lg shrink-0"></i>
+        <div class="min-w-0">
+          <h2 class="card-title"><?= e(t('site.database.wp_detected')) ?></h2>
+          <p class="text-[11px] text-zinc-500 mono break-all mt-0.5"><?= e(t('site.database.f.database')) ?>: <?= e($wpDbInfo['db']) ?> · <?= e(t('site.database.f.user')) ?>: <?= e($wpDbInfo['user']) ?> · <?= e(t('site.database.wp_prefix')) ?>: <?= e($wpDbInfo['prefix']) ?></p>
+        </div>
       </div>
     </div>
     <?php endif; ?>
@@ -1642,9 +1645,12 @@ $tabs = [
     <!-- Databases -->
     <div class="card mb-5">
       <div class="card-head">
-        <div>
-          <h2 class="card-title"><i class="ti ti-database text-zinc-400"></i> <?= e(t('site.database.databases')) ?></h2>
-          <p class="text-[11px] text-zinc-400 mt-0.5"><?= e(t('site.database.host_meta', ['host' => $dbHost, 'port' => $dbPort])) ?></p>
+        <div class="flex items-center gap-2.5">
+          <i class="ti ti-database text-zinc-400 text-lg"></i>
+          <div>
+            <h2 class="card-title"><?= e(t('site.database.databases')) ?></h2>
+            <p class="text-[11px] text-zinc-400 mt-0.5"><?= e(t('site.database.host_meta', ['host' => $dbHost, 'port' => $dbPort])) ?></p>
+          </div>
         </div>
         <button type="button" @click="modal='addDb'; createUser=true" class="btn btn-primary btn-sm">
           <i class="ti ti-plus text-sm"></i> <?= e(t('site.database.add_db')) ?>
@@ -1657,7 +1663,14 @@ $tabs = [
         <p class="text-xs text-zinc-400 mt-1"><?= e(t('site.database.empty_db_hint')) ?></p>
       </div>
       <?php else: ?>
-      <table class="tbl">
+      <table class="tbl table-fixed" data-db-table-grid="databases">
+        <colgroup>
+          <col style="width:24%">
+          <col style="width:20%">
+          <col style="width:16%">
+          <col style="width:20%">
+          <col style="width:20%">
+        </colgroup>
         <thead>
           <tr>
             <th class="pl-5"><?= e(t('site.database.f.database')) ?></th>
@@ -1707,12 +1720,19 @@ $tabs = [
         <p class="text-xs text-zinc-400 mt-1"><?= e(t('site.database.empty_user_hint')) ?></p>
       </div>
       <?php else: ?>
-      <table class="tbl">
+      <table class="tbl table-fixed" data-db-table-grid="users">
+        <colgroup>
+          <col style="width:24%">
+          <col style="width:20%">
+          <col style="width:16%">
+          <col style="width:20%">
+          <col style="width:20%">
+        </colgroup>
         <thead>
           <tr>
             <th class="pl-5"><?= e(t('site.database.f.user')) ?></th>
             <th><?= e(t('site.database.f.database')) ?></th>
-            <?php if (!empty($pmaUrl)): ?><th><?= e(t('site.database.f.manage')) ?></th><?php endif; ?>
+            <th><?= e(t('site.database.pma')) ?></th>
             <th><?= e(t('site.database.f.permissions')) ?></th>
             <th class="pr-5 text-center" style="text-align:center"><?= e(t('site.database.f.action')) ?></th>
           </tr>
@@ -1723,15 +1743,33 @@ $tabs = [
           <tr>
             <td class="pl-5 font-medium text-zinc-900 mono break-all"><?= e($u['user'] ?? '') ?></td>
             <td class="text-zinc-700 mono break-all"><?= e($u['database'] ?? '') ?></td>
-            <?php if (!empty($pmaUrl)): ?>
-            <td><a href="<?= e($pmaUrl) ?>" target="_blank" rel="noopener" class="text-ink hover:underline text-sm"><i class="ti ti-external-link text-xs"></i> phpMyAdmin</a></td>
-            <?php endif; ?>
+            <td>
+              <?php if ($pmaInstalled && !empty($pmaUrl)): ?>
+              <form method="POST" action="/sites/<?= e($domain) ?>/database/phpmyadmin/open" target="_blank" class="inline">
+                <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+                <input type="hidden" name="user" value="<?= e($u['user'] ?? '') ?>">
+                <input type="hidden" name="database" value="<?= e($u['database'] ?? '') ?>">
+                <button type="submit" class="text-ink hover:underline text-sm"><i class="ti ti-external-link text-xs"></i> <?= e(t('site.database.pma_manage')) ?></button>
+              </form>
+              <?php else: ?>
+              <span class="badge badge-muted"><?= e(t('site.database.pma_not_installed')) ?></span>
+              <?php endif; ?>
+            </td>
             <td><span class="badge <?= $rw ? 'badge-ok' : 'badge-muted' ?>"><?= e($rw ? t('site.database.perm.rw') : t('site.database.perm.ro')) ?></span></td>
             <td class="text-center">
               <div class="relative inline-block text-left" x-data="{ row:false }" @click.outside="row=false">
                 <button type="button" @click="row=!row" class="w-8 h-8 rounded-lg hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700"><i class="ti ti-dots-vertical"></i></button>
                 <div x-show="row" x-cloak x-transition.opacity class="absolute right-0 mt-1 w-48 bg-white border border-zinc-200 rounded-lg shadow-lg py-1 z-30 text-left">
-                  <?php if (!empty($pmaUrl)): ?><a href="<?= e($pmaUrl) ?>" target="_blank" rel="noopener" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-external-link text-sm text-zinc-400"></i> <?= e(t('site.database.open_pma')) ?></a><?php endif; ?>
+                  <?php if ($pmaInstalled && !empty($pmaUrl)): ?>
+                  <form method="POST" action="/sites/<?= e($domain) ?>/database/phpmyadmin/open" target="_blank">
+                    <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+                    <input type="hidden" name="user" value="<?= e($u['user'] ?? '') ?>">
+                    <input type="hidden" name="database" value="<?= e($u['database'] ?? '') ?>">
+                    <button type="submit" @click="row=false" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-external-link text-sm text-zinc-400"></i> <?= e(t('site.database.open_pma')) ?></button>
+                  </form>
+                  <?php else: ?>
+                  <button type="button" @click="row=false; modal='installPma'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-download text-sm text-zinc-400"></i> <?= e(t('site.database.pma_install')) ?></button>
+                  <?php endif; ?>
                   <button type="button" @click="row=false; editName='<?= e($u['user'] ?? '') ?>'; editDb='<?= e($u['database'] ?? '') ?>'; editPerm='<?= e($u['permission'] ?? 'rw') ?>'; editRegen=false; modal='editUser'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-edit text-sm text-zinc-400"></i> <?= e(t('site.database.edit_user')) ?></button>
                   <button type="button" @click="row=false; delName='<?= e($u['user'] ?? '') ?>'; delKind='user'; typed=''; modal='delUser'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 text-left"><i class="ti ti-trash text-sm"></i> <?= e(t('site.database.delete_user')) ?></button>
                 </div>
@@ -1742,6 +1780,28 @@ $tabs = [
         </tbody>
       </table>
       <?php endif; ?>
+    </div>
+
+    <!-- Modal: Install phpMyAdmin -->
+    <div x-show="modal==='installPma'" x-cloak class="fixed inset-0 z-50">
+      <div class="absolute inset-0 bg-zinc-900/40" @click="modal=null"></div>
+      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl" @keydown.escape.window="modal=null">
+        <div class="card-head flex items-center justify-between">
+          <h3 class="card-title"><i class="ti ti-brand-mysql text-zinc-400"></i> <?= e(t('site.database.pma_install')) ?></h3>
+          <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
+        </div>
+        <form method="POST" action="/sites/<?= e($domain) ?>/database/phpmyadmin/install" data-op-stream class="p-5 space-y-3">
+          <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+          <div data-op-fields class="space-y-3">
+            <p class="text-sm text-zinc-600"><?= e(t('site.database.pma_install_hint')) ?></p>
+            <div class="flex justify-end gap-2 pt-1">
+              <button type="button" @click="modal=null" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
+              <button type="submit" class="btn btn-primary"><i class="ti ti-download text-sm"></i> <?= e(t('site.database.pma_install')) ?></button>
+            </div>
+          </div>
+          <?php include APP_ROOT . '/Views/partials/op-progress.php'; ?>
+        </form>
+      </div>
     </div>
 
     <!-- Modal: Add Database -->

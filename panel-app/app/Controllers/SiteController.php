@@ -308,14 +308,15 @@ class SiteController extends BaseController
         }
 
         // Database tab data (scoped to this site by its name prefix).
-        $databases = []; $dbUsers = []; $dbPrefix = ''; $pmaUrl = null; $wpDbInfo = null;
+        $databases = []; $dbUsers = []; $dbPrefix = ''; $pmaUrl = null; $wpDbInfo = null; $pmaInstalled = false;
         $dbHost = '127.0.0.1'; $dbPort = 3306;
         if ($activeTab === 'database') {
             $siteUser  = trim((string) ($site['site_user'] ?? ''));
             $dbPrefix  = $siteUser !== '' ? str_replace('-', '_', $siteUser) . '_' : '';
             $databases = $this->decodeCliJson(run_cli('db:list',  ['--site', $domain, '--json']));
             $dbUsers   = $this->decodeCliJson(run_cli('db:users', ['--site', $domain, '--json']));
-            $pmaUrl    = defined('PMA_URL') ? PMA_URL : null;   // set once phpMyAdmin (Phase 8) lands
+            $pmaInstalled = is_file('/etc/aidipanel/phpmyadmin.conf') && is_file('/usr/share/phpmyadmin/index.php');
+            $pmaUrl       = $pmaInstalled ? '/phpmyadmin/index.php' : null;
             if ($type === 'wordpress') {
                 $wpDbInfo = $this->readWpConfigDb((string) ($site['webroot'] ?? ''));
             }
@@ -329,7 +330,7 @@ class SiteController extends BaseController
             'logs', 'activeTab', 'diskSize', 'hasCache',
             'pageCacheInfo', 'objectCacheInfo', 'opcacheInfo', 'protocolInfo',
             'cacheConfig', 'lastPurge', 'cacheZoneSize', 'httpsOptions', 'certs',
-            'databases', 'dbUsers', 'dbHost', 'dbPort', 'dbPrefix', 'pmaUrl', 'wpDbInfo'
+            'databases', 'dbUsers', 'dbHost', 'dbPort', 'dbPrefix', 'pmaInstalled', 'pmaUrl', 'wpDbInfo'
         ) + ['_full_bleed' => true]);
     }
 
