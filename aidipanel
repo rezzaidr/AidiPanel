@@ -281,6 +281,13 @@ POOL
     return 1
   fi
   systemctl reload "php${ver}-fpm" >> "$CLI_LOG" 2>&1 || systemctl restart "php${ver}-fpm" >> "$CLI_LOG" 2>&1
+  local i
+  for i in {1..30}; do
+    [[ -S "$sock" ]] && return 0
+    sleep 0.2
+  done
+  warn "PHP-FPM socket did not become ready for pool ${user} (php${ver}). Check: ${CLI_LOG}"
+  return 1
 }
 
 # Remove a per-site pool and reload that version's service.

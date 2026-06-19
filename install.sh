@@ -857,10 +857,18 @@ PHPCONF
 # ---------------------------------------------------------------------------
 # 10. DATABASE
 # ---------------------------------------------------------------------------
+_db_repo_component() {
+  case "$DB_ENGINE" in
+    mysql80) echo "mysql-8.0" ;;
+    mysql84) echo "mysql-8.4-lts" ;;
+    *)       echo "" ;;
+  esac
+}
+
 _db_package_name() {
   case "$DB_ENGINE" in
-    mysql80|mysql84)   echo "mysql-server" ;;
-    mariadb*)          echo "mariadb-server" ;;
+    mysql80|mysql84) echo "mysql-community-server" ;;
+    mariadb*)        echo "mariadb-server" ;;
   esac
 }
 
@@ -871,6 +879,13 @@ _db_service_name() {
   esac
 }
 
+_db_client_binary() {
+  case "$DB_ENGINE" in
+    mysql80|mysql84) echo "mysql" ;;
+    mariadb*)        echo "mariadb" ;;
+  esac
+}
+
 _add_mysql_repo() {
   [[ "$DB_ENGINE" == mysql80 || "$DB_ENGINE" == mysql84 ]] || return 0
   if [[ -f /etc/apt/sources.list.d/mysql.list ]]; then
@@ -878,9 +893,11 @@ _add_mysql_repo() {
     return 0
   fi
 
-  local mysql_version
+  local mysql_version mysql_component
   [[ "$DB_ENGINE" == "mysql80" ]] && mysql_version="8.0" || mysql_version="8.4"
-  log "Adding MySQL ${mysql_version} apt repository..."
+  mysql_component=$(_db_repo_component)
+  [[ -n "$mysql_component" ]] || die "Unsupported MySQL engine: ${DB_ENGINE}"
+  log "Adding MySQL ${mysql_version} apt repository (${mysql_component})..."
   [[ "$DRY_RUN" == "true" ]] && return 0
 
   local apt_arch; apt_arch=$(_apt_arch)
@@ -903,7 +920,7 @@ _add_mysql_repo() {
   chmod 644 /etc/apt/trusted.gpg.d/mysql.gpg
 
   cat > /etc/apt/sources.list.d/mysql.list <<MYSQL_REPO
-deb [arch=${apt_arch} signed-by=/etc/apt/trusted.gpg.d/mysql.gpg] http://repo.mysql.com/apt/${OS_ID} ${OS_CODENAME} mysql-${mysql_version}
+deb [arch=${apt_arch} signed-by=/etc/apt/trusted.gpg.d/mysql.gpg] http://repo.mysql.com/apt/${OS_ID} ${OS_CODENAME} ${mysql_component}
 MYSQL_REPO
 
   _apt_update
@@ -934,6 +951,43 @@ _add_mariadb_repo() {
   ok "MariaDB ${mariadb_version} repo added"
 }
 
+_ensure_db_root_pass() {
+  if [[ -z "$DB_ROOT_PASS" ]]; then
+    DB_ROOT_PASS=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24)
+    log "Generated DB root password"
+  fi
+  return 0
+}
+
+_preseed_mysql_root_password() {
+  [[ "$DB_ENGINE" == mysql* ]] || return 0
+  debconf-set-selections <<< "mysql-community-server mysql-community-server/root-pass password ${DB_ROOT_PASS}"
+  debconf-set-selections <<< "mysql-community-server mysql-community-server/re-root-pass password ${DB_ROOT_PASS}"
+  debconf-set-selections <<< "mysql-server mysql-server/root_password password ${DB_ROOT_PASS}"
+  debconf-set-selections <<< "mysql-server mysql-server/root_password_again password ${DB_ROOT_PASS}"
+  return 0
+}
+
+_assert_db_package_candidate() {
+  [[ "$DB_ENGINE" == mysql* ]] || return 0
+
+  local pkg="$1" expected_major candidate
+  case "$DB_ENGINE" in
+    mysql80) expected_major="8.0." ;;
+    mysql84) expected_major="8.4." ;;
+    *) die "Unsupported MySQL engine: ${DB_ENGINE}" ;;
+  esac
+
+  candidate=$(apt-cache policy "$pkg" | awk '/Candidate:/ {candidate=$2} END {print candidate}')
+  [[ -n "$candidate" && "$candidate" != "(none)" ]] \
+    || die "No install candidate found for ${pkg}. Check the MySQL APT repository component."
+
+  [[ "$candidate" == ${expected_major}* ]] \
+    || die "${DB_ENGINE_LABELS[$DB_ENGINE]} package candidate is ${candidate}, expected ${expected_major}x from Oracle."
+
+  return 0
+}
+
 _install_database() {
   local pkg; pkg=$(_db_package_name)
   local svc; svc=$(_db_service_name)
@@ -943,11 +997,10 @@ _install_database() {
     return 0
   fi
 
+  _assert_db_package_candidate "$pkg"
+
   log "Installing ${DB_ENGINE_LABELS[$DB_ENGINE]}..."
-  if [[ "$DB_ENGINE" == mysql* && -n "$DB_ROOT_PASS" ]]; then
-    debconf-set-selections <<< "mysql-server mysql-server/root_password password ${DB_ROOT_PASS}"
-    debconf-set-selections <<< "mysql-server mysql-server/root_password_again password ${DB_ROOT_PASS}"
-  fi
+  _preseed_mysql_root_password
 
   _apt_install "$pkg"
   run systemctl enable --now "$svc"
@@ -958,23 +1011,22 @@ _configure_database() {
   log "Securing database installation..."
   [[ "$DRY_RUN" == "true" ]] && return 0
 
-  if [[ -z "$DB_ROOT_PASS" ]]; then
-    DB_ROOT_PASS=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24)
-    log "Generated DB root password"
-  fi
+  [[ -n "$DB_ROOT_PASS" ]] || die "Database root password was not initialized."
 
-  # Use arrays so bash splits args correctly (string variable = "command not found" bug)
-  local -a db_cmd_root db_cmd_auth
+  # Use arrays so bash splits args correctly (string variable = "command not found" bug).
+  # MariaDB starts with socket-auth root access; MySQL has already been preseeded
+  # with DB_ROOT_PASS, so password auth must be used from the first SQL statement.
+  local -a db_cmd_bootstrap db_cmd_auth
   if [[ "$DB_ENGINE" == mariadb* ]]; then
-    db_cmd_root=(mariadb -u root)
+    db_cmd_bootstrap=(mariadb -u root)
     db_cmd_auth=(mariadb -u root "-p${DB_ROOT_PASS}")
   else
-    db_cmd_root=(mysql -u root)
+    db_cmd_bootstrap=(mysql -u root "-p${DB_ROOT_PASS}")
     db_cmd_auth=(mysql -u root "-p${DB_ROOT_PASS}")
   fi
 
   # Secure the installation
-  "${db_cmd_root[@]}" 2>>"$PANEL_LOG" <<MYSQL_SECURE
+  "${db_cmd_bootstrap[@]}" 2>>"$PANEL_LOG" <<MYSQL_SECURE
 ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASS}';
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
@@ -1930,6 +1982,7 @@ main() {
 
   ui_section "Data Layer"; ui_note "Installing database and cache services"; printf '\n'
   t=$SECONDS
+  _ensure_db_root_pass
   _add_mysql_repo
   _add_mariadb_repo
   ui_ok "${DB_ENGINE_LABELS[$DB_ENGINE]%% (*} repository added"
