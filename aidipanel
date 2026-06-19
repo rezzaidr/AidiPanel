@@ -971,11 +971,12 @@ _site_delete() {
     [[ "$yes" == "true" ]] || die "Refusing purge without --yes (no interactive TTY through the web wrapper)."
     _site_purge_guard "$domain" "$site_user" "$expect_user" || die "Purge refused for ${domain} (marker validation failed)."
   elif [[ "$yes" != "true" ]]; then
-    echo -e "${RED}WARNING: removes vhost + PHP-FPM pool for ${domain} (home kept).${RESET}"
+    echo -e "${RED}WARNING: removes vhost + PHP-FPM pool + databases for ${domain} (home kept).${RESET}"
     _confirm "Delete site '${domain}'?" || { log "Cancelled."; return 0; }
   fi
 
   # Teardown (both modes)
+  _db_deprovision_site "$site_user" "$domain"
   rm -f "${NGINX_ENABLED_DIR}/${domain}.conf" "${NGINX_CONF_DIR}/${domain}.conf"
   rm -f "/etc/ssl/aidipanel-self/${domain}.crt" "/etc/ssl/aidipanel-self/${domain}.key"
   # Remove the per-site FPM pool. A site has exactly one pool (named by site_user);
@@ -2829,6 +2830,20 @@ _db_secret_delete_user() {
   mv "$tmp" "$DB_SECRET_STORE" 2>/dev/null || true
 }
 
+# Remove every stored secret belonging to a site (keyed by the site identifier in
+# column 1 — the domain passed as `db:add --site <domain>`). Used by site teardown.
+_db_secret_delete_site() {
+  local site="$1" tmp
+  _db_secret_init || return 0
+  tmp=$(mktemp) || return 0
+  awk -F '\t' -v s="$site" \
+    'BEGIN { OFS = FS } $1 != s { print }' \
+    "$DB_SECRET_STORE" > "$tmp" || { rm -f "$tmp"; return 0; }
+  chown root:root "$tmp" 2>/dev/null || true
+  chmod 600 "$tmp" 2>/dev/null || true
+  mv "$tmp" "$DB_SECRET_STORE" 2>/dev/null || true
+}
+
 _db_user_grant_dbs() {
   local db_user="$1"
   _mysql_exec "SELECT Db FROM mysql.db WHERE User = '$(_sql_escape_literal "$db_user")' AND Host = 'localhost';" 2>/dev/null \
@@ -2858,6 +2873,18 @@ _db_secret_backfill_wp() {
   printf '%s' "$wp_pass"
 }
 
+# Escape SQL LIKE metacharacters so a value matches LITERALLY under `ESCAPE '|'`.
+# A site DB prefix ends in `_`, which LIKE treats as a single-char wildcard; without
+# this, prefix `aa_` (LIKE 'aa_%') would also match another site's `aab_*` databases.
+# Escape the escape char first, then the wildcards.
+_db_like_escape() {
+  local s="$1"
+  s="${s//|/||}"
+  s="${s//%/|%}"
+  s="${s//_/|_}"
+  printf '%s' "$s"
+}
+
 # Provision / deprovision a MySQL database + user. Shared by db:add and WordPress
 # provisioning so both go through one code path.
 _db_provision() {
@@ -2880,6 +2907,51 @@ _db_deprovision() {
   _mysql_exec "DROP DATABASE IF EXISTS \`${db_name}\`;"
   _mysql_exec "DROP USER IF EXISTS '${db_user}'@'localhost';"
   _mysql_exec "FLUSH PRIVILEGES;"
+}
+
+# Drop every MySQL database + @localhost user that belongs to a site (matched by the
+# site's `<site_user>_` prefix), plus the site's stored phpMyAdmin secrets. The prefix
+# is LIKE-escaped (see _db_like_escape) so it can never reach another site's data.
+# Non-fatal: warns and returns 0 so a database error can't block the rest of teardown.
+_db_deprovision_site() {
+  local site_user="$1" domain="$2"
+  [[ -n "$site_user" ]] || { warn "No site user resolved; skipping database cleanup for ${domain:-site}."; return 0; }
+
+  local prefix esc
+  prefix="${site_user//-/_}_"
+  esc=$(_db_like_escape "$prefix")
+
+  local -a dbs users
+  mapfile -t dbs < <(_mysql_exec "SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE '${esc}%' ESCAPE '|' AND schema_name NOT IN ('information_schema','mysql','performance_schema','sys');" 2>/dev/null | awk 'NR>1 && NF { print $1 }')
+  mapfile -t users < <(_mysql_exec "SELECT User FROM mysql.user WHERE User LIKE '${esc}%' ESCAPE '|' AND Host='localhost';" 2>/dev/null | awk 'NR>1 && NF { print $1 }')
+
+  local d u dropped_db=0 dropped_user=0
+  for d in "${dbs[@]}"; do
+    [[ -n "$d" ]] || continue
+    if _mysql_exec "DROP DATABASE IF EXISTS \`${d}\`;"; then
+      dropped_db=$((dropped_db + 1))
+    else
+      warn "Could not drop database ${d}."
+    fi
+  done
+  for u in "${users[@]}"; do
+    [[ -n "$u" ]] || continue
+    if _mysql_exec "DROP USER IF EXISTS '${u}'@'localhost';"; then
+      dropped_user=$((dropped_user + 1))
+    else
+      warn "Could not drop database user ${u}."
+    fi
+  done
+  _mysql_exec "FLUSH PRIVILEGES;" >/dev/null 2>&1 || true
+
+  if [[ -n "$domain" ]]; then
+    _db_secret_delete_site "$domain"
+  fi
+
+  if [[ "$dropped_db" -gt 0 || "$dropped_user" -gt 0 ]]; then
+    ok "Databases removed for ${domain:-$site_user}: ${dropped_db} database(s), ${dropped_user} user(s)."
+  fi
+  return 0
 }
 
 _db_add() {

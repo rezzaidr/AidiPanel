@@ -1227,14 +1227,7 @@ $tabs = [
             <button type="button" @click="open=false" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
           </div>
           <div class="p-5 space-y-3">
-            <p class="text-sm text-zinc-600"><?= e(t('site.set.delete_modal_removes')) ?></p>
-            <ul class="text-xs text-zinc-600 space-y-1 mono">
-              <li>• <?= e(t('site.set.delete_li_vhost')) ?></li>
-              <li>• <?= e(t('site.set.delete_li_pool')) ?></li>
-              <li>• <?= e(t('site.set.delete_li_user', ['user' => $siteUser])) ?></li>
-              <?php if ($webRoot !== ''): ?><li>• <?= e(t('site.set.delete_li_webroot', ['path' => $webRoot])) ?></li><?php endif; ?>
-              <?php if ($siteUser !== ''): ?><li>• <?= e(t('site.set.delete_li_home', ['path' => "/home/{$siteUser}"])) ?></li><?php endif; ?>
-            </ul>
+            <p class="text-sm text-zinc-600"><?= e(t('site.set.delete_modal_warning')) ?></p>
             <label class="lbl"><?= e(t('site.set.delete_modal_type_to_confirm', ['domain' => $domain])) ?></label>
             <input type="text" x-model="typed" class="inp w-full" autocomplete="off" spellcheck="false" placeholder="<?= e($domain) ?>">
             <form method="POST" action="/sites/<?= e($domain) ?>/delete" class="flex justify-end gap-2 pt-1"

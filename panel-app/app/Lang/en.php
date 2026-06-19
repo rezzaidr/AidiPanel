@@ -645,12 +645,7 @@ return [
     'site.set.delete_btn'   => 'Delete {domain}',
     'site.set.delete_confirm'=> 'Delete site {domain}? This will remove all files and cannot be undone.',
     'site.set.delete_modal_title'           => 'Delete {domain} permanently?',
-    'site.set.delete_modal_removes'         => 'This will permanently remove:',
-    'site.set.delete_li_vhost'              => 'Nginx vhost',
-    'site.set.delete_li_pool'               => 'PHP-FPM pool',
-    'site.set.delete_li_user'               => 'Linux user: {user}',
-    'site.set.delete_li_webroot'            => 'Web root: {path}',
-    'site.set.delete_li_home'               => 'Home directory: {path}',
+    'site.set.delete_modal_warning'         => 'Permanently deleting this site wipes all files, databases, users, and configurations. This cannot be undone.',
     'site.set.delete_modal_type_to_confirm' => 'Type {domain} to confirm.',
     'site.set.delete_modal_confirm_btn'     => 'Delete Permanently',
 ];
