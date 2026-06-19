@@ -391,7 +391,11 @@ _usage() {
   echo -e "\n${BOLD}${BLUE}Database Management${RESET}"
   echo "  db:add          Create a new database and user"
   echo "  db:delete       Delete a database and its user (--name; optional --user)"
-  echo "  db:list         List all databases"
+  echo "  db:list         List all databases (--site to scope, --json for the panel)"
+  echo "  db:users        List a site's database users (--site, --json)"
+  echo "  db:user-add     Add a database user to an existing database (--site --name --db)"
+  echo "  db:user-edit    Change a user's permission/password (--site --name)"
+  echo "  db:user-delete  Delete a database user (--site --name)"
   echo "  db:backup       Backup a database to file"
 
   echo -e "\n${BOLD}${BLUE}PHP Management${RESET}"
@@ -605,9 +609,13 @@ _site_add() {
   # --- WordPress provisioning (only when admin details were supplied) ---
   local wp_installed=0
   if [[ "$wp_do_install" == 1 ]]; then
-    # Derive a shell/SQL-safe DB identity from the (unique) site user.
+    # Derive a shell/SQL-safe DB identity from the (unique) site user, using the
+    # SAME "<site_user>_" prefix the Database tab scopes by (see _db_site_prefix),
+    # so a site's WordPress database + user show up in — and are managed by — its
+    # tab. The user is capped at 29 + "_wp" to respect MySQL's 32-char user limit;
+    # the database name (64-char limit) keeps the full prefix so it always matches.
     local _s; _s=$(printf '%s' "$site_user" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_' '_')
-    db_user="${_s:0:32}"; db_name="wp_${_s:0:60}"
+    db_user="${_s:0:29}_wp"; db_name="${_s}_wp"
     db_pass=$(openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 24)
     _progress 55 database "Provisioning database"
     log "Provisioning database for WordPress: ${db_name} (user: ${db_user})..."
@@ -2691,10 +2699,42 @@ _cache_opcache_restart() {
 # DATABASE COMMANDS
 # ===========================================================================
 
+# Resolve a site's Linux user from its vhost and echo the DB name prefix
+# (dashes -> underscores, plus a trailing "_"). Scopes every per-site db:*
+# operation to one site; the vhost is root-owned, so this cannot be forged.
+_db_site_prefix() {
+  local domain="$1" user=""
+  local conf="${NGINX_CONF_DIR}/${domain}.conf"
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
+  [[ -f "$conf" ]] || die "Site not found: ${domain}"
+  # Prefer the PHP-FPM socket (php<ver>-fpm-<user>.sock); fall back to the webroot owner.
+  user=$(grep -oP 'php[0-9.]+-fpm-\K[a-z0-9_-]+(?=\.sock)' "$conf" 2>/dev/null | head -1 || echo "")
+  [[ -n "$user" ]] || user=$(grep -oP "^[[:space:]]*root[[:space:]]+${HOME_BASE}/\K[^/]+" "$conf" 2>/dev/null | head -1 || echo "")
+  [[ -n "$user" ]] || die "Could not resolve the site user for ${domain}."
+  printf '%s_' "${user//-/_}"
+}
+
+# Refuse any name that is not inside the site's prefix (the isolation guard).
+_db_require_prefix() {
+  local name="$1" prefix="$2"
+  [[ "$name" == "${prefix}"* ]] \
+    || die "Name '${name}' is not allowed for this site (must start with '${prefix}')."
+}
+
+# Grant a user's privileges on a database at the requested level (rw=ALL, ro=SELECT).
+_db_grant() {
+  local db="$1" user="$2" perm="${3:-rw}"
+  if [[ "$perm" == "ro" ]]; then
+    _mysql_exec "GRANT SELECT ON \`${db}\`.* TO '${user}'@'localhost';" || return 1
+  else
+    _mysql_exec "GRANT ALL PRIVILEGES ON \`${db}\`.* TO '${user}'@'localhost';" || return 1
+  fi
+}
+
 # Provision / deprovision a MySQL database + user. Shared by db:add and WordPress
 # provisioning so both go through one code path.
 _db_provision() {
-  local db_name="$1" db_user="$2" db_pass="$3"
+  local db_name="$1" db_user="$2" db_pass="$3" db_perm="${4:-rw}"
   local db_pass_sql; db_pass_sql=$(_sql_escape_literal "$db_pass")
   # `|| return 1` on each step so a failure surfaces even when this runs in a `||`
   # context (errexit suppressed), e.g. the site:add WordPress rollback path.
@@ -2704,7 +2744,7 @@ _db_provision() {
   # leftover user from a prior site keeps its OLD password and the new connection
   # fails with "Access denied". ALTER USER force-sets the intended password.
   _mysql_exec "ALTER USER '${db_user}'@'localhost' IDENTIFIED BY '${db_pass_sql}';" || return 1
-  _mysql_exec "GRANT ALL PRIVILEGES ON \`${db_name}\`.* TO '${db_user}'@'localhost';" || return 1
+  _db_grant "$db_name" "$db_user" "$db_perm" || return 1
   _mysql_exec "FLUSH PRIVILEGES;" || return 1
 }
 
@@ -2721,6 +2761,9 @@ _db_add() {
   local db_name; db_name=$(_opt "name")
   local db_user; db_user=$(_opt "user" "$db_name")
   local db_pass; db_pass=$(_opt "pass" "$(openssl rand -base64 16 | tr -dc 'A-Za-z0-9' | head -c 16)")
+  local site;    site=$(_opt "site" "")
+  local perm;    perm=$(_opt "permission" "rw")
+  local no_user; no_user=$(_opt "no-user" "false")
 
   _require_arg "name" "$db_name" "db:add --name mydb --user myuser"
 
@@ -2731,17 +2774,38 @@ _db_add() {
     || die "Database user must contain only letters, numbers, underscores"
   [[ "$db_pass" =~ ^[A-Za-z0-9_!@#%+=.,:-]{8,128}$ ]] \
     || die "Database password must be 8-128 characters and contain only safe symbols"
+  [[ "$perm" =~ ^(rw|ro)$ ]] || die "Permission must be 'rw' or 'ro'"
 
-  log "Creating database: ${db_name} (user: ${db_user})..."
+  # When scoped to a site, every name must live under that site's prefix.
+  if [[ -n "$site" ]]; then
+    local prefix; prefix=$(_db_site_prefix "$site")
+    _db_require_prefix "$db_name" "$prefix"
+    [[ "$no_user" == "true" ]] || _db_require_prefix "$db_user" "$prefix"
+  fi
 
-  _db_provision "$db_name" "$db_user" "$db_pass"
+  if [[ "$no_user" == "true" ]]; then
+    log "Creating database: ${db_name}..."
+    _mysql_exec "CREATE DATABASE IF NOT EXISTS \`${db_name}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" \
+      || die "Could not create database ${db_name}."
+    ok "Database created: ${db_name}"
+    echo ""
+    _table_row "Database:" "$db_name"
+    _table_row "Host:"     "localhost"
+    echo ""
+    return 0
+  fi
+
+  log "Creating database: ${db_name} (user: ${db_user}, ${perm})..."
+
+  _db_provision "$db_name" "$db_user" "$db_pass" "$perm"
 
   ok "Database created: ${db_name}"
   echo ""
-  _table_row "Database:" "$db_name"
-  _table_row "User:"     "$db_user"
-  _table_row "Password:" "$db_pass"
-  _table_row "Host:"     "localhost"
+  _table_row "Database:"   "$db_name"
+  _table_row "User:"       "$db_user"
+  _table_row "Password:"   "$db_pass"
+  _table_row "Permission:" "$perm"
+  _table_row "Host:"       "localhost"
   echo ""
   warn "Save the password above — it will not be shown again."
 }
@@ -2756,6 +2820,11 @@ _db_delete() {
   local db_user; db_user=$(_opt "user" "$db_name")
   [[ "$db_user" =~ ^[a-zA-Z0-9_]+$ ]] \
     || die "Database user must contain only letters, numbers, underscores"
+  local site; site=$(_opt "site" "")
+  if [[ -n "$site" ]]; then
+    local prefix; prefix=$(_db_site_prefix "$site")
+    _db_require_prefix "$db_name" "$prefix"
+  fi
   local force; force=$(_opt "force" "false")
 
   [[ "$force" == "true" ]] || _confirm "Delete database '${db_name}' and its user '${db_user}'?" || { log "Cancelled."; return 0; }
@@ -2767,10 +2836,36 @@ _db_delete() {
 _db_list() {
   _parse_opts "$@"
   local plain; plain=$(_opt "plain" "false")
+  local site;  site=$(_opt "site" "")
+  local json;  json=$(_opt "json" "false")
+
+  # Base exclusion of the server's own schemas; add the site prefix when --site is given.
+  local where="schema_name NOT IN ('information_schema','mysql','performance_schema','sys')"
+  if [[ -n "$site" ]]; then
+    local prefix; prefix=$(_db_site_prefix "$site")
+    where="${where} AND schema_name LIKE '$(_sql_escape_literal "$prefix")%'"
+  fi
+
   if [[ "$plain" == "true" ]]; then
     _mysql_exec "SELECT schema_name FROM information_schema.schemata
-      WHERE schema_name NOT IN ('information_schema','mysql','performance_schema','sys')
+      WHERE ${where}
       ORDER BY schema_name;" 2>/dev/null | awk 'NR > 1 && NF { print $1 }'
+    return 0
+  fi
+
+  if [[ "$json" == "true" ]]; then
+    # JSON array: [{name,size_mb,tables,status}]; status Active when tables>0 else Empty.
+    _mysql_exec "SELECT s.schema_name,
+        COALESCE(ROUND(SUM(t.data_length + t.index_length) / 1024 / 1024, 2), 0) AS size_mb,
+        COALESCE(COUNT(t.table_name), 0) AS tables
+      FROM information_schema.schemata s
+      LEFT JOIN information_schema.tables t ON t.table_schema = s.schema_name
+      WHERE ${where}
+      GROUP BY s.schema_name ORDER BY s.schema_name;" 2>/dev/null \
+    | awk 'NR > 1 && NF {
+        st = ($3 > 0 ? "Active" : "Empty");
+        printf "%s{\"name\":\"%s\",\"size_mb\":%s,\"tables\":%s,\"status\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, st }
+        BEGIN { printf "[" } END { printf "]\n" }'
     return 0
   fi
 
@@ -2783,6 +2878,36 @@ _db_list() {
     FROM information_schema.tables
     WHERE table_schema NOT IN ('information_schema','mysql','performance_schema','sys')
     GROUP BY table_schema;" 2>/dev/null | column -t | sed 's/^/  /'
+  _hr
+  echo ""
+}
+
+# List a site's database users (user, database, rw/ro permission) from mysql.db.
+_db_users() {
+  _require_root "db:users"
+  _parse_opts "$@"
+  local site; site=$(_opt "site")
+  _require_arg "site" "$site" "db:users --site example.com"
+  local json; json=$(_opt "json" "false")
+  local prefix; prefix=$(_db_site_prefix "$site")
+  local q; q="SELECT d.User, d.Db,
+      CASE WHEN d.Insert_priv = 'Y' OR d.Update_priv = 'Y' OR d.Delete_priv = 'Y'
+           THEN 'rw' ELSE 'ro' END AS permission
+    FROM mysql.db d
+    WHERE d.User LIKE '$(_sql_escape_literal "$prefix")%'
+    ORDER BY d.User, d.Db;"
+
+  if [[ "$json" == "true" ]]; then
+    _mysql_exec "$q" 2>/dev/null | awk 'NR > 1 && NF {
+        printf "%s{\"user\":\"%s\",\"database\":\"%s\",\"permission\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3 }
+        BEGIN { printf "[" } END { printf "]\n" }'
+    return 0
+  fi
+
+  echo ""
+  echo -e "  ${BOLD}Database users${RESET}"
+  _hr
+  _mysql_exec "$q" 2>/dev/null | column -t | sed 's/^/  /'
   _hr
   echo ""
 }
@@ -2812,6 +2937,138 @@ _db_backup() {
 
   local size; size=$(du -sh "$backup_file" | cut -f1)
   ok "Backup created: ${backup_file} (${size})"
+}
+
+# Create a new MySQL user on an existing database (site-scoped).
+_db_user_add() {
+  _require_root "db:user-add"
+  _parse_opts "$@"
+  local site;    site=$(_opt "site");    _require_arg "site" "$site" "db:user-add --site example.com --name <user> --db <database>"
+  local db_user; db_user=$(_opt "name"); _require_arg "name" "$db_user" "db:user-add --name <user>"
+  local db_name; db_name=$(_opt "db");   _require_arg "db" "$db_name" "db:user-add --db <database>"
+  local db_pass; db_pass=$(_opt "pass" "$(openssl rand -base64 16 | tr -dc 'A-Za-z0-9' | head -c 16)")
+  local perm;    perm=$(_opt "permission" "rw")
+
+  [[ "$db_user" =~ ^[a-zA-Z0-9_]+$ ]] || die "Database user must contain only letters, numbers, underscores"
+  [[ "$db_name" =~ ^[a-zA-Z0-9_]+$ ]] || die "Database name must contain only letters, numbers, underscores"
+  [[ "$db_pass" =~ ^[A-Za-z0-9_!@#%+=.,:-]{8,128}$ ]] || die "Database password must be 8-128 characters and contain only safe symbols"
+  [[ "$perm" =~ ^(rw|ro)$ ]] || die "Permission must be 'rw' or 'ro'"
+
+  local prefix; prefix=$(_db_site_prefix "$site")
+  _db_require_prefix "$db_user" "$prefix"
+  _db_require_prefix "$db_name" "$prefix"
+
+  local exists; exists=$(_mysql_exec "SELECT 1 FROM information_schema.schemata WHERE schema_name = '$(_sql_escape_literal "$db_name")' LIMIT 1;" 2>/dev/null | awk 'NR>1{print $1}')
+  [[ "$exists" == "1" ]] || die "Database '${db_name}' does not exist."
+
+  local db_pass_sql; db_pass_sql=$(_sql_escape_literal "$db_pass")
+  log "Creating database user: ${db_user} on ${db_name} (${perm})..."
+  _mysql_exec "CREATE USER IF NOT EXISTS '${db_user}'@'localhost' IDENTIFIED BY '${db_pass_sql}';" || die "Could not create user ${db_user}."
+  _mysql_exec "ALTER USER '${db_user}'@'localhost' IDENTIFIED BY '${db_pass_sql}';" || die "Could not set the user password."
+  _db_grant "$db_name" "$db_user" "$perm" || die "Could not grant privileges on ${db_name}."
+  _mysql_exec "FLUSH PRIVILEGES;"
+
+  ok "Database user created: ${db_user}"
+  echo ""
+  _table_row "User:"       "$db_user"
+  _table_row "Database:"   "$db_name"
+  _table_row "Password:"   "$db_pass"
+  _table_row "Permission:" "$perm"
+  _table_row "Host:"       "localhost"
+  echo ""
+  warn "Save the password above — it will not be shown again."
+}
+
+# Change a database user's permission and/or password (site-scoped). Optional
+# --wp-config rewrites DB_PASSWORD so a WordPress site keeps working.
+_db_user_edit() {
+  _require_root "db:user-edit"
+  _parse_opts "$@"
+  local site;     site=$(_opt "site");     _require_arg "site" "$site" "db:user-edit --site example.com --name <user>"
+  local db_user;  db_user=$(_opt "name");  _require_arg "name" "$db_user" "db:user-edit --name <user>"
+  local perm;     perm=$(_opt "permission" "")
+  local new_pass; new_pass=$(_opt "pass" "")
+  local generate; generate=$(_opt "generate" "false")
+  local wp_config; wp_config=$(_opt "wp-config" "")
+
+  [[ "$db_user" =~ ^[a-zA-Z0-9_]+$ ]] || die "Database user must contain only letters, numbers, underscores"
+  local prefix; prefix=$(_db_site_prefix "$site")
+  _db_require_prefix "$db_user" "$prefix"
+
+  local exists; exists=$(_mysql_exec "SELECT 1 FROM mysql.user WHERE User = '$(_sql_escape_literal "$db_user")' AND Host = 'localhost' LIMIT 1;" 2>/dev/null | awk 'NR>1{print $1}')
+  [[ "$exists" == "1" ]] || die "Database user '${db_user}' does not exist."
+
+  local did=0
+
+  if [[ -n "$perm" ]]; then
+    [[ "$perm" =~ ^(rw|ro)$ ]] || die "Permission must be 'rw' or 'ro'"
+    local dbs; dbs=$(_mysql_exec "SELECT Db FROM mysql.db WHERE User = '$(_sql_escape_literal "$db_user")';" 2>/dev/null | awk 'NR>1 && NF{print $1}')
+    [[ -n "$dbs" ]] || die "User '${db_user}' has no database grant to change."
+    local d
+    while IFS= read -r d; do
+      [[ -n "$d" ]] || continue
+      # Revoke only ALL PRIVILEGES (not GRANT OPTION): the panel never grants WITH
+      # GRANT OPTION, and naming it makes MySQL 8 fail the whole REVOKE (ERROR 1141,
+      # "no such grant") — which silently left the old privileges in place.
+      _mysql_exec "REVOKE ALL PRIVILEGES ON \`${d}\`.* FROM '${db_user}'@'localhost';" \
+        || die "Could not revoke existing privileges on ${d}."
+      _db_grant "$d" "$db_user" "$perm" || die "Could not change privileges on ${d}."
+    done <<< "$dbs"
+    did=1
+    log "Permission for ${db_user} set to ${perm}."
+  fi
+
+  if [[ "$generate" == "true" || -n "$new_pass" ]]; then
+    [[ "$generate" == "true" ]] && new_pass="$(openssl rand -base64 16 | tr -dc 'A-Za-z0-9' | head -c 16)"
+    [[ "$new_pass" =~ ^[A-Za-z0-9_!@#%+=.,:-]{8,128}$ ]] || die "Database password must be 8-128 characters and contain only safe symbols"
+    local p_sql; p_sql=$(_sql_escape_literal "$new_pass")
+    _mysql_exec "ALTER USER '${db_user}'@'localhost' IDENTIFIED BY '${p_sql}';" || die "Could not set the new password."
+    did=1
+
+    if [[ -n "$wp_config" ]]; then
+      if [[ -w "$wp_config" ]]; then
+        cp -- "$wp_config" "${wp_config}.aidipanel-bak"
+        local esc; esc=$(printf '%s' "$new_pass" | sed -e 's/[\&|]/\\&/g')
+        if sed -i -E "s|(define\(\s*'DB_PASSWORD'\s*,\s*')[^']*('\s*\)\s*;)|\1${esc}\2|" "$wp_config"; then
+          log "Updated DB_PASSWORD in ${wp_config} (backup: ${wp_config}.aidipanel-bak)."
+        else
+          warn "Could not rewrite ${wp_config}; update DB_PASSWORD manually."
+        fi
+      else
+        warn "wp-config.php not writable (${wp_config}); update DB_PASSWORD manually."
+      fi
+    fi
+  fi
+
+  _mysql_exec "FLUSH PRIVILEGES;"
+  [[ "$did" == "1" ]] || die "Nothing to change: pass --permission and/or --pass/--generate."
+
+  ok "Database user updated: ${db_user}"
+  if [[ "$generate" == "true" || -n "$new_pass" ]]; then
+    echo ""
+    _table_row "User:"     "$db_user"
+    _table_row "Password:" "$new_pass"
+    echo ""
+    warn "Save the password above — it will not be shown again."
+  fi
+}
+
+# Delete a database user (site-scoped).
+_db_user_delete() {
+  _require_root "db:user-delete"
+  _parse_opts "$@"
+  local site;    site=$(_opt "site");    _require_arg "site" "$site" "db:user-delete --site example.com --name <user>"
+  local db_user; db_user=$(_opt "name"); _require_arg "name" "$db_user" "db:user-delete --name <user>"
+  [[ "$db_user" =~ ^[a-zA-Z0-9_]+$ ]] || die "Database user must contain only letters, numbers, underscores"
+  local prefix; prefix=$(_db_site_prefix "$site")
+  _db_require_prefix "$db_user" "$prefix"
+  local force; force=$(_opt "force" "false")
+
+  [[ "$force" == "true" ]] || _confirm "Delete database user '${db_user}'?" || { log "Cancelled."; return 0; }
+
+  _mysql_exec "DROP USER IF EXISTS '${db_user}'@'localhost';" || die "Could not delete user ${db_user}."
+  _mysql_exec "FLUSH PRIVILEGES;"
+  ok "Database user deleted: ${db_user}"
 }
 
 # ===========================================================================
@@ -3853,6 +4110,10 @@ main() {
     db:add)         _db_add "$@" ;;
     db:delete)      _db_delete "$@" ;;
     db:list)        _db_list "$@" ;;
+    db:users)       _db_users "$@" ;;
+    db:user-add)    _db_user_add "$@" ;;
+    db:user-edit)   _db_user_edit "$@" ;;
+    db:user-delete) _db_user_delete "$@" ;;
     db:backup)      _db_backup "$@" ;;
 
     # PHP

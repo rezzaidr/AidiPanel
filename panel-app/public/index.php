@@ -77,6 +77,13 @@ $router->post('/sites/{domain}/ssl/autorenew', 'SiteSslController@autoRenew');
 $router->post('/sites/{domain}/ssl/use',     'SiteSslController@useCert');
 $router->get('/api/ssl/check',               'SiteSslController@check');
 
+// Database tab (Manage Site → Database): site-scoped database + user actions.
+$router->post('/sites/{domain}/database/add',         'SiteDatabaseController@addDatabase');
+$router->post('/sites/{domain}/database/user/add',    'SiteDatabaseController@addUser');
+$router->post('/sites/{domain}/database/user/edit',   'SiteDatabaseController@editUser');
+$router->post('/sites/{domain}/database/delete',      'SiteDatabaseController@deleteDatabase');
+$router->post('/sites/{domain}/database/user/delete', 'SiteDatabaseController@deleteUser');
+
 // Cache
 $router->get('/cache',         'CacheController@index');
 $router->post('/cache/purge',  'CacheController@purge');

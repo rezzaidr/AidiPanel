@@ -307,6 +307,20 @@ class SiteController extends BaseController
             $certs        = $this->getCertificates($domain, $ssl);
         }
 
+        // Database tab data (scoped to this site by its name prefix).
+        $databases = []; $dbUsers = []; $dbPrefix = ''; $pmaUrl = null; $wpDbInfo = null;
+        $dbHost = '127.0.0.1'; $dbPort = 3306;
+        if ($activeTab === 'database') {
+            $siteUser  = trim((string) ($site['site_user'] ?? ''));
+            $dbPrefix  = $siteUser !== '' ? str_replace('-', '_', $siteUser) . '_' : '';
+            $databases = $this->decodeCliJson(run_cli('db:list',  ['--site', $domain, '--json']));
+            $dbUsers   = $this->decodeCliJson(run_cli('db:users', ['--site', $domain, '--json']));
+            $pmaUrl    = defined('PMA_URL') ? PMA_URL : null;   // set once phpMyAdmin (Phase 8) lands
+            if ($type === 'wordpress') {
+                $wpDbInfo = $this->readWpConfigDb((string) ($site['webroot'] ?? ''));
+            }
+        }
+
         // hasCache is still needed for the Overview tab cache card (cheap DB read)
         $hasCache = (bool) ($site['cache_enabled'] ?? false);
 
@@ -314,7 +328,8 @@ class SiteController extends BaseController
             'site', 'nginxConf', 'ssl', 'sslExpiry', 'sslDaysLeft',
             'logs', 'activeTab', 'diskSize', 'hasCache',
             'pageCacheInfo', 'objectCacheInfo', 'opcacheInfo', 'protocolInfo',
-            'cacheConfig', 'lastPurge', 'cacheZoneSize', 'httpsOptions', 'certs'
+            'cacheConfig', 'lastPurge', 'cacheZoneSize', 'httpsOptions', 'certs',
+            'databases', 'dbUsers', 'dbHost', 'dbPort', 'dbPrefix', 'pmaUrl', 'wpDbInfo'
         ) + ['_full_bleed' => true]);
     }
 
@@ -452,6 +467,41 @@ class SiteController extends BaseController
 
         \Core\DB::log('nginx:save', "Saved Nginx config for {$domain}");
         $this->success('Nginx configuration saved and reloaded.', "/sites/{$domain}");
+    }
+
+    /** Decode a --json CLI result into an array, isolating the JSON in case of stray output. */
+    private function decodeCliJson(array $result): array
+    {
+        if (empty($result['success'])) { return []; }
+        $out = trim((string) ($result['output'] ?? ''));
+        if (preg_match('/\[.*\]/s', $out, $m)) { $out = $m[0]; }
+        $data = json_decode($out, true);
+        return is_array($data) ? $data : [];
+    }
+
+    /** Best-effort read of DB_NAME/DB_USER/$table_prefix from a WordPress wp-config.php. */
+    private function readWpConfigDb(string $webroot): ?array
+    {
+        $webroot = rtrim($webroot, '/');
+        if ($webroot === '') { return null; }
+        $file = "{$webroot}/wp-config.php";
+        if (!is_readable($file)) { return null; }
+        $src = (string) @file_get_contents($file);
+        if ($src === '') { return null; }
+        $grab = static function (string $const) use ($src): ?string {
+            if (preg_match('/define\(\s*[\'"]' . $const . '[\'"]\s*,\s*[\'"]([^\'"]*)[\'"]\s*\)/', $src, $m)) {
+                return $m[1];
+            }
+            return null;
+        };
+        $db   = $grab('DB_NAME');
+        $user = $grab('DB_USER');
+        if ($db === null && $user === null) { return null; }
+        $prefix = 'wp_';
+        if (preg_match('/\$table_prefix\s*=\s*[\'"]([^\'"]+)[\'"]/', $src, $m)) {
+            $prefix = $m[1];
+        }
+        return ['db' => $db ?? '', 'user' => $user ?? '', 'prefix' => $prefix];
     }
 
     // -------------------------------------------------------------------------

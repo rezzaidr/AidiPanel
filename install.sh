@@ -395,7 +395,7 @@ print_blueprint() {
   printf '  %s %-16s %s\n' "$mid" "FastCGI Cache" "$1"
   printf '  %s %-16s %s\n' "$end" "PHP-FPM ${PHP_DEFAULT_VERSION}" "$1"
   printf '\n'
-  printf '%-24s %s\n' "MariaDB" "$2"
+  printf '%-24s %s\n' "${DB_ENGINE_LABELS[$DB_ENGINE]%% (*}" "$2"
   printf '%-24s %s\n' "Redis" "$2"
   printf '%-24s %s\n' "AidiPanel UI" "$3"
 }
@@ -884,8 +884,22 @@ _add_mysql_repo() {
   [[ "$DRY_RUN" == "true" ]] && return 0
 
   local apt_arch; apt_arch=$(_apt_arch)
-  curl -fsSL "https://repo.mysql.com/RPM-GPG-KEY-mysql-2023" \
-    | gpg --dearmor -o /etc/apt/trusted.gpg.d/mysql.gpg 2>>"$PANEL_LOG"
+  # MySQL signing key. The standalone file at repo.mysql.com/RPM-GPG-KEY-mysql-2023 is
+  # still served with its original 2025-10-22 expiry — Oracle renewed the key (to
+  # 2027-10-23) but did not refresh that file — so a fresh fetch yields an EXPKEYSIG and
+  # apt rejects the repo. Pull the renewed key from the Ubuntu keyserver first; fall back
+  # to the published file if the keyserver is unreachable.
+  local mysql_key="B7B3B788A8D3785C" tmp_gpg
+  tmp_gpg=$(mktemp -d)
+  if gpg --homedir "$tmp_gpg" --batch --keyserver keyserver.ubuntu.com \
+       --recv-keys "$mysql_key" >>"$PANEL_LOG" 2>&1; then
+    gpg --homedir "$tmp_gpg" --export "$mysql_key" > /etc/apt/trusted.gpg.d/mysql.gpg
+  else
+    warn "MySQL keyserver unreachable; falling back to repo.mysql.com key file."
+    curl -fsSL "https://repo.mysql.com/RPM-GPG-KEY-mysql-2023" \
+      | gpg --dearmor -o /etc/apt/trusted.gpg.d/mysql.gpg 2>>"$PANEL_LOG"
+  fi
+  rm -rf "$tmp_gpg"
   chmod 644 /etc/apt/trusted.gpg.d/mysql.gpg
 
   cat > /etc/apt/sources.list.d/mysql.list <<MYSQL_REPO
@@ -1576,7 +1590,7 @@ case "$cmd" in
   site:add|site:delete|site:list|vhost:save|\
   cache:page|cache:redis|cache:zone|cache:status|cache:purge|cache:enable|cache:disable|\
   cache:config|cache:redis-enable|cache:redis-disable|cache:redis-flush|cache:opcache-restart|\
-  db:add|db:delete|db:list|db:backup|\
+  db:add|db:delete|db:list|db:users|db:user-add|db:user-edit|db:user-delete|db:backup|\
   php:list|php:version|php:restart|php:install|\
   ssl:install|ssl:renew|ssl:status|ssl:import|\
   ssl:force-https|ssl:hsts|ssl:autorenew|ssl:check|ssl:use|\

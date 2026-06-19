@@ -1588,6 +1588,319 @@ $tabs = [
 
   </div>
 
+<?php elseif ($activeTab === 'database'): ?>
+<!-- ──────────────── DATABASE ──────────────── -->
+<?php
+  $databases = $databases ?? [];
+  $dbUsers   = $dbUsers ?? [];
+  $dbPrefix  = $dbPrefix ?? '';
+  $creds     = flash('db_credentials');
+  $creds     = $creds ? json_decode($creds, true) : null;
+  // "<prefix>wp" is reserved for the auto-provisioned WordPress database, so the
+  // "Add Database" modal defaults to "<prefix>app" to avoid colliding with it.
+  $defDb     = $dbPrefix !== '' ? $dbPrefix . 'app'  : '';
+  $defUser   = $dbPrefix !== '' ? $dbPrefix . 'user' : '';
+?>
+  <div x-data="{ modal:null, createUser:true, editName:'', editDb:'', editPerm:'rw', editRegen:false, delName:'', delKind:'', typed:'' }">
+
+    <?php if ($creds): ?>
+    <!-- Show-once credentials -->
+    <div class="card mb-5 border-emerald-200" x-data="{ copied:false }">
+      <div class="px-5 py-4 flex items-start gap-2.5">
+        <i class="ti ti-circle-check text-emerald-500 text-lg mt-0.5 shrink-0"></i>
+        <div class="min-w-0 flex-1">
+          <p class="text-sm font-semibold text-emerald-800 mb-0.5"><?= e(t('site.database.created_title')) ?></p>
+          <p class="text-[11px] text-zinc-500 mb-3"><?= e(t('site.database.created_once')) ?></p>
+          <div class="space-y-1 text-xs mono">
+            <?php if (!empty($creds['database'])): ?><p class="text-zinc-500"><?= e(t('site.database.f.database')) ?>: <span class="text-zinc-800"><?= e($creds['database']) ?></span></p><?php endif; ?>
+            <?php if (!empty($creds['user'])): ?><p class="text-zinc-500"><?= e(t('site.database.f.user')) ?>: <span class="text-zinc-800"><?= e($creds['user']) ?></span></p><?php endif; ?>
+            <p class="text-zinc-500"><?= e(t('site.database.f.password')) ?>:
+              <span class="text-zinc-800" x-ref="pw"><?= e($creds['pass']) ?></span>
+              <button type="button" class="ml-2 text-ink hover:underline"
+                      @click="navigator.clipboard && navigator.clipboard.writeText($refs.pw.textContent); copied=true; setTimeout(()=>copied=false,1200)">
+                <span x-show="!copied"><?= e(t('site.database.copy_password')) ?></span>
+                <span x-show="copied" x-cloak class="text-emerald-600"><?= e(t('topbar.copied')) ?></span>
+              </button>
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <?php endif; ?>
+
+    <?php if (!empty($wpDbInfo)): ?>
+    <!-- WordPress detection -->
+    <div class="flex items-start gap-2.5 bg-ink-pale border border-ink/15 rounded-lg px-4 py-3 mb-5">
+      <i class="ti ti-brand-wordpress text-ink mt-0.5 shrink-0"></i>
+      <div class="text-xs leading-relaxed min-w-0">
+        <p class="font-semibold text-zinc-700"><?= e(t('site.database.wp_detected')) ?></p>
+        <p class="text-zinc-500 mono break-all"><?= e(t('site.database.f.database')) ?>: <?= e($wpDbInfo['db']) ?> · <?= e(t('site.database.f.user')) ?>: <?= e($wpDbInfo['user']) ?> · <?= e(t('site.database.wp_prefix')) ?>: <?= e($wpDbInfo['prefix']) ?></p>
+      </div>
+    </div>
+    <?php endif; ?>
+
+    <!-- Databases -->
+    <div class="card mb-5">
+      <div class="card-head">
+        <div>
+          <h2 class="card-title"><i class="ti ti-database text-zinc-400"></i> <?= e(t('site.database.databases')) ?></h2>
+          <p class="text-[11px] text-zinc-400 mt-0.5"><?= e(t('site.database.host_meta', ['host' => $dbHost, 'port' => $dbPort])) ?></p>
+        </div>
+        <button type="button" @click="modal='addDb'; createUser=true" class="btn btn-primary btn-sm">
+          <i class="ti ti-plus text-sm"></i> <?= e(t('site.database.add_db')) ?>
+        </button>
+      </div>
+
+      <?php if (empty($databases)): ?>
+      <div class="px-5 py-10 text-center">
+        <p class="text-sm font-medium text-zinc-600"><?= e(t('site.database.empty_db_title')) ?></p>
+        <p class="text-xs text-zinc-400 mt-1"><?= e(t('site.database.empty_db_hint')) ?></p>
+      </div>
+      <?php else: ?>
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th class="pl-5"><?= e(t('site.database.f.database')) ?></th>
+            <th><?= e(t('site.database.f.size')) ?></th>
+            <th><?= e(t('site.database.f.tables')) ?></th>
+            <th><?= e(t('site.database.f.status')) ?></th>
+            <th class="pr-5 text-center" style="text-align:center"><?= e(t('site.database.f.action')) ?></th>
+          </tr>
+        </thead>
+        <tbody>
+          <?php foreach ($databases as $db): ?>
+          <?php $active = ($db['status'] ?? '') === 'Active'; ?>
+          <tr>
+            <td class="pl-5 font-medium text-zinc-900 mono break-all"><?= e($db['name'] ?? '') ?></td>
+            <td class="text-zinc-700"><?= !empty($db['size_mb']) ? e($db['size_mb']) . ' MB' : '—' ?></td>
+            <td class="text-zinc-700"><?= isset($db['tables']) && (int) $db['tables'] > 0 ? e($db['tables']) : '—' ?></td>
+            <td><span class="badge <?= $active ? 'badge-ok' : 'badge-muted' ?>"><?php if ($active): ?><span class="dot bg-emerald-500"></span> <?php endif; ?><?= e($active ? t('site.database.status.active') : t('site.database.status.empty')) ?></span></td>
+            <td class="text-center">
+              <div class="relative inline-block text-left" x-data="{ row:false }" @click.outside="row=false">
+                <button type="button" @click="row=!row" class="w-8 h-8 rounded-lg hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700"><i class="ti ti-dots-vertical"></i></button>
+                <div x-show="row" x-cloak x-transition.opacity class="absolute right-0 mt-1 w-44 bg-white border border-zinc-200 rounded-lg shadow-lg py-1 z-30 text-left">
+                  <button type="button" @click="row=false; delName='<?= e($db['name'] ?? '') ?>'; delKind='db'; typed=''; modal='delDb'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 text-left"><i class="ti ti-trash text-sm"></i> <?= e(t('site.database.delete_db')) ?></button>
+                </div>
+              </div>
+            </td>
+          </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+      <?php endif; ?>
+    </div>
+
+    <!-- Database Users -->
+    <div class="card mb-5">
+      <div class="card-head">
+        <div>
+          <h2 class="card-title"><i class="ti ti-users text-zinc-400"></i> <?= e(t('site.database.users')) ?></h2>
+        </div>
+        <button type="button" @click="modal='addUser'" class="btn btn-primary btn-sm"<?= empty($databases) ? ' disabled' : '' ?>>
+          <i class="ti ti-plus text-sm"></i> <?= e(t('site.database.add_user')) ?>
+        </button>
+      </div>
+
+      <?php if (empty($dbUsers)): ?>
+      <div class="px-5 py-10 text-center">
+        <p class="text-sm font-medium text-zinc-600"><?= e(t('site.database.empty_user_title')) ?></p>
+        <p class="text-xs text-zinc-400 mt-1"><?= e(t('site.database.empty_user_hint')) ?></p>
+      </div>
+      <?php else: ?>
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th class="pl-5"><?= e(t('site.database.f.user')) ?></th>
+            <th><?= e(t('site.database.f.database')) ?></th>
+            <?php if (!empty($pmaUrl)): ?><th><?= e(t('site.database.f.manage')) ?></th><?php endif; ?>
+            <th><?= e(t('site.database.f.permissions')) ?></th>
+            <th class="pr-5 text-center" style="text-align:center"><?= e(t('site.database.f.action')) ?></th>
+          </tr>
+        </thead>
+        <tbody>
+          <?php foreach ($dbUsers as $u): ?>
+          <?php $rw = ($u['permission'] ?? 'ro') === 'rw'; ?>
+          <tr>
+            <td class="pl-5 font-medium text-zinc-900 mono break-all"><?= e($u['user'] ?? '') ?></td>
+            <td class="text-zinc-700 mono break-all"><?= e($u['database'] ?? '') ?></td>
+            <?php if (!empty($pmaUrl)): ?>
+            <td><a href="<?= e($pmaUrl) ?>" target="_blank" rel="noopener" class="text-ink hover:underline text-sm"><i class="ti ti-external-link text-xs"></i> phpMyAdmin</a></td>
+            <?php endif; ?>
+            <td><span class="badge <?= $rw ? 'badge-ok' : 'badge-muted' ?>"><?= e($rw ? t('site.database.perm.rw') : t('site.database.perm.ro')) ?></span></td>
+            <td class="text-center">
+              <div class="relative inline-block text-left" x-data="{ row:false }" @click.outside="row=false">
+                <button type="button" @click="row=!row" class="w-8 h-8 rounded-lg hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700"><i class="ti ti-dots-vertical"></i></button>
+                <div x-show="row" x-cloak x-transition.opacity class="absolute right-0 mt-1 w-48 bg-white border border-zinc-200 rounded-lg shadow-lg py-1 z-30 text-left">
+                  <?php if (!empty($pmaUrl)): ?><a href="<?= e($pmaUrl) ?>" target="_blank" rel="noopener" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-external-link text-sm text-zinc-400"></i> <?= e(t('site.database.open_pma')) ?></a><?php endif; ?>
+                  <button type="button" @click="row=false; editName='<?= e($u['user'] ?? '') ?>'; editDb='<?= e($u['database'] ?? '') ?>'; editPerm='<?= e($u['permission'] ?? 'rw') ?>'; editRegen=false; modal='editUser'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-edit text-sm text-zinc-400"></i> <?= e(t('site.database.edit_user')) ?></button>
+                  <button type="button" @click="row=false; delName='<?= e($u['user'] ?? '') ?>'; delKind='user'; typed=''; modal='delUser'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 text-left"><i class="ti ti-trash text-sm"></i> <?= e(t('site.database.delete_user')) ?></button>
+                </div>
+              </div>
+            </td>
+          </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+      <?php endif; ?>
+    </div>
+
+    <!-- Modal: Add Database -->
+    <div x-show="modal==='addDb'" x-cloak class="fixed inset-0 z-50">
+      <div class="absolute inset-0 bg-zinc-900/40" @click="modal=null"></div>
+      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl" @keydown.escape.window="modal=null">
+        <div class="card-head flex items-center justify-between">
+          <h3 class="card-title"><i class="ti ti-database text-zinc-400"></i> <?= e(t('site.database.add_db')) ?></h3>
+          <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
+        </div>
+        <form method="POST" action="/sites/<?= e($domain) ?>/database/add" class="p-5 space-y-3">
+          <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+          <div>
+            <label class="lbl"><?= e(t('site.database.f.database')) ?></label>
+            <input type="text" name="name" class="inp w-full mono" autocomplete="off" spellcheck="false" pattern="[a-zA-Z0-9_]+" value="<?= e($defDb) ?>" required>
+          </div>
+          <label class="flex items-center gap-2 text-sm text-zinc-600">
+            <input type="checkbox" name="create_user" value="1" x-model="createUser" class="rounded border-zinc-300">
+            <?= e(t('site.database.create_user')) ?>
+          </label>
+          <div x-show="createUser" x-cloak class="space-y-3">
+            <div>
+              <label class="lbl"><?= e(t('site.database.f.user')) ?></label>
+              <input type="text" name="user" class="inp w-full mono" autocomplete="off" spellcheck="false" pattern="[a-zA-Z0-9_]*" value="<?= e($defUser) ?>">
+            </div>
+            <div>
+              <label class="lbl"><?= e(t('site.database.f.password')) ?> <span class="text-zinc-400"><?= e(t('site.database.pass_optional')) ?></span></label>
+              <input type="text" name="pass" class="inp w-full mono" autocomplete="off" spellcheck="false" placeholder="<?= e(t('site.database.pass_generate')) ?>">
+            </div>
+            <div>
+              <label class="lbl"><?= e(t('site.database.f.permissions')) ?></label>
+              <select name="permission" class="inp w-full">
+                <option value="rw"><?= e(t('site.database.perm.rw')) ?></option>
+                <option value="ro"><?= e(t('site.database.perm.ro')) ?></option>
+              </select>
+            </div>
+          </div>
+          <div class="flex justify-end gap-2 pt-1">
+            <button type="button" @click="modal=null" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
+            <button type="submit" class="btn btn-primary"><i class="ti ti-plus text-sm"></i> <?= e(t('site.database.create_db_btn')) ?></button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal: Add Database User -->
+    <div x-show="modal==='addUser'" x-cloak class="fixed inset-0 z-50">
+      <div class="absolute inset-0 bg-zinc-900/40" @click="modal=null"></div>
+      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl" @keydown.escape.window="modal=null">
+        <div class="card-head flex items-center justify-between">
+          <h3 class="card-title"><i class="ti ti-user-plus text-zinc-400"></i> <?= e(t('site.database.add_user')) ?></h3>
+          <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
+        </div>
+        <form method="POST" action="/sites/<?= e($domain) ?>/database/user/add" class="p-5 space-y-3">
+          <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+          <div>
+            <label class="lbl"><?= e(t('site.database.f.user')) ?></label>
+            <input type="text" name="name" class="inp w-full mono" autocomplete="off" spellcheck="false" pattern="[a-zA-Z0-9_]+" value="<?= e($defUser) ?>" required>
+          </div>
+          <div>
+            <label class="lbl"><?= e(t('site.database.f.database')) ?></label>
+            <select name="database" class="inp w-full mono" required>
+              <?php foreach ($databases as $db): ?>
+              <option value="<?= e($db['name'] ?? '') ?>"><?= e($db['name'] ?? '') ?></option>
+              <?php endforeach; ?>
+            </select>
+          </div>
+          <div>
+            <label class="lbl"><?= e(t('site.database.f.password')) ?> <span class="text-zinc-400"><?= e(t('site.database.pass_optional')) ?></span></label>
+            <input type="text" name="pass" class="inp w-full mono" autocomplete="off" spellcheck="false" placeholder="<?= e(t('site.database.pass_generate')) ?>">
+          </div>
+          <div>
+            <label class="lbl"><?= e(t('site.database.f.permissions')) ?></label>
+            <select name="permission" class="inp w-full">
+              <option value="rw"><?= e(t('site.database.perm.rw')) ?></option>
+              <option value="ro"><?= e(t('site.database.perm.ro')) ?></option>
+            </select>
+          </div>
+          <div class="flex justify-end gap-2 pt-1">
+            <button type="button" @click="modal=null" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
+            <button type="submit" class="btn btn-primary"><i class="ti ti-plus text-sm"></i> <?= e(t('site.database.create_user_btn')) ?></button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal: Edit Database User -->
+    <div x-show="modal==='editUser'" x-cloak class="fixed inset-0 z-50">
+      <div class="absolute inset-0 bg-zinc-900/40" @click="modal=null"></div>
+      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl" @keydown.escape.window="modal=null">
+        <div class="card-head flex items-center justify-between">
+          <h3 class="card-title"><i class="ti ti-edit text-zinc-400"></i> <?= e(t('site.database.edit_user')) ?></h3>
+          <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
+        </div>
+        <form method="POST" action="/sites/<?= e($domain) ?>/database/user/edit" class="p-5 space-y-3">
+          <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+          <input type="hidden" name="name" :value="editName">
+          <div>
+            <label class="lbl"><?= e(t('site.database.f.user')) ?></label>
+            <input type="text" class="inp w-full mono bg-zinc-50" :value="editName" readonly>
+          </div>
+          <div>
+            <label class="lbl"><?= e(t('site.database.f.database')) ?></label>
+            <input type="text" class="inp w-full mono bg-zinc-50" :value="editDb" readonly>
+          </div>
+          <div>
+            <label class="lbl"><?= e(t('site.database.f.permissions')) ?></label>
+            <select name="permission" class="inp w-full" x-model="editPerm">
+              <option value="rw"><?= e(t('site.database.perm.rw')) ?></option>
+              <option value="ro"><?= e(t('site.database.perm.ro')) ?></option>
+            </select>
+          </div>
+          <div>
+            <label class="lbl"><?= e(t('site.database.f.new_password')) ?> <span class="text-zinc-400"><?= e(t('site.database.pass_optional_keep')) ?></span></label>
+            <input type="text" name="pass" class="inp w-full mono" autocomplete="off" spellcheck="false" :disabled="editRegen" placeholder="••••••••">
+            <label class="flex items-center gap-2 text-xs text-zinc-500 mt-2">
+              <input type="checkbox" name="regenerate" value="1" x-model="editRegen" class="rounded border-zinc-300">
+              <?= e(t('site.database.generate_new')) ?>
+            </label>
+          </div>
+          <div class="flex items-start gap-2 bg-amber-50 border border-amber-200/70 rounded-lg px-3 py-2">
+            <i class="ti ti-alert-triangle text-amber-500 mt-0.5 text-sm shrink-0"></i>
+            <p class="text-[11px] text-amber-800 leading-relaxed"><?= e(t('site.database.pass_warning')) ?></p>
+          </div>
+          <div class="flex justify-end gap-2 pt-1">
+            <button type="button" @click="modal=null" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
+            <button type="submit" class="btn btn-primary"><i class="ti ti-device-floppy text-sm"></i> <?= e(t('site.database.save_btn')) ?></button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal: Delete Database / User (type-to-confirm) -->
+    <div x-show="modal==='delDb' || modal==='delUser'" x-cloak class="fixed inset-0 z-50">
+      <div class="absolute inset-0 bg-zinc-900/40" @click="modal=null"></div>
+      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl" @keydown.escape.window="modal=null">
+        <div class="card-head flex items-center justify-between bg-red-50/50">
+          <h3 class="card-title text-red-700"><i class="ti ti-alert-triangle"></i> <span x-show="modal==='delDb'"><?= e(t('site.database.delete_db')) ?></span><span x-show="modal==='delUser'" x-cloak><?= e(t('site.database.delete_user')) ?></span></h3>
+          <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
+        </div>
+        <div class="p-5 space-y-3">
+          <p class="text-sm text-zinc-600"><span x-show="modal==='delDb'"><?= e(t('site.database.delete_db_warn')) ?></span><span x-show="modal==='delUser'" x-cloak><?= e(t('site.database.delete_user_warn')) ?></span></p>
+          <label class="lbl"><?= e(t('site.database.delete_type_confirm')) ?> <span class="mono text-zinc-800" x-text="delName"></span></label>
+          <input type="text" x-model="typed" class="inp w-full mono" autocomplete="off" spellcheck="false" :placeholder="delName">
+          <form method="POST" :action="'/sites/<?= e($domain) ?>/database/' + (delKind==='db' ? 'delete' : 'user/delete')" class="flex justify-end gap-2 pt-1">
+            <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+            <input type="hidden" name="name" :value="delName">
+            <input type="hidden" name="confirm" :value="typed">
+            <button type="button" @click="modal=null" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
+            <button type="submit" class="btn btn-danger" :disabled="typed !== delName" :class="{ 'opacity-50 cursor-not-allowed': typed !== delName }">
+              <i class="ti ti-trash text-sm"></i> <span x-show="modal==='delDb'"><?= e(t('site.database.delete_db_btn')) ?></span><span x-show="modal==='delUser'" x-cloak><?= e(t('site.database.delete_user_btn')) ?></span>
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
 <?php else: ?>
 <!-- ──────────────── DATABASE / SECURITY / CRON / FILES ────────────── -->
 
