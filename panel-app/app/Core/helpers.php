@@ -340,6 +340,43 @@ function php_versions_status(): array
 }
 
 /**
+ * The one database engine service actually in use — 'mysql' or 'mariadb'.
+ *
+ * The installer provisions a single engine ($DB_ENGINE in install.sh), but a
+ * rebuilt or migrated box can carry a leftover unit for the other one (e.g. an
+ * inactive, disabled mariadb.service sitting next to a live mysql.service).
+ * Hardcoding both made the Services page show a phantom "stopped" engine and the
+ * dashboard raise a false "service down" alert. Detect the real one instead:
+ *
+ *   1. active unit wins — a running engine is the one in use. On a MariaDB box the
+ *      `mysql` unit is just an Alias= of mariadb (both report active), so we list
+ *      mariadb first and skip any unit whose is-enabled is literally "alias".
+ *   2. else the enabled unit — engine installed but currently stopped; still ours.
+ *   3. else any unit that exists at all.
+ *   4. else default to 'mysql'.
+ *
+ * Cached per-request; www-data can read systemctl state without sudo.
+ */
+function db_service(): string
+{
+    static $cache = null;
+    if ($cache !== null) return $cache;
+
+    $active = $enabled = $exists = null;
+    foreach (['mariadb', 'mysql'] as $svc) {   // mariadb first: it owns the real unit when a mysql alias exists
+        $en = trim((string) shell_exec('systemctl is-enabled ' . escapeshellarg($svc) . ' 2>/dev/null'));
+        if ($en === 'alias') continue;          // not a real engine — an alias pointing at the other
+        $ac = trim((string) shell_exec('systemctl is-active ' . escapeshellarg($svc) . ' 2>/dev/null'));
+
+        if ($ac === 'active' && $active === null)                                   $active  = $svc;
+        if (in_array($en, ['enabled', 'static', 'indirect'], true) && $enabled === null) $enabled = $svc;
+        if ($en !== '' && $en !== 'not-found' && $exists === null)                   $exists  = $svc;
+    }
+
+    return $cache = $active ?? $enabled ?? $exists ?? 'mysql';
+}
+
+/**
  * Safe CLI runner - use sudo when invoked from the web (www-data)
  */
 function run_cli(string $command, array $args = []): array

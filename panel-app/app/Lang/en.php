@@ -64,7 +64,7 @@ return [
     'admin.title'           => 'Admin Area',
     'admin.subtitle'        => 'Server-wide settings and services',
     'admin.services.title'  => 'Services',
-    'admin.services.desc'   => 'Start, stop and restart Nginx, PHP-FPM, MariaDB, Redis',
+    'admin.services.desc'   => 'Start, stop and restart Nginx, PHP-FPM, the database engine, and Redis',
     'admin.php.title'       => 'PHP Versions',
     'admin.php.desc'        => 'Installed PHP versions and pool status',
     'admin.cache.title'     => 'FastCGI Cache',
@@ -78,7 +78,7 @@ return [
     'admin.security.title'  => 'Security',
     'admin.security.desc'   => 'Firewall, Fail2ban, SSH hardening',
     'admin.tuning.title'    => 'Server Tuning',
-    'admin.tuning.desc'     => 'Auto-tune PHP-FPM, Nginx, MariaDB, delivery defaults',
+    'admin.tuning.desc'     => 'Auto-tune PHP-FPM, Nginx, the database engine, delivery defaults',
     'admin.backups.title'   => 'Backups',
     'admin.backups.desc'    => 'Scheduled and on-demand server backups',
 

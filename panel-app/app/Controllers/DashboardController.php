@@ -100,7 +100,7 @@ class DashboardController extends BaseController
 
     private function getServicesStatus(): array
     {
-        $services = ['nginx', 'mysql', 'mariadb', 'redis-server', 'aidipanel-fpm'];
+        $services = ['nginx', db_service(), 'redis-server', 'aidipanel-fpm'];
         foreach (php_versions_status() as $ver => $s) {
             if ($s['installed']) $services[] = "php{$ver}-fpm";
         }

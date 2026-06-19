@@ -15,7 +15,7 @@ class ServiceController extends BaseController
     /** Base services + the panel runtime + every installed PHP-FPM service. */
     private function services(): array
     {
-        return array_merge(['nginx', 'mysql', 'mariadb', 'redis-server', 'aidipanel-fpm'], $this->phpFpmServices());
+        return array_merge(['nginx', db_service(), 'redis-server', 'aidipanel-fpm'], $this->phpFpmServices());
     }
 
     public function index(array $params = []): void
@@ -34,7 +34,7 @@ class ServiceController extends BaseController
         $service = (string) $this->request->post('service', '');
         $action  = (string) $this->request->post('action', '');
 
-        $allowed = array_merge(['nginx', 'mysql', 'mariadb', 'redis', 'redis-server', 'aidipanel-fpm'], $this->phpFpmServices());
+        $allowed = array_merge(['nginx', db_service(), 'redis', 'redis-server', 'aidipanel-fpm'], $this->phpFpmServices());
         if (!in_array($service, $allowed, true)) $this->error('Invalid service.');
         if (!in_array($action, ['start', 'stop', 'restart'], true)) $this->error('Invalid action.');
 
