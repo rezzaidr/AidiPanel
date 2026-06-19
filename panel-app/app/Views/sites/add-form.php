@@ -136,14 +136,16 @@ $renderField = function (array $f): void {
 
       <!-- Modal: confirm on-demand PHP install before create -->
       <div x-show="confirmVer" x-cloak class="fixed inset-0 z-50">
-        <div class="absolute inset-0 bg-zinc-900/40" @click="!submitting && (confirmVer=null)"></div>
-        <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl"
-             @keydown.escape.window="!submitting && (confirmVer=null)">
-          <div class="card-head flex items-center gap-2">
-            <span class="w-8 h-8 rounded-lg bg-ink-pale flex items-center justify-center shrink-0">
-              <i class="ti ti-download text-ink"></i>
-            </span>
-            <h3 class="card-title"><span x-text="'PHP ' + confirmVer"></span> <?= e(t('site.add.php_modal_title')) ?></h3>
+        <div class="absolute inset-0 bg-zinc-900/40"></div>
+        <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl">
+          <div class="card-head flex items-center justify-between gap-3">
+            <div class="flex items-center gap-2">
+              <span class="w-8 h-8 rounded-lg bg-ink-pale flex items-center justify-center shrink-0">
+                <i class="ti ti-download text-ink"></i>
+              </span>
+              <h3 class="card-title"><span x-text="'PHP ' + confirmVer"></span> <?= e(t('site.add.php_modal_title')) ?></h3>
+            </div>
+            <button type="button" @click="confirmVer=null" :disabled="submitting" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><i class="ti ti-x"></i></button>
           </div>
           <div class="p-5 space-y-4">
             <p class="text-sm text-zinc-600"><?= e(t('site.add.php_modal_body')) ?></p>

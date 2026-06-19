@@ -439,7 +439,7 @@ $tabs = [
           <span class="text-sm text-zinc-600"><?= e(t('perf.setup.checklist.3')) ?></span>
         </div>
       </div>
-      <form method="POST" action="/cache/toggle" data-op-stream<?php if ($type === 'php'): ?> x-data="{ confirm: false }"<?php endif; ?>>
+      <form method="POST" action="/cache/toggle" data-op-stream<?php if ($type === 'php'): ?> x-data="{ confirm: false, submitting: false }"<?php endif; ?>>
         <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
         <input type="hidden" name="domain" value="<?= e($domain) ?>">
         <input type="hidden" name="action" value="enable">
@@ -468,14 +468,16 @@ $tabs = [
         <?php if ($type === 'php'): ?>
         <!-- Modal: confirm caching a dynamic PHP app (#3 — stale CSRF/nonce risk); styled like the other panel modals -->
         <div x-show="confirm" x-cloak class="fixed inset-0 z-50">
-          <div class="absolute inset-0 bg-zinc-900/40" @click="confirm=false"></div>
-          <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl text-left"
-               @keydown.escape.window="confirm=false">
-            <div class="card-head flex items-center gap-2">
-              <span class="w-8 h-8 rounded-lg bg-amber-50 flex items-center justify-center shrink-0">
-                <i class="ti ti-alert-triangle text-amber-500"></i>
-              </span>
-              <h3 class="card-title"><?= e(t('perf.cache.dynamic_modal_title')) ?></h3>
+          <div class="absolute inset-0 bg-zinc-900/40"></div>
+          <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl text-left">
+            <div class="card-head flex items-center justify-between gap-3">
+              <div class="flex items-center gap-2">
+                <span class="w-8 h-8 rounded-lg bg-amber-50 flex items-center justify-center shrink-0">
+                  <i class="ti ti-alert-triangle text-amber-500"></i>
+                </span>
+                <h3 class="card-title"><?= e(t('perf.cache.dynamic_modal_title')) ?></h3>
+              </div>
+              <button type="button" @click="confirm=false" :disabled="submitting" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><i class="ti ti-x"></i></button>
             </div>
             <div class="p-5 space-y-4">
               <p class="text-sm text-zinc-600 leading-relaxed"><?= e(t('perf.cache.dynamic_modal_body')) ?></p>
@@ -1148,14 +1150,16 @@ $tabs = [
 
         <!-- Modal: confirm on-demand PHP install before switching -->
         <div x-show="confirmVer" x-cloak class="fixed inset-0 z-50">
-          <div class="absolute inset-0 bg-zinc-900/40" @click="!submitting && (confirmVer=null)"></div>
-          <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl text-left"
-               @keydown.escape.window="!submitting && (confirmVer=null)">
-            <div class="card-head flex items-center gap-2">
-              <span class="w-8 h-8 rounded-lg bg-ink-pale flex items-center justify-center shrink-0">
-                <i class="ti ti-download text-ink"></i>
-              </span>
-              <h3 class="card-title"><span x-text="'PHP ' + confirmVer"></span> <?= e(t('site.add.php_modal_title')) ?></h3>
+          <div class="absolute inset-0 bg-zinc-900/40"></div>
+          <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl text-left">
+            <div class="card-head flex items-center justify-between gap-3">
+              <div class="flex items-center gap-2">
+                <span class="w-8 h-8 rounded-lg bg-ink-pale flex items-center justify-center shrink-0">
+                  <i class="ti ti-download text-ink"></i>
+                </span>
+                <h3 class="card-title"><span x-text="'PHP ' + confirmVer"></span> <?= e(t('site.add.php_modal_title')) ?></h3>
+              </div>
+              <button type="button" @click="confirmVer=null" :disabled="submitting" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><i class="ti ti-x"></i></button>
             </div>
             <div class="p-5 space-y-4">
               <p class="text-sm text-zinc-600"><?= e(t('site.add.php_modal_body')) ?></p>
@@ -1216,9 +1220,8 @@ $tabs = [
 
       <!-- Modal: permanent delete (type-the-domain confirm) -->
       <div x-show="open" x-cloak class="fixed inset-0 z-50">
-        <div class="absolute inset-0 bg-zinc-900/40" @click="open=false"></div>
-        <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl"
-             @keydown.escape.window="open=false">
+        <div class="absolute inset-0 bg-zinc-900/40"></div>
+        <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl">
           <div class="card-head flex items-center justify-between bg-red-50/50">
             <h3 class="card-title text-red-700"><i class="ti ti-alert-triangle"></i> <?= e(t('site.set.delete_modal_title', ['domain' => $domain])) ?></h3>
             <button type="button" @click="open=false" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
@@ -1448,11 +1451,11 @@ $tabs = [
 
     <!-- Modal: Install Let's Encrypt -->
     <div x-show="modal==='le'" x-cloak class="fixed inset-0 z-50">
-      <div class="absolute inset-0 bg-zinc-900/40" @click="modal=null"></div>
-      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl" @keydown.escape.window="modal=null">
+      <div class="absolute inset-0 bg-zinc-900/40"></div>
+      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl">
         <div class="card-head">
           <h3 class="card-title"><i class="ti ti-rosette-discount-check text-speed"></i> <?= e(t('site.ssl.le_modal_title')) ?></h3>
-          <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
+          <button type="button" @click="modal=null" :disabled="submitting" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><i class="ti ti-x"></i></button>
         </div>
         <form method="POST" action="/sites/<?= e($domain) ?>/ssl/install" data-op-stream>
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
@@ -1500,11 +1503,11 @@ $tabs = [
 
     <!-- Modal: Import certificate -->
     <div x-show="modal==='import'" x-cloak class="fixed inset-0 z-50">
-      <div class="absolute inset-0 bg-zinc-900/40" @click="modal=null"></div>
-      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-lg card shadow-2xl max-h-[90vh] overflow-y-auto" @keydown.escape.window="modal=null">
+      <div class="absolute inset-0 bg-zinc-900/40"></div>
+      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-lg card shadow-2xl max-h-[90vh] overflow-y-auto">
         <div class="card-head">
           <h3 class="card-title"><i class="ti ti-certificate text-speed"></i> <?= e(t('site.ssl.import_modal_title')) ?></h3>
-          <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
+          <button type="button" @click="modal=null" :disabled="submitting" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><i class="ti ti-x"></i></button>
         </div>
         <form method="POST" action="/sites/<?= e($domain) ?>/ssl/import" @submit="submitting = true; window.opGuard.start()">
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
@@ -1540,19 +1543,19 @@ $tabs = [
 
     <!-- Modal: Renew certificate -->
     <div x-show="modal==='renew'" x-cloak class="fixed inset-0 z-50">
-      <div class="absolute inset-0 bg-zinc-900/40" @click="modal=null"></div>
-      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl" @keydown.escape.window="modal=null">
+      <div class="absolute inset-0 bg-zinc-900/40"></div>
+      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl">
         <div class="card-head">
           <h3 class="card-title"><i class="ti ti-refresh text-speed"></i> <?= e(t('site.ssl.renew_cert')) ?></h3>
-          <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
+          <button type="button" @click="modal=null" :disabled="submitting" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><i class="ti ti-x"></i></button>
         </div>
         <form method="POST" action="/sites/<?= e($domain) ?>/ssl/renew" data-op-stream>
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
           <div data-op-fields class="p-5">
             <p class="text-sm text-zinc-600 leading-relaxed mb-4"><?= e(t('site.ssl.renew')) ?> · <span class="mono"><?= e($domain) ?></span></p>
             <div class="flex justify-end gap-2">
-              <button type="button" @click="modal=null" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
-              <button type="submit" class="btn btn-primary"><i class="ti ti-refresh text-sm"></i> <?= e(t('site.ssl.renew_cert')) ?></button>
+              <button type="button" @click="modal=null" :disabled="submitting" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
+              <button type="submit" :disabled="submitting" class="btn btn-primary"><i class="ti ti-refresh text-sm"></i> <?= e(t('site.ssl.renew_cert')) ?></button>
             </div>
           </div>
           <div class="px-5 pb-5"><?php include APP_ROOT . '/Views/partials/op-progress.php'; ?></div>
@@ -1784,19 +1787,19 @@ $tabs = [
 
     <!-- Modal: Install phpMyAdmin -->
     <div x-show="modal==='installPma'" x-cloak class="fixed inset-0 z-50">
-      <div class="absolute inset-0 bg-zinc-900/40" @click="modal=null"></div>
-      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl" @keydown.escape.window="modal=null">
+      <div class="absolute inset-0 bg-zinc-900/40"></div>
+      <div x-data="{ submitting:false }" class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl">
         <div class="card-head flex items-center justify-between">
           <h3 class="card-title"><i class="ti ti-brand-mysql text-zinc-400"></i> <?= e(t('site.database.pma_install')) ?></h3>
-          <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
+          <button type="button" @click="modal=null" :disabled="submitting" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><i class="ti ti-x"></i></button>
         </div>
         <form method="POST" action="/sites/<?= e($domain) ?>/database/phpmyadmin/install" data-op-stream class="p-5 space-y-3">
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
           <div data-op-fields class="space-y-3">
             <p class="text-sm text-zinc-600"><?= e(t('site.database.pma_install_hint')) ?></p>
             <div class="flex justify-end gap-2 pt-1">
-              <button type="button" @click="modal=null" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
-              <button type="submit" class="btn btn-primary"><i class="ti ti-download text-sm"></i> <?= e(t('site.database.pma_install')) ?></button>
+              <button type="button" @click="modal=null" :disabled="submitting" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
+              <button type="submit" :disabled="submitting" class="btn btn-primary"><i class="ti ti-download text-sm"></i> <?= e(t('site.database.pma_install')) ?></button>
             </div>
           </div>
           <?php include APP_ROOT . '/Views/partials/op-progress.php'; ?>
@@ -1806,8 +1809,8 @@ $tabs = [
 
     <!-- Modal: Add Database -->
     <div x-show="modal==='addDb'" x-cloak class="fixed inset-0 z-50">
-      <div class="absolute inset-0 bg-zinc-900/40" @click="modal=null"></div>
-      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl" @keydown.escape.window="modal=null">
+      <div class="absolute inset-0 bg-zinc-900/40"></div>
+      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl">
         <div class="card-head flex items-center justify-between">
           <h3 class="card-title"><i class="ti ti-database text-zinc-400"></i> <?= e(t('site.database.add_db')) ?></h3>
           <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
@@ -1849,8 +1852,8 @@ $tabs = [
 
     <!-- Modal: Add Database User -->
     <div x-show="modal==='addUser'" x-cloak class="fixed inset-0 z-50">
-      <div class="absolute inset-0 bg-zinc-900/40" @click="modal=null"></div>
-      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl" @keydown.escape.window="modal=null">
+      <div class="absolute inset-0 bg-zinc-900/40"></div>
+      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl">
         <div class="card-head flex items-center justify-between">
           <h3 class="card-title"><i class="ti ti-user-plus text-zinc-400"></i> <?= e(t('site.database.add_user')) ?></h3>
           <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
@@ -1890,8 +1893,8 @@ $tabs = [
 
     <!-- Modal: Edit Database User -->
     <div x-show="modal==='editUser'" x-cloak class="fixed inset-0 z-50">
-      <div class="absolute inset-0 bg-zinc-900/40" @click="modal=null"></div>
-      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl" @keydown.escape.window="modal=null">
+      <div class="absolute inset-0 bg-zinc-900/40"></div>
+      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl">
         <div class="card-head flex items-center justify-between">
           <h3 class="card-title"><i class="ti ti-edit text-zinc-400"></i> <?= e(t('site.database.edit_user')) ?></h3>
           <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
@@ -1936,8 +1939,8 @@ $tabs = [
 
     <!-- Modal: Delete Database / User (type-to-confirm) -->
     <div x-show="modal==='delDb' || modal==='delUser'" x-cloak class="fixed inset-0 z-50">
-      <div class="absolute inset-0 bg-zinc-900/40" @click="modal=null"></div>
-      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl" @keydown.escape.window="modal=null">
+      <div class="absolute inset-0 bg-zinc-900/40"></div>
+      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl">
         <div class="card-head flex items-center justify-between bg-red-50/50">
           <h3 class="card-title text-red-700"><i class="ti ti-alert-triangle"></i> <span x-show="modal==='delDb'"><?= e(t('site.database.delete_db')) ?></span><span x-show="modal==='delUser'" x-cloak><?= e(t('site.database.delete_user')) ?></span></h3>
           <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>

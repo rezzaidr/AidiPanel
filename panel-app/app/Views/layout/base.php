@@ -334,9 +334,20 @@ window.opProgressController = function (root) {
 // ── Declarative streaming: <form data-op-stream> submits via opStream with a bar ──
 // The form should contain the op-progress partial ([data-op-progress]) and wrap its
 // inputs/buttons in [data-op-fields]. On success: redirect (+ toast) or reload.
+window.setFormSubmitting = function (form, value) {
+  var root = form && form.closest ? form.closest('[x-data]') : null;
+  if (!root || !window.Alpine || !window.Alpine.$data) return;
+  try {
+    var data = window.Alpine.$data(root);
+    if (data && Object.prototype.hasOwnProperty.call(data, 'submitting')) {
+      data.submitting = value;
+    }
+  } catch (e) {}
+};
 window.opStreamSubmit = function (form) {
   if (!form || form.dataset.opStreaming === '1') return;
   form.dataset.opStreaming = '1';
+  setFormSubmitting(form, true);
   var fields = form.querySelector('[data-op-fields]');
   var ui     = window.opProgressController(form.querySelector('[data-op-progress]'));
   var fd     = new FormData(form);
@@ -354,6 +365,7 @@ window.opStreamSubmit = function (form) {
         if (frame.redirect) window.location.href = frame.redirect; else window.location.reload();
       } else {
         form.dataset.opStreaming = '0';
+        setFormSubmitting(form, false);
         if (ui) ui.fail(frame.message || 'Operation failed.');
         if (fields) fields.classList.remove('hidden');
       }
@@ -361,6 +373,7 @@ window.opStreamSubmit = function (form) {
     onError: function (msg) {
       window.opGuard.stop();
       form.dataset.opStreaming = '0';
+      setFormSubmitting(form, false);
       if (ui) ui.fail(msg);
       if (fields) fields.classList.remove('hidden');
     }
