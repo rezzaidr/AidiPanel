@@ -36,6 +36,14 @@ $baScope = in_array(($basicAuthInfo['scope'] ?? ''), ['wp-login', 'custom', 'sit
 $baError = (string) ($basicAuthInfo['error'] ?? '');
 $baForceHttps = ($basicAuthInfo['force_https'] ?? '0') === '1';
 $baHasPassword = ($basicAuthInfo['htpasswd_exists'] ?? '0') === '1';
+$cloudflareInfo = $cloudflareInfo ?? [];
+$cfEnabled = ($cloudflareInfo['enabled'] ?? '0') === '1';
+$cfSource = (string) ($cloudflareInfo['source'] ?? 'seed');
+$cfAgeDays = max(0, intdiv((int) ($cloudflareInfo['age_seconds'] ?? 0), 86400));
+$cfRanges = (int) ($cloudflareInfo['ranges_v4'] ?? 0) . ' IPv4 · '
+    . (int) ($cloudflareInfo['ranges_v6'] ?? 0) . ' IPv6';
+$cfError = (string) ($cloudflareInfo['error'] ?? '');
+$cfStale = ($cloudflareInfo['warning'] ?? '') === 'stale';
 
 $appIcon = static function (string $type): string {
     return match ($type) {
@@ -1985,6 +1993,18 @@ $tabs = [
       'unreadable_credentials',
       'force_https_drift',
   ], true);
+  $cfErrorMessage = match ($cfError) {
+      'busy'                    => t('site.security.cloudflare.error.busy'),
+      'missing_seed'            => t('site.security.cloudflare.error.missing_seed'),
+      'missing_live'            => t('site.security.cloudflare.error.missing_live'),
+      'missing_generated'       => t('site.security.cloudflare.error.missing_generated'),
+      'missing_state'           => t('site.security.cloudflare.error.missing_state'),
+      'malformed_state'         => t('site.security.cloudflare.error.malformed_state'),
+      'hash_count_mismatch'     => t('site.security.cloudflare.error.hash_count_mismatch'),
+      'generated_content_drift' => t('site.security.cloudflare.error.generated_content_drift'),
+      'status_unavailable'      => t('site.security.cloudflare.error.status_unavailable'),
+      default                   => '',
+  };
   ?>
   <div class="space-y-4" x-data="{ enabled: <?= $baEnabled ? 'true' : 'false' ?>, scope: '<?= e($baScope) ?>' }">
     <?php if ($driftMessage !== ''): ?>
@@ -2115,16 +2135,55 @@ $tabs = [
         </div>
       </div>
 
-      <div class="card opacity-70" data-security-card="cloudflare-protection">
-        <div class="p-5 flex items-start justify-between gap-4">
-          <div class="flex items-start gap-3">
-            <i class="ti ti-cloud-lock text-zinc-400 text-lg mt-0.5"></i>
-            <div>
-              <h3 class="text-sm font-semibold text-zinc-800"><?= e(t('site.security.cloudflare.title')) ?></h3>
-              <p class="text-xs text-zinc-500 mt-1"><?= e(t('site.security.cloudflare.desc')) ?></p>
+      <div class="card" data-security-card="cloudflare-protection">
+        <div class="p-5 space-y-4">
+          <div class="flex items-start justify-between gap-4">
+            <div class="flex items-start gap-3">
+              <i class="ti ti-cloud-lock <?= $cfErrorMessage === '' && $cfEnabled ? 'text-emerald-500' : 'text-zinc-400' ?> text-lg mt-0.5"></i>
+              <div>
+                <h3 class="text-sm font-semibold text-zinc-800"><?= e(t('site.security.cloudflare.title')) ?></h3>
+                <p class="text-xs text-zinc-500 mt-1"><?= e(t('site.security.cloudflare.desc')) ?></p>
+              </div>
             </div>
+            <span class="badge <?= $cfErrorMessage === '' && $cfEnabled ? 'badge-ok' : 'badge-muted' ?>">
+              <?= e($cfErrorMessage !== ''
+                  ? t('site.security.cloudflare.status_error')
+                  : ($cfEnabled ? t('site.security.cloudflare.status_active') : t('site.security.cloudflare.status_inactive'))) ?>
+            </span>
           </div>
-          <span class="badge badge-muted"><?= e(t('common.soon')) ?></span>
+
+          <?php if ($cfErrorMessage !== ''): ?>
+          <div class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+            <?= e($cfErrorMessage) ?>
+          </div>
+          <?php elseif ($cfStale): ?>
+          <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            <?= e(t('site.security.cloudflare.stale')) ?>
+          </div>
+          <?php endif; ?>
+
+          <?php if ($cfErrorMessage === ''): ?>
+          <dl class="grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
+            <div>
+              <dt class="text-zinc-400"><?= e(t('site.security.cloudflare.source')) ?></dt>
+              <dd class="mt-0.5 font-medium text-zinc-700"><?= e(ucfirst($cfSource)) ?></dd>
+            </div>
+            <div>
+              <dt class="text-zinc-400"><?= e(t('site.security.cloudflare.age')) ?></dt>
+              <dd class="mt-0.5 font-medium text-zinc-700"><?= e((string) $cfAgeDays) ?> days</dd>
+            </div>
+            <div>
+              <dt class="text-zinc-400"><?= e(t('site.security.cloudflare.ranges')) ?></dt>
+              <dd class="mt-0.5 font-medium text-zinc-700"><?= e($cfRanges) ?></dd>
+            </div>
+            <div>
+              <dt class="text-zinc-400"><?= e(t('site.security.cloudflare.direct_origin_later')) ?></dt>
+              <dd class="mt-0.5 font-medium text-zinc-500"><?= e(t('common.soon')) ?></dd>
+            </div>
+          </dl>
+          <?php endif; ?>
+
+          <p class="text-[11px] leading-relaxed text-zinc-500"><?= e(t('site.security.cloudflare.identity_hint')) ?></p>
         </div>
       </div>
 

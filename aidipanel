@@ -405,6 +405,7 @@ _usage() {
 
   echo -e "\n${BOLD}${BLUE}Site Security${RESET}"
   echo "  security:basic-auth  Manage per-site HTTP Basic Authentication"
+  echo "  cloudflare:realip    Manage global Cloudflare real-IP restoration (--action status|provision|enable|refresh|disable)"
 
   echo -e "\n${BOLD}${BLUE}Database Management${RESET}"
   echo "  db:add          Create a new database and user"
@@ -5201,6 +5202,802 @@ run() {
 }
 
 # ===========================================================================
+# CLOUDFLARE REAL-IP / GLOBAL CLASSIFIER  (Slice 2 — Network Rules, Phase 1)
+# ===========================================================================
+# One validated live Cloudflare range list generates one global Nginx file with
+# the trusted real-IP directives plus a single `$aidipanel_from_cloudflare`
+# classifier. The packaged seed is an immutable fallback; the live list changes
+# only after a complete, validated refresh. State is inert `schema=1` key=value
+# data, never sourced. Every action serialises on one global flock.
+
+CF_STALE_SECONDS=1814400          # 21 days = three missed weekly refresh cycles
+CF_SEED_GENERATED_AT=1781913600   # 2026-06-20 — bump only when shipping a new seed
+CF_REFRESH_MAX_BYTES=65536        # response-size ceiling per official list
+CF_LOCK_WAIT=10                   # bounded flock wait (seconds) before error=busy
+
+# --- paths (inline defaults so unit tests can sandbox via the env vars) --------
+_cloudflare_seed_path()     { printf '%s' "${AIDIPANEL_CF_SEED:-/usr/share/aidipanel/cloudflare/ip-ranges.seed}"; }
+_cloudflare_dir()           { printf '%s' "${AIDIPANEL_CF_DIR:-/etc/nginx/aidipanel/cloudflare}"; }
+_cloudflare_live_path()     { printf '%s/ip-ranges.conf' "$(_cloudflare_dir)"; }
+_cloudflare_state_path()    { printf '%s/realip.state' "$(_cloudflare_dir)"; }
+_cloudflare_conf_path()     { printf '%s' "${AIDIPANEL_CF_CONF:-/etc/nginx/conf.d/aidipanel-cloudflare.conf}"; }
+_cloudflare_lock_path()     { printf '%s' "${AIDIPANEL_CF_LOCK:-/run/lock/aidipanel-cloudflare.lock}"; }
+_cloudflare_cron_path()     { printf '%s' "${AIDIPANEL_CRON:-/etc/cron.d/aidipanel}"; }
+_cloudflare_security_root() { printf '%s' "${AIDIPANEL_SECURITY_DIR:-/etc/nginx/aidipanel/security}"; }
+
+# --- embedded immutable seed (canonical Cloudflare CIDRs, IPv4 then IPv6) ------
+_cloudflare_seed_data() {
+  cat <<'SEED'
+173.245.48.0/20
+103.21.244.0/22
+103.22.200.0/22
+103.31.4.0/22
+141.101.64.0/18
+108.162.192.0/18
+190.93.240.0/20
+188.114.96.0/20
+197.234.240.0/22
+198.41.128.0/17
+162.158.0.0/15
+104.16.0.0/13
+104.24.0.0/14
+172.64.0.0/13
+131.0.72.0/22
+2400:cb00::/32
+2606:4700::/32
+2803:f800::/32
+2405:b500::/32
+2405:8100::/32
+2a06:98c0::/29
+2c0f:f248::/32
+SEED
+}
+
+# --- Python-backed validation (use `python3 -c`, NEVER `python3 - <<` which would
+#     consume stdin as the script and silently empty sys.stdin) -----------------
+_cloudflare_normalize_ranges() {
+  python3 -c '
+import sys, ipaddress
+v4=[]; v6=[]; seen=set()
+for raw in sys.stdin:
+    line=raw.strip()
+    if not line:
+        continue
+    if line[0]=="#":
+        sys.exit(1)
+    parts=line.split()
+    if len(parts)!=1:
+        sys.exit(1)
+    try:
+        net=ipaddress.ip_network(parts[0], strict=True)
+    except ValueError:
+        sys.exit(1)
+    if net.prefixlen==0:
+        sys.exit(1)
+    key=net.with_prefixlen
+    if key in seen:
+        continue
+    seen.add(key)
+    (v4 if net.version==4 else v6).append(key)
+if not v4 or not v6:
+    sys.exit(1)
+for k in v4+v6:
+    print(k)
+'
+}
+
+_cloudflare_count_family() {
+  # $1 = file of canonical CIDRs ; $2 = 4|6 ; prints the family count
+  local file="$1" fam="$2"
+  if [[ "$fam" == 4 ]]; then
+    grep -c '\.' "$file" 2>/dev/null || true
+  else
+    grep -c ':' "$file" 2>/dev/null || true
+  fi
+}
+
+_cloudflare_shrink_ok() {
+  local nv4="$1" lv4="$2" nv6="$3" lv6="$4"
+  (( nv4 * 2 >= lv4 )) || return 1
+  (( nv6 * 2 >= lv6 )) || return 1
+  return 0
+}
+
+# --- inert state: render (schema=1 first, 0600) + strict get -------------------
+_cloudflare_state_render() {
+  local file="$1" enabled="$2" source="$3" seed="$4" last="$5" v4="$6" v6="$7" sha="$8"
+  [[ "$enabled" =~ ^(0|1)$ ]] || return 1
+  [[ "$source" =~ ^(seed|refresh)$ ]] || return 1
+  [[ "$seed" =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ "$last" =~ ^(0|[1-9][0-9]*)$ ]] || return 1
+  [[ "$v4" =~ ^[1-9][0-9]*$ && "$v6" =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || return 1
+  if [[ "$source" == seed ]]; then
+    [[ "$last" == 0 ]] || return 1
+  else
+    [[ "$last" != 0 ]] || return 1
+  fi
+  {
+    printf 'schema=1\n'
+    printf 'enabled=%s\n' "$enabled"
+    printf 'source=%s\n' "$source"
+    printf 'seed_generated_at=%s\n' "$seed"
+    printf 'last_success=%s\n' "$last"
+    printf 'ranges_v4=%s\n' "$v4"
+    printf 'ranges_v6=%s\n' "$v6"
+    printf 'sha256=%s\n' "$sha"
+  } > "$file" || return 1
+  chmod 0600 "$file" 2>/dev/null || return 1
+}
+
+_cloudflare_state_get() {
+  local file="$1" want="$2"
+  [[ -f "$file" ]] || return 1
+  awk -F= -v want="$want" '
+    BEGIN{
+      split("schema enabled source seed_generated_at last_success ranges_v4 ranges_v6 sha256", a, " ")
+      for (i in a) allow[a[i]]=1
+    }
+    $0 ~ /^[[:space:]]*$/ { next }
+    {
+      k=$1
+      if ($0 !~ /^[a-z0-9_]+=[^=]*$/) { bad=1; next }
+      if (!(k in allow)) { bad=1; next }
+      if (seen[k]++) { bad=1; next }
+      val[k]=substr($0, length($1)+2)
+    }
+    END{
+      if (bad || !(want in allow)) exit 2
+      for (i in allow) if (seen[i] != 1) exit 3
+      if (val["schema"] != "1") exit 4
+      if (val["enabled"] !~ /^(0|1)$/) exit 4
+      if (val["source"] !~ /^(seed|refresh)$/) exit 4
+      if (val["seed_generated_at"] !~ /^[1-9][0-9]*$/) exit 4
+      if (val["last_success"] !~ /^(0|[1-9][0-9]*)$/) exit 4
+      if (val["ranges_v4"] !~ /^[1-9][0-9]*$/) exit 4
+      if (val["ranges_v6"] !~ /^[1-9][0-9]*$/) exit 4
+      if (length(val["sha256"]) != 64 || val["sha256"] ~ /[^0-9a-f]/) exit 4
+      if (val["source"] == "seed" && val["last_success"] != "0") exit 4
+      if (val["source"] == "refresh" && val["last_success"] == "0") exit 4
+      print val[want]
+    }
+  ' "$file"
+}
+
+_cloudflare_validate_live() {
+  # $1 = live list ; $2 = validated state ; $3 = canonical scratch output
+  local live="$1" state="$2" outfile="$3" v4 v6 sha expected_v4 expected_v6 expected_sha
+  rm -f -- "$outfile"
+  [[ -f "$live" && -f "$state" ]] || return 1
+  if ! _cloudflare_normalize_ranges < "$live" > "$outfile" \
+     || ! cmp -s "$live" "$outfile"; then
+    rm -f -- "$outfile"
+    return 1
+  fi
+  expected_v4=$(_cloudflare_state_get "$state" ranges_v4) || { rm -f -- "$outfile"; return 1; }
+  expected_v6=$(_cloudflare_state_get "$state" ranges_v6) || { rm -f -- "$outfile"; return 1; }
+  expected_sha=$(_cloudflare_state_get "$state" sha256) || { rm -f -- "$outfile"; return 1; }
+  v4=$(_cloudflare_count_family "$outfile" 4)
+  v6=$(_cloudflare_count_family "$outfile" 6)
+  sha=$(sha256sum "$outfile" | cut -d' ' -f1)
+  if [[ "$v4" != "$expected_v4" || "$v6" != "$expected_v6" || "$sha" != "$expected_sha" ]]; then
+    rm -f -- "$outfile"
+    return 1
+  fi
+  return 0
+}
+
+_cloudflare_validate_active() {
+  # $1 = canonical ranges ; $2 = generated conf ; $3 = cron ; $4 = scratch dir
+  local ranges="$1" conf="$2" cron="$3" scratch="$4"
+  [[ -f "$ranges" && -f "$conf" ]] || return 1
+  mkdir -p "$scratch" || return 1
+  _cloudflare_render_conf "$ranges" "${scratch}/conf" || return 1
+  cmp -s "$conf" "${scratch}/conf" || return 1
+  _cloudflare_cron_matches 1 "$cron" || return 1
+  return 0
+}
+
+_cloudflare_age_basis() {
+  if (( ${1:-0} > 0 )); then printf 'refresh'; else printf 'seed'; fi
+}
+
+_cloudflare_is_stale() {
+  (( ${1:-0} >= ${CF_STALE_SECONDS:-1814400} ))
+}
+
+# --- serialization: one global flock; shared for reads, exclusive for writes ---
+_cloudflare_lock() {
+  local mode="${1:-x}" lock flag
+  lock="$(_cloudflare_lock_path)"
+  mkdir -p "$(dirname "$lock")" 2>/dev/null || true
+  exec 200>"$lock" || return 1
+  flag='-x'; [[ "$mode" == s ]] && flag='-s'
+  flock -w "${CF_LOCK_WAIT:-10}" "$flag" 200 || return 3   # bounded busy -> error=busy
+  return 0
+}
+
+# --- render the ONE global classifier file from a validated CIDR list ----------
+_cloudflare_render_conf() {
+  local ranges="$1" outfile="$2"
+  {
+    echo '# Managed by AidiPanel (cloudflare:realip). Do not edit by hand.'
+    awk 'NF{print "set_real_ip_from " $1 ";"}' "$ranges"
+    echo 'real_ip_header CF-Connecting-IP;'
+    echo '# real_ip_recursive stays off; CF-Connecting-IP carries one address.'
+    echo 'geo $realip_remote_addr $aidipanel_from_cloudflare {'
+    echo '    default 0;'
+    awk 'NF{print "    " $1 " 1;"}' "$ranges"
+    echo '}'
+  } > "$outfile" || return 1
+}
+
+# --- bounded cron block ownership (preserve every other AidiPanel job) ---------
+_cloudflare_cron_block() {
+  cat <<'CRON'
+# >>> AIDIPANEL_CLOUDFLARE_REFRESH >>>
+30 3 * * 1 root aidipanel cloudflare:realip --action refresh >> /var/log/aidipanel-cloudflare.log 2>&1
+# <<< AIDIPANEL_CLOUDFLARE_REFRESH <<<
+CRON
+}
+
+_cloudflare_cron_strip() {
+  awk '
+    /^# >>> AIDIPANEL_CLOUDFLARE_REFRESH >>>$/ {
+      if (skip || starts > 0) bad=1
+      starts++; skip=1; next
+    }
+    /^# <<< AIDIPANEL_CLOUDFLARE_REFRESH <<<$/{
+      if (!skip || ends > 0) bad=1
+      ends++; skip=0; next
+    }
+    !skip { print }
+    END { if (bad || skip || starts != ends || starts > 1) exit 1 }
+  ' "$1"
+}
+
+_cloudflare_cron_render() {
+  # $1 = enabled(0|1) ; $2 = current cron file ; $3 = out file
+  local enabled="$1" src="$2" outfile="$3"
+  [[ "$enabled" == 0 || "$enabled" == 1 ]] || return 1
+  if [[ -f "$src" ]]; then
+    _cloudflare_cron_strip "$src" > "$outfile" || return 1
+  else
+    : > "$outfile"
+  fi
+  [[ "$enabled" == 1 ]] && _cloudflare_cron_block >> "$outfile"
+  return 0
+}
+
+_cloudflare_cron_matches() {
+  # Validate only our bounded block; content outside it belongs to other jobs.
+  local enabled="$1" file="$2" starts ends actual expected
+  [[ "$enabled" == 0 || "$enabled" == 1 ]] || return 1
+  if [[ ! -f "$file" ]]; then
+    [[ "$enabled" == 0 ]]
+    return
+  fi
+  _cloudflare_cron_strip "$file" >/dev/null || return 1
+  starts=$(grep -c '^# >>> AIDIPANEL_CLOUDFLARE_REFRESH >>>$' "$file" 2>/dev/null || true)
+  ends=$(grep -c '^# <<< AIDIPANEL_CLOUDFLARE_REFRESH <<<$' "$file" 2>/dev/null || true)
+  if [[ "$enabled" == 0 ]]; then
+    [[ "$starts" == 0 && "$ends" == 0 ]]
+    return
+  fi
+  [[ "$starts" == 1 && "$ends" == 1 ]] || return 1
+  actual=$(awk '
+    /^# >>> AIDIPANEL_CLOUDFLARE_REFRESH >>>$/ { cap=1 }
+    cap { print }
+    /^# <<< AIDIPANEL_CLOUDFLARE_REFRESH <<<$/{ exit }
+  ' "$file")
+  expected=$(_cloudflare_cron_block)
+  [[ "$actual" == "$expected" ]]
+}
+
+_cloudflare_cfonly_dependents() {
+  local root count=0 f
+  root="$(_cloudflare_security_root)"
+  shopt -s nullglob
+  for f in "$root"/*/cloudflare-only.state; do
+    grep -q '^enabled=1' "$f" 2>/dev/null && count=$((count + 1))
+  done
+  shopt -u nullglob
+  printf '%s' "$count"
+}
+
+# --- rollback transaction over the global artifacts (config + state share it) --
+declare -a CF_TX_PATHS=()
+declare -a CF_TX_PRESENT=()
+CF_TX_DIR=""
+CF_TX_ACTIVE=0
+CF_TX_DIRTY=0
+
+_cloudflare_tx_exit_trap() {
+  local rc="${1:-1}"
+  trap - EXIT
+  set +e
+  if [[ "$CF_TX_ACTIVE" == 1 && "$CF_TX_DIRTY" == 1 ]]; then
+    warn "Cloudflare real-IP transaction interrupted; restoring the previous configuration."
+    _cloudflare_rollback || warn "Cloudflare real-IP rollback needs manual recovery; check ${CLI_LOG}."
+  else
+    _cloudflare_tx_cleanup
+  fi
+  exit "$rc"
+}
+
+_cloudflare_tx_begin() {
+  local p index=0
+  CF_TX_DIR=$(mktemp -d /tmp/aidipanel-cloudflare-tx.XXXXXX) || return 1
+  CF_TX_PATHS=(); CF_TX_PRESENT=()
+  for p in "$@"; do
+    CF_TX_PATHS+=("$p")
+    if [[ -e "$p" ]]; then
+      CF_TX_PRESENT+=(1)
+      if ! cp -a "$p" "${CF_TX_DIR}/${index}"; then
+        rm -rf -- "$CF_TX_DIR"
+        CF_TX_DIR=""; CF_TX_PATHS=(); CF_TX_PRESENT=()
+        return 1
+      fi
+    else
+      CF_TX_PRESENT+=(0)
+    fi
+    index=$((index + 1))
+  done
+  CF_TX_ACTIVE=1; CF_TX_DIRTY=0
+  trap '_cloudflare_tx_exit_trap $?' EXIT
+}
+
+_cloudflare_tx_restore() {
+  local index path rc=0
+  for ((index=0; index<${#CF_TX_PATHS[@]}; index++)); do
+    path="${CF_TX_PATHS[$index]}"
+    rm -rf -- "$path" || rc=1
+    [[ "${CF_TX_PRESENT[$index]}" == 1 ]] && { cp -a "${CF_TX_DIR}/${index}" "$path" || rc=1; }
+  done
+  return "$rc"
+}
+
+_cloudflare_tx_cleanup() {
+  [[ "$CF_TX_ACTIVE" == 1 ]] && trap - EXIT
+  CF_TX_ACTIVE=0; CF_TX_DIRTY=0
+  [[ -n "$CF_TX_DIR" ]] && rm -rf -- "$CF_TX_DIR" || true
+  CF_TX_DIR=""; CF_TX_PATHS=(); CF_TX_PRESENT=()
+}
+
+_cloudflare_rollback() {
+  local rc=0
+  _cloudflare_tx_restore || rc=1
+  if ! nginx -t >> "$CLI_LOG" 2>&1; then
+    rc=1
+  elif ! systemctl reload nginx >> "$CLI_LOG" 2>&1; then
+    rc=1
+  fi
+  _cloudflare_tx_cleanup
+  return "$rc"
+}
+
+# install a validated live list -> render conf/state/cron candidates, swap atomically
+_cloudflare_apply() {
+  local ranges="$1" source="$2" last="$3"
+  local dir live conf state cron v4 v6 sha tmp
+  dir="$(_cloudflare_dir)"; live="$(_cloudflare_live_path)"; conf="$(_cloudflare_conf_path)"
+  state="$(_cloudflare_state_path)"; cron="$(_cloudflare_cron_path)"
+  mkdir -p "$dir" || return 1
+  tmp=$(mktemp -d /tmp/aidipanel-cloudflare-build.XXXXXX) || return 1
+  if ! _cloudflare_normalize_ranges < "$ranges" > "${tmp}/live" \
+     || ! cmp -s "$ranges" "${tmp}/live"; then
+    rm -rf -- "$tmp"
+    return 1
+  fi
+  v4=$(_cloudflare_count_family "${tmp}/live" 4)
+  v6=$(_cloudflare_count_family "${tmp}/live" 6)
+  sha=$(sha256sum "${tmp}/live" | cut -d' ' -f1) || { rm -rf -- "$tmp"; return 1; }
+  _cloudflare_render_conf "${tmp}/live" "${tmp}/conf" || { rm -rf -- "$tmp"; return 1; }
+  _cloudflare_state_render "${tmp}/state" 1 "$source" "$CF_SEED_GENERATED_AT" "$last" "$v4" "$v6" "$sha" \
+    || { rm -rf -- "$tmp"; return 1; }
+  _cloudflare_cron_render 1 "$cron" "${tmp}/cron" || { rm -rf -- "$tmp"; return 1; }
+
+  _cloudflare_tx_begin "$live" "$conf" "$state" "$cron" || { rm -rf "$tmp"; return 1; }
+  CF_TX_DIRTY=1
+  install -o root -g root -m 0644 "${tmp}/live"  "$live"  || { rm -rf "$tmp"; die "Could not install the live Cloudflare ranges."; }
+  install -o root -g root -m 0644 "${tmp}/conf"  "$conf"  || { rm -rf "$tmp"; die "Could not install the Cloudflare classifier."; }
+  install -o root -g root -m 0600 "${tmp}/state" "$state" || { rm -rf "$tmp"; die "Could not install the Cloudflare state."; }
+  install -o root -g root -m 0644 "${tmp}/cron"  "$cron"  || { rm -rf "$tmp"; die "Could not install the Cloudflare cron block."; }
+  rm -rf "$tmp"
+
+  if nginx -t >> "$CLI_LOG" 2>&1 && systemctl reload nginx >> "$CLI_LOG" 2>&1; then
+    _cloudflare_tx_cleanup   # commit: drop the rollback snapshot/trap
+    return 0
+  fi
+  warn "Nginx rejected the Cloudflare real-IP change; rolling back."
+  _cloudflare_rollback || warn "Cloudflare real-IP rollback needs manual recovery; check ${CLI_LOG}."
+  return 2
+}
+
+_cloudflare_apply_disabled() {
+  # Install/retain canonical live data and enabled=0 state while removing only
+  # the generated classifier and this feature's bounded cron block.
+  local ranges="$1" source="$2" last="$3"
+  local dir live conf state cron v4 v6 sha tmp rc=0
+  dir="$(_cloudflare_dir)"; live="$(_cloudflare_live_path)"; conf="$(_cloudflare_conf_path)"
+  state="$(_cloudflare_state_path)"; cron="$(_cloudflare_cron_path)"
+  mkdir -p "$dir" || return 1
+  tmp=$(mktemp -d /tmp/aidipanel-cloudflare-off.XXXXXX) || return 1
+  if ! _cloudflare_normalize_ranges < "$ranges" > "${tmp}/live" \
+     || ! cmp -s "$ranges" "${tmp}/live"; then
+    rm -rf -- "$tmp"
+    return 1
+  fi
+  v4=$(_cloudflare_count_family "${tmp}/live" 4)
+  v6=$(_cloudflare_count_family "${tmp}/live" 6)
+  sha=$(sha256sum "${tmp}/live" | cut -d' ' -f1) || { rm -rf -- "$tmp"; return 1; }
+  _cloudflare_cron_render 0 "$cron" "${tmp}/cron" || { rm -rf -- "$tmp"; return 1; }
+  _cloudflare_state_render "${tmp}/state" 0 "$source" "$CF_SEED_GENERATED_AT" "$last" "$v4" "$v6" "$sha" \
+    || { rm -rf -- "$tmp"; return 1; }
+
+  _cloudflare_tx_begin "$live" "$conf" "$cron" "$state" || { rm -rf -- "$tmp"; return 1; }
+  CF_TX_DIRTY=1
+  install -o root -g root -m 0644 "${tmp}/live" "$live" || rc=1
+  rm -f -- "$conf" || rc=1
+  install -o root -g root -m 0644 "${tmp}/cron" "$cron" || rc=1
+  install -o root -g root -m 0600 "${tmp}/state" "$state" || rc=1
+  rm -rf -- "$tmp"
+  if [[ "$rc" == 0 ]] \
+     && nginx -t >> "$CLI_LOG" 2>&1 \
+     && systemctl reload nginx >> "$CLI_LOG" 2>&1; then
+    _cloudflare_tx_cleanup
+    return 0
+  fi
+  warn "Could not apply the disabled Cloudflare real-IP state; rolling back."
+  _cloudflare_rollback || warn "Cloudflare real-IP rollback needs manual recovery; check ${CLI_LOG}."
+  return 2
+}
+
+_cloudflare_fetch_one() {
+  # $1 = HTTPS URL ; $2 = output file
+  local url="$1" outfile="$2" size
+  rm -f -- "$outfile"
+  if ! curl --fail --silent --show-error --location \
+      --connect-timeout 5 --max-time 20 \
+      --max-filesize "$CF_REFRESH_MAX_BYTES" \
+      -o "$outfile" "$url"; then
+    rm -f -- "$outfile"
+    return 1
+  fi
+  size=$(stat -c '%s' "$outfile" 2>/dev/null) || { rm -f -- "$outfile"; return 1; }
+  if (( size > CF_REFRESH_MAX_BYTES )); then
+    rm -f -- "$outfile"
+    return 1
+  fi
+  return 0
+}
+
+_cloudflare_combine_ranges() {
+  # awk terminates the final record from each response even when the HTTP body
+  # itself has no trailing newline, keeping the IPv4/IPv6 boundary intact.
+  awk '{ print }' "$1" "$2"
+}
+
+_cloudflare_refresh_locked() {
+  local quiet=0; [[ "${1:-}" == "--quiet" ]] && quiet=1
+  local live state conf cron tmp nv4 nv6 lv4 lv6 now
+  live="$(_cloudflare_live_path)"; state="$(_cloudflare_state_path)"
+  conf="$(_cloudflare_conf_path)"; cron="$(_cloudflare_cron_path)"
+  tmp=$(mktemp -d /tmp/aidipanel-cloudflare-refresh.XXXXXX) || return 1
+  if ! _cloudflare_validate_live "$live" "$state" "${tmp}/baseline"; then
+    rm -rf "$tmp"; [[ "$quiet" == 1 ]] || echo "error=hash_count_mismatch"; return 1
+  fi
+  if ! _cloudflare_validate_active "${tmp}/baseline" "$conf" "$cron" "${tmp}/active"; then
+    rm -rf "$tmp"; [[ "$quiet" == 1 ]] || echo "error=generated_content_drift"; return 1
+  fi
+  if ! _cloudflare_fetch_one https://www.cloudflare.com/ips-v4 "${tmp}/v4" \
+     || ! _cloudflare_fetch_one https://www.cloudflare.com/ips-v6 "${tmp}/v6"; then
+    rm -rf "$tmp"; [[ "$quiet" == 1 ]] || echo "error=fetch"; return 1
+  fi
+  if ! _cloudflare_combine_ranges "${tmp}/v4" "${tmp}/v6" > "${tmp}/all"; then
+    rm -rf "$tmp"; [[ "$quiet" == 1 ]] || echo "error=validate"; return 1
+  fi
+  if ! _cloudflare_normalize_ranges < "${tmp}/all" > "${tmp}/norm"; then
+    rm -rf "$tmp"; [[ "$quiet" == 1 ]] || echo "error=validate"; return 1
+  fi
+  nv4=$(_cloudflare_count_family "${tmp}/norm" 4)
+  nv6=$(_cloudflare_count_family "${tmp}/norm" 6)
+  lv4=$(_cloudflare_count_family "${tmp}/baseline" 4)
+  lv6=$(_cloudflare_count_family "${tmp}/baseline" 6)
+  if ! _cloudflare_shrink_ok "$nv4" "$lv4" "$nv6" "$lv6"; then
+    rm -rf "$tmp"; [[ "$quiet" == 1 ]] || echo "error=shrink"; return 1
+  fi
+  now=$(date +%s)
+  if _cloudflare_apply "${tmp}/norm" refresh "$now"; then
+    rm -rf "$tmp"; [[ "$quiet" == 1 ]] || echo "ok=refresh"; return 0
+  fi
+  rm -rf "$tmp"; [[ "$quiet" == 1 ]] || echo "error=apply"; return 1
+}
+
+# --- public lifecycle actions (each acquires the lock + asserts privilege) -----
+_cloudflare_provision_enabled() {
+  # A validated seed/last-good apply is mandatory. Only the network refresh is
+  # best-effort, because the committed local data is already safe to serve.
+  local ranges="$1" source="$2" last="$3"
+  _cloudflare_apply "$ranges" "$source" "$last" || return $?
+  if ! _cloudflare_refresh_locked --quiet; then
+    warn "Initial Cloudflare refresh failed; the validated seed remains active."
+  fi
+  return 0
+}
+
+_cloudflare_provision() {
+  _require_root "cloudflare:realip --action provision"
+  _cloudflare_lock x || { echo "error=busy"; return 3; }
+  local seed live state dir enabled=1 source=seed last=0 ranges tmpseed
+  seed="$(_cloudflare_seed_path)"; live="$(_cloudflare_live_path)"
+  state="$(_cloudflare_state_path)"; dir="$(_cloudflare_dir)"
+  mkdir -p "$dir" "$(dirname "$seed")" || return 1
+
+  tmpseed=$(mktemp) || return 1
+  _cloudflare_seed_data > "$tmpseed"
+  if ! _cloudflare_normalize_ranges < "$tmpseed" > "${tmpseed}.norm"; then
+    rm -f "$tmpseed" "${tmpseed}.norm"; die "The packaged Cloudflare seed is invalid."
+  fi
+  install -o root -g root -m 0644 "${tmpseed}.norm" "$seed" \
+    || { rm -f "$tmpseed" "${tmpseed}.norm"; return 1; }
+  rm -f "$tmpseed" "${tmpseed}.norm"
+
+  if [[ -f "$state" ]]; then
+    if ! enabled=$(_cloudflare_state_get "$state" enabled 2>/dev/null); then
+      echo "error=malformed_state"
+      return 1
+    fi
+    if [[ -f "$live" ]]; then
+      tmpseed=$(mktemp) || return 1
+      if ! _cloudflare_validate_live "$live" "$state" "$tmpseed"; then
+        rm -f -- "$tmpseed"
+        echo "error=hash_count_mismatch"
+        return 1
+      fi
+      rm -f -- "$tmpseed"
+      ranges="$live"
+      source=$(_cloudflare_state_get "$state" source)
+      last=$(_cloudflare_state_get "$state" last_success)
+    else
+      ranges="$seed"
+      source=seed
+      last=0
+    fi
+  else
+    ranges="$seed"
+    source=seed
+    last=0
+  fi
+
+  if [[ "$enabled" == 1 ]]; then
+    if ! _cloudflare_provision_enabled "$ranges" "$source" "$last"; then
+      echo "error=apply"
+      return 1
+    fi
+    ok "Cloudflare real-IP provisioned (enabled)."
+  else
+    _cloudflare_apply_disabled "$ranges" "$source" "$last" || return $?
+    ok "Cloudflare real-IP provisioned (kept disabled per saved choice)."
+  fi
+}
+
+_cloudflare_enable() {
+  _require_root "cloudflare:realip --action enable"
+  _cloudflare_lock x || { echo "error=busy"; return 3; }
+  local live seed state source last ranges tmp
+  live="$(_cloudflare_live_path)"; seed="$(_cloudflare_seed_path)"; state="$(_cloudflare_state_path)"
+  if [[ ! -f "$seed" || ! -f "$live" || ! -f "$state" ]]; then
+    echo "error=missing_artifact"
+    return 1
+  fi
+  if ! source=$(_cloudflare_state_get "$state" source 2>/dev/null); then
+    echo "error=malformed_state"
+    return 1
+  fi
+  last=$(_cloudflare_state_get "$state" last_success)
+  tmp=$(mktemp) || return 1
+  if ! _cloudflare_validate_live "$live" "$state" "$tmp"; then
+    rm -f -- "$tmp"
+    echo "error=hash_count_mismatch"
+    return 1
+  fi
+  rm -f -- "$tmp"
+  ranges="$live"
+  _cloudflare_apply "$ranges" "$source" "$last" && ok "Cloudflare real-IP enabled." || die "Could not enable Cloudflare real-IP."
+}
+
+_cloudflare_refresh() {
+  _require_root "cloudflare:realip --action refresh"
+  _cloudflare_lock x || { echo "error=busy"; return 3; }
+  local state enabled
+  state="$(_cloudflare_state_path)"
+  if [[ ! -f "$state" ]]; then
+    echo "error=missing_state"
+    return 1
+  fi
+  if ! enabled=$(_cloudflare_state_get "$state" enabled 2>/dev/null); then
+    echo "error=malformed_state"
+    return 1
+  fi
+  if [[ "$enabled" != 1 ]]; then
+    echo "error=disabled"
+    return 1
+  fi
+  _cloudflare_refresh_locked
+}
+
+_cloudflare_disable() {
+  _require_root "cloudflare:realip --action disable"
+  _cloudflare_lock x || { echo "error=busy"; return 3; }
+  local deps live state source last tmp
+  deps=$(_cloudflare_cfonly_dependents)
+  if [[ "${deps:-0}" -gt 0 ]]; then
+    echo "error=cfonly_dependents:${deps}"
+    return 1
+  fi
+  live="$(_cloudflare_live_path)"; state="$(_cloudflare_state_path)"
+  if [[ ! -f "$live" || ! -f "$state" ]]; then
+    echo "error=missing_artifact"
+    return 1
+  fi
+  if ! source=$(_cloudflare_state_get "$state" source 2>/dev/null); then
+    echo "error=malformed_state"
+    return 1
+  fi
+  last=$(_cloudflare_state_get "$state" last_success)
+  tmp=$(mktemp) || return 1
+  if ! _cloudflare_validate_live "$live" "$state" "$tmp"; then
+    rm -f -- "$tmp"
+    echo "error=hash_count_mismatch"
+    return 1
+  fi
+  rm -f -- "$tmp"
+  _cloudflare_apply_disabled "$live" "$source" "$last" \
+    && ok "Cloudflare real-IP disabled (data retained)." \
+    || die "Could not disable Cloudflare real-IP."
+}
+
+_cloudflare_status_empty() {
+  local error="$1"
+  echo "schema=1"
+  echo "enabled=0"
+  echo "source=seed"
+  echo "seed_generated_at=${CF_SEED_GENERATED_AT}"
+  echo "last_success=0"
+  echo "age_basis=seed"
+  echo "age_seconds=0"
+  echo "stale=0"
+  echo "warning="
+  echo "ranges_v4=0"
+  echo "ranges_v6=0"
+  echo "sha256="
+  echo "cfonly_dependents=0"
+  echo "error=${error}"
+}
+
+_cloudflare_status() {
+  _cloudflare_lock s || { _cloudflare_status_empty busy; return 0; }
+  local state live conf cron seed_path enabled source seed last v4 v6 sha
+  state="$(_cloudflare_state_path)"; live="$(_cloudflare_live_path)"
+  conf="$(_cloudflare_conf_path)"; cron="$(_cloudflare_cron_path)"
+  seed_path="$(_cloudflare_seed_path)"
+  if [[ ! -f "$state" ]]; then
+    _cloudflare_status_empty missing_state
+    return 0
+  fi
+  if ! enabled=$(_cloudflare_state_get "$state" enabled 2>/dev/null); then
+    _cloudflare_status_empty malformed_state
+    return 0
+  fi
+  source=$(_cloudflare_state_get "$state" source)
+  seed=$(_cloudflare_state_get "$state" seed_generated_at)
+  last=$(_cloudflare_state_get "$state" last_success)
+  v4=$(_cloudflare_state_get "$state" ranges_v4)
+  v6=$(_cloudflare_state_get "$state" ranges_v6)
+  sha=$(_cloudflare_state_get "$state" sha256)
+  local age_basis ref now age stale=0 warning="" error="" deps tmp=""
+  local actual_v4 actual_v6 actual_sha
+  age_basis=$(_cloudflare_age_basis "$last")
+  if [[ "$age_basis" == refresh ]]; then ref="$last"; else ref="$seed"; fi
+  now=$(date +%s); age=$(( now - ref )); (( age < 0 )) && age=0
+  if _cloudflare_is_stale "$age"; then stale=1; warning=stale; fi
+
+  if [[ ! -f "$seed_path" ]]; then
+    error=missing_seed
+  elif [[ ! -f "$live" ]]; then
+    error=missing_live
+  elif [[ "$enabled" == 1 && ! -f "$conf" ]]; then
+    error=missing_generated
+  fi
+
+  if [[ -z "$error" ]]; then
+    tmp=$(mktemp -d /tmp/aidipanel-cloudflare-status.XXXXXX) || error=generated_content_drift
+  fi
+  if [[ -z "$error" ]]; then
+    if ! _cloudflare_normalize_ranges < "$seed_path" > "${tmp}/seed" \
+       || ! cmp -s "$seed_path" "${tmp}/seed" \
+       || ! _cloudflare_normalize_ranges < "$live" > "${tmp}/live" \
+       || ! cmp -s "$live" "${tmp}/live"; then
+      error=hash_count_mismatch
+    fi
+  fi
+  if [[ -z "$error" ]]; then
+    actual_v4=$(_cloudflare_count_family "${tmp}/live" 4)
+    actual_v6=$(_cloudflare_count_family "${tmp}/live" 6)
+    actual_sha=$(sha256sum "${tmp}/live" | cut -d' ' -f1)
+    if [[ "$actual_v4" != "$v4" || "$actual_v6" != "$v6" || "$actual_sha" != "$sha" ]]; then
+      error=hash_count_mismatch
+    fi
+  fi
+  if [[ -z "$error" ]]; then
+    if [[ "$enabled" == 1 ]]; then
+      _cloudflare_render_conf "${tmp}/live" "${tmp}/conf"
+      if ! cmp -s "$conf" "${tmp}/conf" \
+         || ! _cloudflare_cron_matches 1 "$cron"; then
+        error=generated_content_drift
+      fi
+    elif [[ -f "$conf" ]]; then
+      error=generated_content_drift
+    elif ! _cloudflare_cron_matches 0 "$cron"; then
+      error=generated_content_drift
+    fi
+  fi
+  [[ -n "$tmp" ]] && rm -rf -- "$tmp"
+
+  deps=$(_cloudflare_cfonly_dependents)
+  echo "schema=1"
+  echo "enabled=${enabled}"
+  echo "source=${source}"
+  echo "seed_generated_at=${seed}"
+  echo "last_success=${last}"
+  echo "age_basis=${age_basis}"
+  echo "age_seconds=${age}"
+  echo "stale=${stale}"
+  echo "warning=${warning}"
+  echo "ranges_v4=${v4}"
+  echo "ranges_v6=${v6}"
+  echo "sha256=${sha}"
+  echo "cfonly_dependents=${deps}"
+  echo "error=${error}"
+}
+
+_cloudflare_realip() {
+  local action="" action_seen=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --action)
+        if [[ "$action_seen" == 1 || $# -lt 2 || -z "${2:-}" ]]; then
+          die "Missing or duplicate required option: --action"
+          return 1
+        fi
+        action_seen=1; action="$2"; shift 2
+        ;;
+      --action=*)
+        if [[ "$action_seen" == 1 || -z "${1#--action=}" ]]; then
+          die "Missing or duplicate required option: --action"
+          return 1
+        fi
+        action_seen=1; action="${1#--action=}"; shift
+        ;;
+      *)
+        die "Unknown option for cloudflare:realip: $1"
+        return 1
+        ;;
+    esac
+  done
+  case "$action" in
+    status)    _cloudflare_status ;;
+    provision) _cloudflare_provision ;;
+    enable)    _cloudflare_enable ;;
+    refresh)   _cloudflare_refresh ;;
+    disable)   _cloudflare_disable ;;
+    "")        die "Missing required option: --action\n  Example: aidipanel cloudflare:realip --action status" ;;
+    *)         die "Unknown action: ${action}. Use one of: status provision enable refresh disable" ;;
+  esac
+}
+
+# ===========================================================================
 # MAIN DISPATCHER
 # ===========================================================================
 main() {
@@ -5245,6 +6042,9 @@ main() {
 
     # Site security
     security:basic-auth) _security_basic_auth "$@" ;;
+
+    # Network rules (Slice 2)
+    cloudflare:realip)   _cloudflare_realip "$@" ;;
 
     # Database
     db:add)         _db_add "$@" ;;

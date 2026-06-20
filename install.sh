@@ -448,7 +448,7 @@ _install_base_packages() {
     software-properties-common unzip zip tar \
     git cron ufw fail2ban \
     openssl certbot \
-    sqlite3 \
+    sqlite3 python3 \
     net-tools jq
   ok "Base packages installed"
 }
@@ -1639,6 +1639,12 @@ set -Eeuo pipefail
 export NO_COLOR=1
 cmd="${1:-}"
 case "$cmd" in
+  cloudflare:realip)
+    if [[ "$#" -ne 3 || "${2:-}" != "--action" || "${3:-}" != "status" ]]; then
+      echo "AidiPanel web command not allowed: cloudflare:realip is status-only" >&2
+      exit 126
+    fi
+    ;;
   site:add|site:delete|site:list|vhost:save|\
   cache:page|cache:redis|cache:zone|cache:status|cache:purge|cache:enable|cache:disable|\
   cache:config|cache:redis-enable|cache:redis-disable|cache:redis-flush|cache:opcache-restart|\
@@ -1776,6 +1782,13 @@ CRONFILE
 
   chmod 644 /etc/cron.d/aidipanel
   ok "Cron jobs configured"
+}
+
+_provision_cloudflare_realip() {
+  log "Provisioning the global Cloudflare real-IP foundation..."
+  [[ "$DRY_RUN" == "true" ]] && { warn "[dry-run] skipping Cloudflare real-IP provision"; return 0; }
+  /usr/local/bin/aidipanel cloudflare:realip --action provision >> "$PANEL_LOG" 2>&1
+  ok "Cloudflare real-IP foundation provisioned"
 }
 
 # ---------------------------------------------------------------------------
@@ -2017,6 +2030,7 @@ main() {
   _deploy_panel_app;      ui_ok "Web UI deployed"
   _setup_cron;            ui_ok "Maintenance cron configured"
   _test_and_start_services
+  _provision_cloudflare_realip; ui_ok "Cloudflare real-IP foundation configured"
   ui_elapsed "$t"
 
   _health_check
