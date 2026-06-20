@@ -273,6 +273,16 @@ class SiteController extends BaseController
         $cacheZoneSize = null;
         $httpsOptions  = [];
         $certs         = [];
+        $basicAuthInfo = [
+            'enabled' => '0',
+            'scope' => 'wp-login',
+            'path' => '',
+            'username' => '',
+            'bypass_ips' => '',
+            'htpasswd_exists' => '0',
+            'force_https' => '0',
+            'error' => '',
+        ];
 
         if ($activeTab === 'performance') {
             $pageCacheInfo   = $this->getPageCacheInfo($domain);
@@ -307,6 +317,27 @@ class SiteController extends BaseController
             $certs        = $this->getCertificates($domain, $ssl);
         }
 
+        if ($activeTab === 'security') {
+            $result = run_cli('security:basic-auth', [
+                '--domain', $domain,
+                '--action', 'status',
+            ]);
+            if ($result['success']) {
+                $allowed = array_fill_keys(array_keys($basicAuthInfo), true);
+                foreach (preg_split('/\R/', trim((string) $result['output'])) ?: [] as $line) {
+                    if (!str_contains($line, '=')) {
+                        continue;
+                    }
+                    [$key, $value] = explode('=', $line, 2);
+                    if (isset($allowed[$key])) {
+                        $basicAuthInfo[$key] = $value;
+                    }
+                }
+            } else {
+                $basicAuthInfo['error'] = 'status_unavailable';
+            }
+        }
+
         // Database tab data (scoped to this site by its name prefix).
         $databases = []; $dbUsers = []; $dbPrefix = ''; $pmaUrl = null; $wpDbInfo = null; $pmaInstalled = false;
         $dbHost = '127.0.0.1'; $dbPort = 3306;
@@ -330,7 +361,8 @@ class SiteController extends BaseController
             'logs', 'activeTab', 'diskSize', 'hasCache',
             'pageCacheInfo', 'objectCacheInfo', 'opcacheInfo', 'protocolInfo',
             'cacheConfig', 'lastPurge', 'cacheZoneSize', 'httpsOptions', 'certs',
-            'databases', 'dbUsers', 'dbHost', 'dbPort', 'dbPrefix', 'pmaInstalled', 'pmaUrl', 'wpDbInfo'
+            'databases', 'dbUsers', 'dbHost', 'dbPort', 'dbPrefix', 'pmaInstalled', 'pmaUrl', 'wpDbInfo',
+            'basicAuthInfo'
         ) + ['_full_bleed' => true]);
     }
 

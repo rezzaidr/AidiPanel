@@ -76,6 +76,7 @@ $router->post('/sites/{domain}/ssl/hsts',    'SiteSslController@hsts');
 $router->post('/sites/{domain}/ssl/autorenew', 'SiteSslController@autoRenew');
 $router->post('/sites/{domain}/ssl/use',     'SiteSslController@useCert');
 $router->get('/api/ssl/check',               'SiteSslController@check');
+$router->post('/sites/{domain}/security/basic-auth', 'SiteSecurityController@basicAuth');
 
 // Database tab (Manage Site → Database): site-scoped database + user actions.
 $router->post('/sites/{domain}/database/add',         'SiteDatabaseController@addDatabase');

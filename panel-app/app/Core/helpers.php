@@ -229,7 +229,8 @@ function web_cli_allowed_commands(): array
         'php:list', 'php:version', 'php:restart', 'php:install',
         'ssl:install', 'ssl:renew', 'ssl:status', 'ssl:import',
         'ssl:force-https', 'ssl:hsts', 'ssl:autorenew', 'ssl:check', 'ssl:use',
-        'service:status', 'service:start', 'service:stop', 'service:restart',
+        'security:basic-auth',
+        'service:status', 'service:start', 'service:stop', 'service:restart', 'service:reload',
         'system:info',
     ];
 }
@@ -421,6 +422,61 @@ function run_cli(string $command, array $args = []): array
         'success' => $exitCode === 0,
         'output'  => $cleanOutput,
         'code'    => $exitCode,
+    ];
+}
+
+/**
+ * Run an allowed CLI command while transporting secret input only through stdin.
+ */
+function run_cli_stdin(string $command, array $args, string $stdin): array
+{
+    $binary = '/usr/local/bin/aidipanel';
+    if (!file_exists($binary)) {
+        return ['success' => false, 'output' => 'AidiPanel CLI not found: ' . $binary, 'code' => 1];
+    }
+
+    if (!is_web_cli_command_allowed($command)) {
+        return ['success' => false, 'output' => 'Command not allowed from web panel.', 'code' => 126];
+    }
+
+    $safeArgs = array_map('escapeshellarg', $args);
+    $cmdParts = [escapeshellcmd($binary), escapeshellarg($command), ...$safeArgs];
+    $cmd = 'NO_COLOR=1 ' . implode(' ', $cmdParts);
+
+    $currentUser = trim((string)(shell_exec('whoami 2>/dev/null') ?: ''));
+    if ($currentUser !== 'root' && file_exists('/usr/bin/sudo')) {
+        $runner = file_exists('/usr/local/sbin/aidipanel-web-run')
+            ? '/usr/local/sbin/aidipanel-web-run'
+            : $binary;
+        $cmd = '/usr/bin/sudo ' . escapeshellcmd($runner) . ' '
+            . escapeshellarg($command) . ' ' . implode(' ', $safeArgs);
+    }
+
+    $spec = [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w'],
+    ];
+    $process = proc_open($cmd, $spec, $pipes);
+    if (!is_resource($process)) {
+        return ['success' => false, 'output' => 'Could not start AidiPanel CLI.', 'code' => 1];
+    }
+
+    fwrite($pipes[0], $stdin);
+    fclose($pipes[0]);
+    $stdout = stream_get_contents($pipes[1]);
+    $stderr = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $exitCode = proc_close($process);
+
+    $output = trim($stdout . ($stderr !== '' ? "\n" . $stderr : ''));
+    $cleanOutput = preg_replace('/\x1B\[[0-9;]*[A-Za-z]/', '', $output);
+
+    return [
+        'success' => $exitCode === 0,
+        'output' => $cleanOutput,
+        'code' => $exitCode,
     ];
 }
 

@@ -28,6 +28,14 @@ $isStatic  = $type === 'static';
 $iconBg    = $isStatic ? 'bg-zinc-100' : 'bg-ink-pale';
 $iconColor = $isStatic ? 'text-zinc-400' : 'text-ink';
 $visitUrl  = ($hasTrustedSsl ? 'https' : 'http') . '://' . $domain;   // only browser-trusted certs get https
+$basicAuthInfo = $basicAuthInfo ?? [];
+$baEnabled = ($basicAuthInfo['enabled'] ?? '0') === '1';
+$baScope = in_array(($basicAuthInfo['scope'] ?? ''), ['wp-login', 'custom', 'site'], true)
+    ? (string) $basicAuthInfo['scope']
+    : 'wp-login';
+$baError = (string) ($basicAuthInfo['error'] ?? '');
+$baForceHttps = ($basicAuthInfo['force_https'] ?? '0') === '1';
+$baHasPassword = ($basicAuthInfo['htpasswd_exists'] ?? '0') === '1';
 
 $appIcon = static function (string $type): string {
     return match ($type) {
@@ -1955,6 +1963,182 @@ $tabs = [
       </div>
     </div>
 
+  </div>
+
+<?php elseif ($activeTab === 'security'): ?>
+<!-- ==================== SECURITY TAB ==================== -->
+  <?php
+  $driftMessage = match ($baError) {
+      'missing_vhost_marker'   => t('site.security.drift.missing_vhost_marker'),
+      'missing_http_include'   => t('site.security.drift.missing_http_include'),
+      'missing_credentials'    => t('site.security.drift.missing_credentials'),
+      'unreadable_credentials' => t('site.security.drift.unreadable_credentials'),
+      'state_mismatch'         => t('site.security.drift.state_mismatch'),
+      'status_unavailable'     => t('site.security.drift.status_unavailable'),
+      default                  => '',
+  };
+  $driftCritical = in_array($baError, [
+      'missing_vhost_marker',
+      'missing_http_include',
+      'missing_credentials',
+      'unreadable_credentials',
+  ], true);
+  ?>
+  <div class="space-y-4" x-data="{ enabled: <?= $baEnabled ? 'true' : 'false' ?>, scope: '<?= e($baScope) ?>' }">
+    <?php if ($driftMessage !== ''): ?>
+    <div class="flex items-start gap-3 rounded-lg border <?= $driftCritical ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50' ?> px-4 py-3">
+      <i class="ti ti-alert-triangle <?= $driftCritical ? 'text-red-600' : 'text-amber-600' ?> mt-0.5"></i>
+      <div>
+        <p class="text-sm font-semibold <?= $driftCritical ? 'text-red-800' : 'text-amber-800' ?>"><?= e(t('site.security.drift.title')) ?></p>
+        <p class="text-xs <?= $driftCritical ? 'text-red-700' : 'text-amber-700' ?> mt-0.5"><?= e($driftMessage) ?></p>
+      </div>
+    </div>
+    <?php endif; ?>
+
+    <?php if (!$baForceHttps): ?>
+    <div class="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+      <i class="ti ti-lock-off text-amber-600 mt-0.5"></i>
+      <p class="text-xs text-amber-800 leading-relaxed"><?= e(t('site.security.https_required')) ?></p>
+    </div>
+    <?php endif; ?>
+
+    <form method="POST" action="/sites/<?= e($domain) ?>/security/basic-auth"
+          class="card overflow-hidden" data-security-card="basic-auth">
+      <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+      <input type="hidden" name="enabled" value="0">
+
+      <div class="card-head">
+        <div class="flex items-center gap-2.5">
+          <i class="ti ti-shield-lock text-lg" :class="enabled ? 'text-speed' : 'text-zinc-300'"></i>
+          <div>
+            <h2 class="card-title">
+              <?= e(t('site.security.access.title')) ?>
+              <span class="badge" :class="enabled ? 'badge-ok' : 'badge-muted'">
+                <span class="dot" :class="enabled ? 'bg-emerald-500' : 'bg-zinc-400'"></span>
+                <span x-text="enabled ? '<?= e(t('site.security.enabled')) ?>' : '<?= e(t('site.security.disabled')) ?>'"></span>
+              </span>
+            </h2>
+            <p class="text-[11px] text-zinc-400"><?= e(t('site.security.access.desc')) ?></p>
+          </div>
+        </div>
+        <label class="inline-flex items-center gap-2 cursor-pointer" data-security-toggle="basic-auth">
+          <span class="text-[11px] font-medium text-zinc-500"
+                x-text="enabled ? '<?= e(t('site.security.protection_on')) ?>' : '<?= e(t('site.security.protection_off')) ?>'"></span>
+          <input type="checkbox" name="enabled" value="1" x-model="enabled" class="sr-only">
+          <span aria-hidden="true" :class="enabled ? 'sw-on' : 'sw-off'"><span></span></span>
+        </label>
+      </div>
+
+      <div class="p-5 space-y-5">
+        <div class="space-y-4" x-show="enabled" x-cloak>
+          <div data-security-row="scope">
+            <label class="lbl"><?= e(t('site.security.scope_label')) ?></label>
+            <select name="scope" class="inp w-full" x-model="scope">
+              <option value="wp-login"><?= e(t('site.security.scope.wp_login')) ?></option>
+              <option value="custom"><?= e(t('site.security.scope.custom')) ?></option>
+              <option value="site"><?= e(t('site.security.scope.site')) ?></option>
+            </select>
+            <p class="text-[11px] text-zinc-400 mt-1"><?= e(t('site.security.scope_hint')) ?></p>
+          </div>
+
+          <div x-show="scope === 'custom'" x-cloak>
+            <label class="lbl"><?= e(t('site.security.path_label')) ?></label>
+            <input type="text" name="path" value="<?= e((string) ($basicAuthInfo['path'] ?? '')) ?>"
+                   class="inp w-full mono" placeholder="/private" maxlength="200"
+                   :required="enabled && scope === 'custom'">
+            <p class="text-[11px] text-zinc-400 mt-1"><?= e(t('site.security.path_hint')) ?></p>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4" data-security-row="credentials">
+            <div>
+              <label class="lbl"><?= e(t('site.security.username_label')) ?></label>
+              <input type="text" name="username" value="<?= e((string) ($basicAuthInfo['username'] ?? '')) ?>"
+                     class="inp w-full mono" maxlength="64" autocomplete="username"
+                     :required="enabled">
+            </div>
+
+            <div>
+              <label class="lbl"><?= e(t('site.security.password_label')) ?></label>
+              <input type="password" name="password" class="inp w-full mono" maxlength="1024"
+                     autocomplete="new-password" spellcheck="false" placeholder="••••••••••••">
+              <p class="text-[11px] mt-1 <?= $baHasPassword ? 'text-emerald-600' : 'text-zinc-400' ?>">
+                <?= e($baHasPassword ? t('site.security.password_keep') : t('site.security.password_new')) ?>
+              </p>
+            </div>
+          </div>
+
+          <div>
+            <label class="lbl"><?= e(t('site.security.bypass_label')) ?></label>
+            <textarea name="bypass_ips" rows="3" class="inp w-full mono resize-y"
+                      placeholder="203.0.113.10&#10;2001:db8::10"><?= e((string) ($basicAuthInfo['bypass_ips'] ?? '')) ?></textarea>
+            <p class="text-[11px] text-zinc-400 mt-1"><?= e(t('site.security.bypass_hint')) ?></p>
+          </div>
+        </div>
+
+        <div x-show="enabled" x-cloak class="space-y-2">
+          <div class="flex items-start gap-2 rounded-lg bg-zinc-50 border border-zinc-200 px-3 py-2">
+            <i class="ti ti-database-off text-zinc-500 mt-0.5 text-sm"></i>
+            <p class="text-[11px] text-zinc-600 leading-relaxed">
+              <span x-show="scope === 'site'"><?= e(t('site.security.cache_site_warning')) ?></span>
+              <span x-show="scope !== 'site'" x-cloak><?= e(t('site.security.cache_scoped_warning')) ?></span>
+            </p>
+          </div>
+          <?php if (!$hasTrustedSsl): ?>
+          <div class="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200/70 px-3 py-2">
+            <i class="ti ti-certificate-off text-amber-600 mt-0.5 text-sm"></i>
+            <p class="text-[11px] text-amber-800 leading-relaxed"><?= e(t('site.security.trusted_cert_warning')) ?></p>
+          </div>
+          <?php endif; ?>
+        </div>
+
+        <div class="flex justify-end border-t border-zinc-100 pt-4">
+          <button type="submit" class="btn btn-primary">
+            <i class="ti ti-device-floppy text-sm"></i> <?= e(t('site.security.save')) ?>
+          </button>
+        </div>
+      </div>
+    </form>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div class="card opacity-70" data-security-card="ip-blocking">
+        <div class="p-5 flex items-start justify-between gap-4">
+          <div class="flex items-start gap-3">
+            <i class="ti ti-ban text-zinc-400 text-lg mt-0.5"></i>
+            <div>
+              <h3 class="text-sm font-semibold text-zinc-800"><?= e(t('site.security.ip_blocking.title')) ?></h3>
+              <p class="text-xs text-zinc-500 mt-1"><?= e(t('site.security.ip_blocking.desc')) ?></p>
+            </div>
+          </div>
+          <span class="badge badge-muted"><?= e(t('common.soon')) ?></span>
+        </div>
+      </div>
+
+      <div class="card opacity-70" data-security-card="cloudflare-protection">
+        <div class="p-5 flex items-start justify-between gap-4">
+          <div class="flex items-start gap-3">
+            <i class="ti ti-cloud-lock text-zinc-400 text-lg mt-0.5"></i>
+            <div>
+              <h3 class="text-sm font-semibold text-zinc-800"><?= e(t('site.security.cloudflare.title')) ?></h3>
+              <p class="text-xs text-zinc-500 mt-1"><?= e(t('site.security.cloudflare.desc')) ?></p>
+            </div>
+          </div>
+          <span class="badge badge-muted"><?= e(t('common.soon')) ?></span>
+        </div>
+      </div>
+
+      <div class="card opacity-70 md:col-span-2">
+        <div class="p-5 flex items-start justify-between gap-4">
+          <div class="flex items-start gap-3">
+            <i class="ti ti-adjustments-horizontal text-zinc-400 text-lg mt-0.5"></i>
+            <div>
+              <h3 class="text-sm font-semibold text-zinc-800"><?= e(t('site.security.advanced.title')) ?></h3>
+              <p class="text-xs text-zinc-500 mt-1"><?= e(t('site.security.advanced.desc')) ?></p>
+            </div>
+          </div>
+          <span class="badge badge-muted"><?= e(t('common.soon')) ?></span>
+        </div>
+      </div>
+    </div>
   </div>
 
 <?php else: ?>

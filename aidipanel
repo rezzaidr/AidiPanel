@@ -403,6 +403,9 @@ _usage() {
   echo "  cache:redis-flush        Flush all Redis data (FLUSHALL)"
   echo "  cache:opcache-restart    Restart PHP-FPM to flush OPcache [--php 8.4]"
 
+  echo -e "\n${BOLD}${BLUE}Site Security${RESET}"
+  echo "  security:basic-auth  Manage per-site HTTP Basic Authentication"
+
   echo -e "\n${BOLD}${BLUE}Database Management${RESET}"
   echo "  db:add          Create a new database and user"
   echo "  db:delete       Delete a database and its user (--name; optional --user)"
@@ -843,7 +846,7 @@ server {
     add_header Referrer-Policy           "strict-origin-when-cross-origin" always;
 
     # Cache-status debug header at SERVER scope on purpose: nginx add_header does
-    # not merge across levels, so putting it inside `location ~ \.php$` would
+    # not merge across levels, so putting it inside \`location ~ \.php$\` would
     # suppress every security header above for PHP/WordPress responses. Empty
     # value unless the FastCGI page cache is enabled.
     add_header X-FastCGI-Cache \$upstream_cache_status always;
@@ -978,6 +981,8 @@ _site_delete() {
   # Teardown (both modes)
   _db_deprovision_site "$site_user" "$domain"
   rm -f "${NGINX_ENABLED_DIR}/${domain}.conf" "${NGINX_CONF_DIR}/${domain}.conf"
+  rm -f "$(_security_http_inc "$domain")"
+  rm -rf -- "$(_security_dir "$domain")"
   rm -f "/etc/ssl/aidipanel-self/${domain}.crt" "/etc/ssl/aidipanel-self/${domain}.key"
   # Remove the per-site FPM pool. A site has exactly one pool (named by site_user);
   # sweep EVERY PHP version so a php_ver-resolution miss can't leave an orphan pool
@@ -1866,6 +1871,7 @@ _cache_snippet_write() {
 set \$skip_cache 0;
 
 if (\$request_method = POST)          { set \$skip_cache 1; }
+if (\$http_authorization != "") { set \$skip_cache 1; }
 ${query_block}
 if (\$request_uri ~* "(${uri_regex})") {
     set \$skip_cache 1;
@@ -2101,11 +2107,19 @@ _cache_purge_domain() {
     ok "No cached entries for: ${domain}"
     return 0
   fi
-  local count=0
+  local count=0 failed=0
   while IFS= read -r f; do
     [[ -n "$f" ]] || continue
-    rm -f "$f" && count=$((count + 1))
+    if rm -f -- "$f"; then
+      count=$((count + 1))
+    else
+      failed=$((failed + 1))
+    fi
   done <<< "$matches"
+  if [[ "$failed" -gt 0 ]]; then
+    warn "Failed to purge ${failed} cached entries for: ${domain}"
+    return 1
+  fi
   ok "Purged ${count} cached entries for: ${domain}"
 }
 
@@ -2296,7 +2310,8 @@ _cache_toggle() {
       -e 's|^\(\s*\)fastcgi_cache_use_stale|\1#fastcgi_cache_use_stale|g' \
       -e 's|^\(\s*\)add_header X-FastCGI-Cache|\1#add_header X-FastCGI-Cache|g' \
       "$conf"
-    _cache_purge_domain "$domain"
+    _cache_purge_domain "$domain" \
+      || warn "Page cache is disabled, but some cached entries could not be removed for ${domain}."
     ok "FastCGI cache disabled for: ${domain}"
   fi
 
@@ -2712,6 +2727,700 @@ _cache_opcache_restart() {
       && ok "OPcache restarted (PHP ${ver})" \
       || warn "Failed to reload php${ver}-fpm — try: systemctl restart php${ver}-fpm"
   done
+}
+
+# ===========================================================================
+# SITE SECURITY — HTTP Basic Authentication
+# ===========================================================================
+
+_security_id() {
+  printf '%s' "$1" | sha256sum | cut -c1-20
+}
+
+_security_dir() {
+  printf '/etc/nginx/aidipanel/security/%s' "$1"
+}
+
+_security_htpasswd() {
+  printf '%s/basic-auth.htpasswd' "$(_security_dir "$1")"
+}
+
+_security_state() {
+  printf '%s/basic-auth.state' "$(_security_dir "$1")"
+}
+
+_security_http_inc() {
+  printf '/etc/nginx/conf.d/aidipanel-security-%s.conf' "$(_security_id "$1")"
+}
+
+_security_scope_valid() {
+  [[ "$1" == "site" || "$1" == "wp-login" || "$1" == "custom" ]]
+}
+
+_security_user_valid() {
+  local user="$1"
+  (( ${#user} >= 1 && ${#user} <= 64 )) || return 1
+  [[ "$user" =~ ^[A-Za-z0-9._-]+$ ]]
+}
+
+_security_path_valid() {
+  local path="$1" segment
+  (( ${#path} >= 2 && ${#path} <= 200 )) || return 1
+  [[ "$path" =~ ^/[A-Za-z0-9._~/-]+$ ]] || return 1
+  [[ "$path" != *"//"* ]] || return 1
+  local -a segments=()
+  IFS='/' read -ra segments <<< "$path"
+  for segment in "${segments[@]}"; do
+    [[ "$segment" != ".." ]] || return 1
+  done
+  return 0
+}
+
+_security_normalize_path() {
+  local path="$1"
+  while [[ "${#path}" -gt 1 && "$path" == */ ]]; do
+    path="${path%/}"
+  done
+  [[ "$path" != "/" ]] || return 1
+  printf '%s' "$path"
+}
+
+_security_regex_escape() {
+  local value="$1"
+  printf '%s' "${value//./\\.}"
+}
+
+_security_normalize_ips() {
+  local raw="$1" token seen=" "
+  local -a tokens=() out=()
+  raw="${raw//$'\r'/,}"
+  raw="${raw//$'\n'/,}"
+  raw="${raw//$'\t'/,}"
+  raw="${raw// /,}"
+  IFS=',' read -ra tokens <<< "$raw"
+  for token in "${tokens[@]}"; do
+    [[ -n "$token" ]] || continue
+    (( ${#token} <= 45 )) || return 1
+    [[ "$token" =~ ^[0-9A-Fa-f:.]+$ ]] || return 1
+    case "$seen" in
+      *" ${token} "*) continue ;;
+    esac
+    out+=("$token")
+    seen+="${token} "
+  done
+  local IFS=','
+  printf '%s' "${out[*]}"
+  return 0
+}
+
+_security_state_value() {
+  local file="$1" key="$2"
+  [[ -f "$file" ]] || return 0
+  sed -n "s/^${key}=//p" "$file" | head -1
+}
+
+_security_state_render() {
+  local target="$1" enabled="$2" scope="$3" path="$4" username="$5" bypass_ips="$6"
+  printf 'enabled=%s\nscope=%s\npath=%s\nusername=%s\nbypass_ips=%s\n' \
+    "$enabled" "$scope" "$path" "$username" "$bypass_ips" > "$target"
+  chmod 0600 "$target"
+}
+
+_security_read_password() {
+  local password="" REPLY=""
+  if ! IFS= read -r password; then
+    [[ -n "$password" ]] || return 1
+  fi
+  if IFS= read -r; then
+    return 1
+  fi
+  [[ -n "$password" ]] || return 1
+  [[ "$password" != *$'\r'* && ! "$password" =~ [[:cntrl:]] ]] || return 1
+  printf '%s' "$password"
+}
+
+_security_render_http_include() {
+  local domain="$1" scope="$2" path="$3" bypass_ips="$4" target="$5"
+  local id; id=$(_security_id "$domain")
+  local ip escaped_path=""
+  local -a ips=()
+  [[ -n "$bypass_ips" ]] && IFS=',' read -ra ips <<< "$bypass_ips"
+  [[ "$scope" == "custom" ]] && escaped_path=$(_security_regex_escape "$path")
+
+  {
+    printf 'geo $aidipanel_ba_bypass_%s {\n' "$id"
+    printf '    default 0;\n'
+    for ip in "${ips[@]}"; do
+      printf '    %s 1;\n' "$ip"
+    done
+    printf '}\n\n'
+
+    if [[ "$scope" == "custom" ]]; then
+      printf 'map $uri $aidipanel_ba_original_%s {\n' "$id"
+      printf '    default "";\n'
+      printf '}\n\n'
+      printf 'map "$aidipanel_ba_bypass_%s:$aidipanel_ba_original_%s" $aidipanel_ba_realm_%s {\n' "$id" "$id" "$id"
+    else
+      printf 'map "$aidipanel_ba_bypass_%s:$uri" $aidipanel_ba_realm_%s {\n' "$id" "$id"
+    fi
+
+    printf '    ~^1: off;\n'
+    printf '    ~^0:/\\.well-known/acme-challenge(?:/|$) off;\n'
+    case "$scope" in
+      wp-login)
+        printf '    ~^0:/wp-admin/admin-ajax\\.php$ off;\n'
+        printf '    ~^0:/wp-login\\.php(?:/|$) "Restricted Area";\n'
+        printf '    ~^0:/wp-admin(?:/|$) "Restricted Area";\n'
+        printf '    default off;\n'
+        ;;
+      custom)
+        printf '    ~^0:%s(?:/|$) "Restricted Area";\n' "$escaped_path"
+        printf '    default off;\n'
+        ;;
+      site)
+        printf '    default "Restricted Area";\n'
+        ;;
+      *) return 1 ;;
+    esac
+    printf '}\n'
+  } > "$target"
+}
+
+_security_render_marker() {
+  local domain="$1" scope="$2" target="$3"
+  local id; id=$(_security_id "$domain")
+  {
+    printf '    # >>> AIDIPANEL_BASIC_AUTH >>>\n'
+    if [[ "$scope" == "custom" ]]; then
+      printf '    if ($aidipanel_ba_original_%s = "") {\n' "$id"
+      printf '        set $aidipanel_ba_original_%s $uri;\n' "$id"
+      printf '    }\n'
+    fi
+    printf '    auth_basic $aidipanel_ba_realm_%s;\n' "$id"
+    printf '    auth_basic_user_file %s;\n' "$(_security_htpasswd "$domain")"
+    printf '    # <<< AIDIPANEL_BASIC_AUTH <<<\n'
+  } > "$target"
+}
+
+_security_vhost_edit() {
+  local source="$1" target="$2" mode="$3" marker_file="$4"
+  local start_count end_count
+  start_count=$(grep -cF '# >>> AIDIPANEL_BASIC_AUTH >>>' "$source" 2>/dev/null || true)
+  end_count=$(grep -cF '# <<< AIDIPANEL_BASIC_AUTH <<<' "$source" 2>/dev/null || true)
+  [[ "$start_count" -eq "$end_count" && "$start_count" -le 1 ]] || return 1
+
+  awk -v mode="$mode" -v mf="$marker_file" -v expected="$start_count" '
+    function delta(s, a, b, t) {
+      t=s; a=gsub(/\{/,"{",t)
+      t=s; b=gsub(/\}/,"}",t)
+      return a-b
+    }
+    function clear_arrays( i) {
+      for (i in block) delete block[i]
+      for (i in clean) delete clean[i]
+      n=0; m=0
+    }
+    function flush_block( i, line, tls, skip, removed, inserted) {
+      tls=0
+      for (i=1; i<=n; i++) {
+        if (block[i] ~ /^[[:space:]]*listen[[:space:]]+(\[::\]:)?443[[:space:]]+ssl([[:space:]]|;)/) tls=1
+      }
+      if (!tls) {
+        for (i=1; i<=n; i++) print block[i]
+        clear_arrays()
+        return
+      }
+      tls_count++
+      skip=0; removed=0; m=0
+      for (i=1; i<=n; i++) {
+        line=block[i]
+        if (line ~ /# >>> AIDIPANEL_BASIC_AUTH >>>/) {
+          if (skip) bad=1
+          skip=1; removed++; total_removed++
+          continue
+        }
+        if (skip) {
+          if (line ~ /# <<< AIDIPANEL_BASIC_AUTH <<</) skip=0
+          continue
+        }
+        clean[++m]=line
+      }
+      if (skip || removed > 1) bad=1
+      inserted=0
+      for (i=1; i<=m; i++) {
+        print clean[i]
+        if (mode == "enable" && !inserted && clean[i] ~ /^[[:space:]]*server_name[[:space:]]+[^;]+;[[:space:]]*$/) {
+          for (j=1; j<=marker_n; j++) print marker[j]
+          inserted=1
+        }
+      }
+      if (mode == "enable" && !inserted) bad=1
+      clear_arrays()
+    }
+    BEGIN {
+      depth=0; inblock=0; tls_count=0; total_removed=0; bad=0
+      marker_n=0
+      if (mode == "enable") {
+        while ((getline marker_line < mf) > 0) marker[++marker_n]=marker_line
+        close(mf)
+        if (marker_n == 0) bad=1
+      }
+    }
+    !inblock && /^[[:space:]]*server[[:space:]]*\{/ {
+      clear_arrays()
+      inblock=1
+      block[++n]=$0
+      depth=delta($0)
+      if (depth<=0) { flush_block(); inblock=0 }
+      next
+    }
+    inblock {
+      block[++n]=$0
+      depth+=delta($0)
+      if (depth<=0) { flush_block(); inblock=0 }
+      next
+    }
+    { print }
+    END {
+      if (inblock || tls_count != 1 || total_removed != expected || bad) exit 42
+    }
+  ' "$source" > "$target"
+}
+
+_security_vhost_marker_valid() {
+  local conf="$1"
+  [[ "$(grep -cF '# >>> AIDIPANEL_BASIC_AUTH >>>' "$conf" 2>/dev/null || true)" -eq 1 ]] || return 1
+  [[ "$(grep -cF '# <<< AIDIPANEL_BASIC_AUTH <<<' "$conf" 2>/dev/null || true)" -eq 1 ]] || return 1
+  _security_vhost_edit "$conf" /dev/null disable /dev/null
+}
+
+_security_cache_candidate() {
+  local source="$1" target="$2"
+  if grep -qF 'if ($http_authorization != "") { set $skip_cache 1; }' "$source"; then
+    cp "$source" "$target"
+    return 0
+  fi
+  awk '
+    { print }
+    !done && /if \(\$request_method = POST\)/ {
+      print "if ($http_authorization != \"\") { set $skip_cache 1; }"
+      done=1
+    }
+    END { if (!done) exit 42 }
+  ' "$source" > "$target"
+}
+
+_security_credential_candidate() {
+  local domain="$1" username="$2" use_stdin="$3" target="$4"
+  local state; state=$(_security_state "$domain")
+  local current_user; current_user=$(_security_state_value "$state" username)
+  local credentials; credentials=$(_security_htpasswd "$domain")
+  local password="" hash=""
+
+  if [[ "$use_stdin" == "true" ]]; then
+    if ! password=$(_security_read_password); then
+      return 2
+    fi
+    if ! hash=$(printf '%s\n' "$password" | openssl passwd -6 -stdin); then
+      return 3
+    fi
+    printf '%s:%s\n' "$username" "$hash" > "$target"
+    unset password hash
+    return 0
+  fi
+
+  [[ -f "$credentials" && "$current_user" == "$username" ]] || return 4
+  cp "$credentials" "$target"
+}
+
+declare -a SECURITY_TX_PATHS=()
+declare -a SECURITY_TX_PRESENT=()
+SECURITY_TX_DIR=""
+SECURITY_TX_BASE_EXISTED=0
+SECURITY_TX_SECURITY_EXISTED=0
+SECURITY_TX_ACTIVE=0
+SECURITY_TX_DIRTY=0
+
+_security_tx_exit_trap() {
+  local exit_rc="${1:-1}" restore_rc=0 reload_rc=0
+  trap - EXIT
+  set +e
+  if [[ "$SECURITY_TX_ACTIVE" == 1 && "$SECURITY_TX_DIRTY" == 1 ]]; then
+    warn "Basic Auth transaction was interrupted; restoring the previous configuration."
+    _security_tx_restore || restore_rc=1
+    if [[ "$restore_rc" -eq 0 ]]; then
+      if nginx -t >> "$CLI_LOG" 2>&1; then
+        systemctl reload nginx >> "$CLI_LOG" 2>&1 || reload_rc=1
+      else
+        reload_rc=1
+      fi
+    fi
+    if [[ "$restore_rc" -ne 0 || "$reload_rc" -ne 0 ]]; then
+      warn "Interrupted Basic Auth rollback was incomplete. Inspect nginx immediately."
+    fi
+  fi
+  _security_tx_cleanup
+  exit "$exit_rc"
+}
+
+_security_tx_begin() {
+  local path index=0
+  SECURITY_TX_DIR=$(mktemp -d /tmp/aidipanel-security-tx.XXXXXX) || return 1
+  SECURITY_TX_PATHS=()
+  SECURITY_TX_PRESENT=()
+  [[ -d /etc/nginx/aidipanel ]] && SECURITY_TX_BASE_EXISTED=1 || SECURITY_TX_BASE_EXISTED=0
+  [[ -d /etc/nginx/aidipanel/security ]] && SECURITY_TX_SECURITY_EXISTED=1 || SECURITY_TX_SECURITY_EXISTED=0
+  for path in "$@"; do
+    SECURITY_TX_PATHS+=("$path")
+    if [[ -e "$path" ]]; then
+      SECURITY_TX_PRESENT+=(1)
+      cp -a "$path" "${SECURITY_TX_DIR}/${index}" || return 1
+    else
+      SECURITY_TX_PRESENT+=(0)
+    fi
+    index=$((index + 1))
+  done
+  SECURITY_TX_ACTIVE=1
+  SECURITY_TX_DIRTY=0
+  trap '_security_tx_exit_trap $?' EXIT
+}
+
+_security_tx_restore() {
+  local index path rc=0
+  for ((index=0; index<${#SECURITY_TX_PATHS[@]}; index++)); do
+    path="${SECURITY_TX_PATHS[$index]}"
+    rm -rf -- "$path" || rc=1
+    if [[ "${SECURITY_TX_PRESENT[$index]}" == 1 ]]; then
+      cp -a "${SECURITY_TX_DIR}/${index}" "$path" || rc=1
+    fi
+  done
+  [[ "$SECURITY_TX_SECURITY_EXISTED" == 0 ]] && rmdir /etc/nginx/aidipanel/security 2>/dev/null || true
+  [[ "$SECURITY_TX_BASE_EXISTED" == 0 ]] && rmdir /etc/nginx/aidipanel 2>/dev/null || true
+  return "$rc"
+}
+
+_security_tx_cleanup() {
+  [[ "$SECURITY_TX_ACTIVE" == 1 ]] && trap - EXIT
+  SECURITY_TX_ACTIVE=0
+  SECURITY_TX_DIRTY=0
+  [[ -n "$SECURITY_TX_DIR" ]] && rm -rf -- "$SECURITY_TX_DIR" || true
+  SECURITY_TX_DIR=""
+  SECURITY_TX_PATHS=()
+  SECURITY_TX_PRESENT=()
+}
+
+_security_install_file() {
+  local source="$1" target="$2" owner="$3" group="$4" mode="$5"
+  local staged="${target}.aidipanel.$$"
+  install -o "$owner" -g "$group" -m "$mode" "$source" "$staged" || return 1
+  mv -f "$staged" "$target" || { rm -f "$staged"; return 1; }
+}
+
+_security_reload_transaction() {
+  if nginx -t >> "$CLI_LOG" 2>&1 && systemctl reload nginx >> "$CLI_LOG" 2>&1; then
+    return 0
+  fi
+  warn "Nginx rejected the Basic Auth change; restoring the previous configuration."
+  _security_tx_restore || return 1
+  nginx -t >> "$CLI_LOG" 2>&1 || return 1
+  systemctl reload nginx >> "$CLI_LOG" 2>&1 || return 1
+  return 2
+}
+
+_security_enabled() {
+  local domain="$1" state; state=$(_security_state "$domain")
+  [[ "$(_security_state_value "$state" enabled)" == "1" ]] \
+    || grep -qF '# >>> AIDIPANEL_BASIC_AUTH >>>' "${NGINX_CONF_DIR}/${domain}.conf" 2>/dev/null
+}
+
+_security_enable() {
+  local domain="$1" scope="$2" path="$3" username="$4" bypass_ips="$5" use_stdin="$6"
+  local conf="${NGINX_CONF_DIR}/${domain}.conf"
+  local include; include=$(_security_http_inc "$domain")
+  local dir; dir=$(_security_dir "$domain")
+  local credentials; credentials=$(_security_htpasswd "$domain")
+  local state; state=$(_security_state "$domain")
+  local cache; cache=$(_cache_snippet_path "$domain")
+  local tmp; tmp=$(mktemp -d /tmp/aidipanel-security-build.XXXXXX)
+  local credential_rc reload_rc install_restore_rc=0
+
+  _security_force_https_on "$domain" || { rm -rf "$tmp"; die "Enable Force HTTPS before enabling HTTP Basic Authentication."; }
+  _security_render_http_include "$domain" "$scope" "$path" "$bypass_ips" "${tmp}/include" \
+    || { rm -rf "$tmp"; die "Could not render the Basic Auth map."; }
+  _security_render_marker "$domain" "$scope" "${tmp}/marker"
+  _security_vhost_edit "$conf" "${tmp}/vhost" enable "${tmp}/marker" \
+    || { rm -rf "$tmp"; die "Could not identify one unambiguous HTTPS server block."; }
+  _security_state_render "${tmp}/state" 1 "$scope" "$path" "$username" "$bypass_ips"
+  if _security_credential_candidate "$domain" "$username" "$use_stdin" "${tmp}/htpasswd"; then
+    credential_rc=0
+  else
+    credential_rc=$?
+  fi
+  case "$credential_rc" in
+    0) ;;
+    2) rm -rf "$tmp"; die "Password input must contain exactly one non-empty line without control characters." ;;
+    3) rm -rf "$tmp"; die "Could not hash the Basic Auth password." ;;
+    4) rm -rf "$tmp"; die "A password is required when creating credentials or changing the username." ;;
+    *) rm -rf "$tmp"; die "Could not prepare Basic Auth credentials." ;;
+  esac
+  if [[ -f "$cache" ]]; then
+    _security_cache_candidate "$cache" "${tmp}/cache" \
+      || { rm -rf "$tmp"; die "The managed cache snippet has an unsupported structure."; }
+  fi
+
+  _security_tx_begin "$conf" "$include" "$dir" "$cache" \
+    || { rm -rf "$tmp"; _security_tx_cleanup; die "Could not snapshot the current Basic Auth configuration."; }
+  SECURITY_TX_DIRTY=1
+  if ! install -d -o root -g root -m 0755 /etc/nginx/aidipanel \
+    || ! install -d -o root -g www-data -m 0750 /etc/nginx/aidipanel/security "$dir" \
+    || ! _security_install_file "${tmp}/vhost" "$conf" root root 0644 \
+    || ! _security_install_file "${tmp}/include" "$include" root root 0644 \
+    || ! _security_install_file "${tmp}/htpasswd" "$credentials" root www-data 0640 \
+    || ! _security_install_file "${tmp}/state" "$state" root root 0600 \
+    || { [[ -f "${tmp}/cache" ]] && ! _security_install_file "${tmp}/cache" "$cache" root root 0644; }; then
+    _security_tx_restore || install_restore_rc=1
+    _security_tx_cleanup
+    rm -rf "$tmp"
+    if [[ "$install_restore_rc" -eq 0 ]]; then
+      die "Could not install the Basic Auth candidate files; the previous state was restored."
+    fi
+    die "Could not install the Basic Auth candidate files and rollback was incomplete. Inspect nginx immediately."
+  fi
+
+  if _security_reload_transaction; then
+    reload_rc=0
+  else
+    reload_rc=$?
+  fi
+  if [[ "$reload_rc" -ne 0 ]]; then
+    _security_tx_cleanup
+    rm -rf "$tmp"
+    [[ "$reload_rc" -eq 2 ]] \
+      && die "The web server rejected Basic Auth; every managed file was restored." \
+      || die "Basic Auth rollback could not reload the previous configuration. Inspect nginx immediately."
+  fi
+
+  _security_tx_cleanup
+  rm -rf "$tmp"
+  _cache_purge_domain "$domain" >/dev/null 2>&1 || warn "Basic Auth is active, but stale cache cleanup failed for ${domain}."
+  printf 'enabled=1\nscope=%s\npath=%s\nusername=%s\nbypass_ips=%s\n' \
+    "$scope" "$path" "$username" "$bypass_ips"
+  ok "HTTP Basic Authentication enabled for ${domain}"
+}
+
+_security_disable() {
+  local domain="$1" purge="$2"
+  local conf="${NGINX_CONF_DIR}/${domain}.conf"
+  local include; include=$(_security_http_inc "$domain")
+  local dir; dir=$(_security_dir "$domain")
+  local state; state=$(_security_state "$domain")
+  local cache; cache=$(_cache_snippet_path "$domain")
+  local marker_count stored_scope stored_path stored_user stored_ips
+  local tmp; tmp=$(mktemp -d /tmp/aidipanel-security-build.XXXXXX)
+  local reload_rc install_restore_rc=0
+
+  marker_count=$(grep -cF '# >>> AIDIPANEL_BASIC_AUTH >>>' "$conf" 2>/dev/null || true)
+  if [[ "$marker_count" -eq 0 && ! -f "$include" && ! -f "$state" && ! -d "$dir" ]]; then
+    [[ "$purge" == "true" ]] && rm -rf -- "$dir"
+    rm -rf "$tmp"
+    printf 'enabled=0\n'
+    return 0
+  fi
+
+  _security_vhost_edit "$conf" "${tmp}/vhost" disable /dev/null \
+    || { rm -rf "$tmp"; die "Could not identify one unambiguous HTTPS server block."; }
+  stored_scope=$(_security_state_value "$state" scope)
+  stored_path=$(_security_state_value "$state" path)
+  stored_user=$(_security_state_value "$state" username)
+  stored_ips=$(_security_state_value "$state" bypass_ips)
+  _security_state_render "${tmp}/state" 0 "$stored_scope" "$stored_path" "$stored_user" "$stored_ips"
+
+  _security_tx_begin "$conf" "$include" "$dir" "$cache" \
+    || { rm -rf "$tmp"; _security_tx_cleanup; die "Could not snapshot the current Basic Auth configuration."; }
+  SECURITY_TX_DIRTY=1
+  if ! _security_install_file "${tmp}/vhost" "$conf" root root 0644 \
+    || ! rm -f "$include" \
+    || ! install -d -o root -g root -m 0755 /etc/nginx/aidipanel \
+    || ! install -d -o root -g www-data -m 0750 /etc/nginx/aidipanel/security "$dir" \
+    || ! _security_install_file "${tmp}/state" "$state" root root 0600; then
+    _security_tx_restore || install_restore_rc=1
+    _security_tx_cleanup
+    rm -rf "$tmp"
+    if [[ "$install_restore_rc" -eq 0 ]]; then
+      die "Could not install the Basic Auth disable candidate; the previous state was restored."
+    fi
+    die "Could not install the Basic Auth disable candidate and rollback was incomplete. Inspect nginx immediately."
+  fi
+
+  if _security_reload_transaction; then
+    reload_rc=0
+  else
+    reload_rc=$?
+  fi
+  if [[ "$reload_rc" -ne 0 ]]; then
+    _security_tx_cleanup
+    rm -rf "$tmp"
+    [[ "$reload_rc" -eq 2 ]] \
+      && die "The web server rejected Basic Auth disable; every managed file was restored." \
+      || die "Basic Auth disable rollback could not reload the previous configuration. Inspect nginx immediately."
+  fi
+
+  _security_tx_cleanup
+  rm -rf "$tmp"
+  if [[ "$purge" == "true" ]]; then
+    rm -rf -- "$dir"
+  fi
+  _cache_purge_domain "$domain" >/dev/null 2>&1 || warn "Basic Auth is disabled, but stale cache cleanup failed for ${domain}."
+  printf 'enabled=0\n'
+  ok "HTTP Basic Authentication disabled for ${domain}"
+}
+
+_security_force_https_on() {
+  local conf="${NGINX_CONF_DIR}/${1}.conf"
+  grep -qF 'return 301 https://' "$conf" 2>/dev/null
+}
+
+_security_artifacts_match() {
+  local domain="$1" scope="$2" path="$3"
+  local conf="${NGINX_CONF_DIR}/${domain}.conf"
+  local include; include=$(_security_http_inc "$domain")
+  local credentials; credentials=$(_security_htpasswd "$domain")
+  local id; id=$(_security_id "$domain")
+  local escaped_path=""
+
+  _security_vhost_marker_valid "$conf" || return 1
+  grep -qE "^[[:space:]]*auth_basic[[:space:]]+\\\$aidipanel_ba_realm_${id};[[:space:]]*$" "$conf" || return 1
+  grep -qF "auth_basic_user_file ${credentials};" "$conf" || return 1
+  grep -qF "\$aidipanel_ba_bypass_${id}" "$include" || return 1
+  grep -qF "\$aidipanel_ba_realm_${id}" "$include" || return 1
+
+  case "$scope" in
+    custom)
+      escaped_path=$(_security_regex_escape "$path")
+      grep -qF "\$aidipanel_ba_original_${id}" "$include" || return 1
+      grep -qF "${escaped_path}(?:/|\$)" "$include" || return 1
+      grep -qF "\$aidipanel_ba_original_${id}" "$conf" || return 1
+      ;;
+    wp-login)
+      grep -qF '/wp-login\.php(?:/|$)' "$include" || return 1
+      grep -qF '/wp-admin/admin-ajax\.php$' "$include" || return 1
+      ;;
+    site)
+      grep -qF 'default "Restricted Area";' "$include" || return 1
+      ;;
+    *) return 1 ;;
+  esac
+  return 0
+}
+
+_security_status() {
+  local domain="$1"
+  local conf="${NGINX_CONF_DIR}/${domain}.conf"
+  local state; state=$(_security_state "$domain")
+  local include; include=$(_security_http_inc "$domain")
+  local credentials; credentials=$(_security_htpasswd "$domain")
+  local stored_enabled="" scope="" path="" username="" bypass_ips=""
+  local enabled=0 htpasswd_exists=0 force_https=0 error=""
+  local marker_count=0 marker_end_count=0 marker_valid=0 normalized=""
+
+  if [[ -f "$state" ]]; then
+    stored_enabled=$(_security_state_value "$state" enabled)
+    scope=$(_security_state_value "$state" scope)
+    path=$(_security_state_value "$state" path)
+    username=$(_security_state_value "$state" username)
+    bypass_ips=$(_security_state_value "$state" bypass_ips)
+  fi
+  [[ -f "$credentials" ]] && htpasswd_exists=1
+  _security_force_https_on "$domain" && force_https=1
+  marker_count=$(grep -cF '# >>> AIDIPANEL_BASIC_AUTH >>>' "$conf" 2>/dev/null || true)
+  marker_end_count=$(grep -cF '# <<< AIDIPANEL_BASIC_AUTH <<<' "$conf" 2>/dev/null || true)
+  _security_vhost_marker_valid "$conf" && marker_valid=1
+
+  if [[ "$stored_enabled" == "1" ]]; then
+    if [[ "$marker_valid" -ne 1 ]]; then
+      error="missing_vhost_marker"
+    elif [[ ! -r "$include" ]]; then
+      error="missing_http_include"
+    elif [[ ! -f "$credentials" ]]; then
+      error="missing_credentials"
+    elif ! sudo -u www-data test -r "$credentials" 2>/dev/null; then
+      error="unreadable_credentials"
+    elif ! _security_scope_valid "$scope" \
+      || ! _security_user_valid "$username" \
+      || { [[ "$scope" == "custom" ]] && ! _security_path_valid "$path"; } \
+      || { [[ "$scope" != "custom" ]] && [[ -n "$path" ]]; }; then
+      error="state_mismatch"
+    elif ! normalized=$(_security_normalize_ips "$bypass_ips") \
+      || [[ "$normalized" != "$bypass_ips" ]]; then
+      error="state_mismatch"
+    elif ! _security_artifacts_match "$domain" "$scope" "$path"; then
+      error="state_mismatch"
+    else
+      enabled=1
+    fi
+  elif [[ -f "$state" && "$stored_enabled" != "0" ]]; then
+    error="state_mismatch"
+  elif [[ "$marker_count" -ne 0 || "$marker_end_count" -ne 0 || -f "$include" ]]; then
+    error="state_mismatch"
+  elif [[ ! -f "$state" && -f "$credentials" ]]; then
+    error="state_mismatch"
+  fi
+
+  printf 'enabled=%s\n' "$enabled"
+  printf 'scope=%s\n' "$scope"
+  printf 'path=%s\n' "$path"
+  printf 'username=%s\n' "$username"
+  printf 'bypass_ips=%s\n' "$bypass_ips"
+  printf 'htpasswd_exists=%s\n' "$htpasswd_exists"
+  printf 'force_https=%s\n' "$force_https"
+  printf 'error=%s\n' "$error"
+}
+
+_security_basic_auth() {
+  _require_root "security:basic-auth"
+  _parse_opts "$@"
+  local domain action scope username path bypass_raw bypass_ips
+  domain=$(_opt "domain")
+  action=$(_opt "action" "status")
+  _require_arg "domain" "$domain" "security:basic-auth --domain example.com --action status"
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
+  _domain_exists "$domain" || die "Site not found: ${domain}"
+
+  case "$action" in
+    status)
+      _security_status "$domain"
+      ;;
+    enable)
+      scope=$(_opt "scope")
+      username=$(_opt "user")
+      path=$(_opt "path" "")
+      bypass_raw=$(_opt "bypass-ips" "")
+      _security_scope_valid "$scope" || die "Invalid Basic Auth scope: ${scope}. Use: site, wp-login, or custom."
+      _security_user_valid "$username" || die "Invalid Basic Auth username. Use 1-64 letters, numbers, dot, underscore, or hyphen."
+      if [[ "$scope" == "custom" ]]; then
+        if ! path=$(_security_normalize_path "$path"); then
+          die "Invalid custom path. Use a path such as /private; the site root belongs to --scope site."
+        fi
+        _security_path_valid "$path" || die "Invalid custom path. Use a path such as /private; percent encoding, /, //, whitespace, and .. segments are not allowed."
+      elif [[ -n "$path" ]]; then
+        die "Invalid custom path: --path is only valid with --scope custom."
+      fi
+      if ! bypass_ips=$(_security_normalize_ips "$bypass_raw"); then
+        die "Invalid bypass IP list. Use individual IPv4 or IPv6 addresses without CIDR."
+      fi
+      [[ -z "$(_opt "pass" "")" ]] || die "The --pass option is not supported; use --password-stdin."
+      local use_stdin; use_stdin=$(_opt "password-stdin" "false")
+      [[ "$use_stdin" == "false" || "$use_stdin" == "true" ]] \
+        || die "--password-stdin is a flag and does not accept a value."
+      _security_enable "$domain" "$scope" "$path" "$username" "$bypass_ips" "$use_stdin"
+      ;;
+    disable)
+      _security_disable "$domain" "$(_opt "purge" "false")"
+      ;;
+    *)
+      die "Unknown Basic Auth action: ${action}. Use: status, enable, or disable."
+      ;;
+  esac
 }
 
 # ===========================================================================
@@ -4069,6 +4778,9 @@ _ssl_force_https() {
   _domain_valid "$domain"  || die "Invalid domain name: ${domain}"
   _domain_exists "$domain" || die "Site not found: ${domain}"
   [[ "$action" == "on" || "$action" == "off" ]] || die "Action must be 'on' or 'off'."
+  if [[ "$action" == "off" ]] && _security_enabled "$domain"; then
+    die "Disable HTTP Basic Authentication before turning Force HTTPS off."
+  fi
   conf="${NGINX_CONF_DIR}/${domain}.conf"
   [[ -f "$conf" ]] || die "Vhost not found: ${conf}"
 
@@ -4482,6 +5194,9 @@ main() {
     cache:redis-disable) _cache_redis_disable "$@" ;;
     cache:redis-flush)      _cache_redis_flush "$@" ;;
     cache:opcache-restart)  _cache_opcache_restart "$@" ;;
+
+    # Site security
+    security:basic-auth) _security_basic_auth "$@" ;;
 
     # Database
     db:add)         _db_add "$@" ;;
