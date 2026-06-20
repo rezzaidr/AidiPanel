@@ -3275,9 +3275,55 @@ _security_disable() {
   ok "HTTP Basic Authentication disabled for ${domain}"
 }
 
+# Force HTTPS is "on" only when the FIRST managed port-80 server block carries a
+# catch-all redirect to https — one that fires for every request, not a stray
+# `return 301 https://` sitting in a comment, the TLS block, an unrelated
+# `location /preview`, or a second server block (the bug this guards against:
+# Basic Auth only challenges over HTTPS, so a false positive could hide a
+# plain-HTTP bypass). Two managed forms count, both scoped to the first port-80
+# server: AidiPanel's `location / { return 301 https://... }` and Certbot's
+# server-level `if ($host = ...) { return 301 https://...; }` redirect.
 _security_force_https_on() {
   local conf="${NGINX_CONF_DIR}/${1}.conf"
-  grep -qF 'return 301 https://' "$conf" 2>/dev/null
+  [[ -f "$conf" ]] || return 1
+  awk '
+    function braces(s,   o, c) { o = gsub(/[{]/, "", s); c = gsub(/[}]/, "", s); return o - c }
+    { line = $0; sub(/#.*/, "", line) }
+    # Seek the next "server {".
+    state == 0 {
+      if (line ~ /^[[:space:]]*server[[:space:]]*[{]/) {
+        state = 1; depth = braces(line); is80 = 0; redir = 0; ctx = ""
+        if (depth <= 0) state = 0
+      }
+      next
+    }
+    # Inside a server block: decide at its closing brace.
+    {
+      start = depth
+      if (line ~ /listen[[:space:]]+(\[::\]:)?80([[:space:];]|$)/) is80 = 1
+
+      # Only a direct child of "server" whose scope is every request can hold a
+      # force-HTTPS redirect: the root "location /" or a server-level "if (...)".
+      kind = "other"
+      if (start == 1 && line ~ /[{]/) {
+        if (line ~ /location[[:space:]]+\/[[:space:]]*[{]/) kind = "root"
+        else if (line ~ /(^|[^[:alnum:]_])if[[:space:]]*\(/) kind = "if"
+      }
+      if (line ~ /return[[:space:]]+301[[:space:]]+https:\/\//) {
+        if (start == 1) { if (kind == "root" || kind == "if") redir = 1 }
+        else if (ctx == "root" || ctx == "if") redir = 1
+      }
+
+      depth += braces(line)
+      if (start == 1 && depth >= 2) ctx = kind
+      if (depth <= 1) ctx = ""
+      if (depth <= 0) {
+        if (is80) { found = redir; exit }
+        state = 0
+      }
+    }
+    END { exit (found ? 0 : 1) }
+  ' "$conf"
 }
 
 _security_artifacts_match() {
@@ -3355,6 +3401,8 @@ _security_status() {
       error="state_mismatch"
     elif ! _security_artifacts_match "$domain" "$scope" "$path"; then
       error="state_mismatch"
+    elif [[ "$force_https" -ne 1 ]]; then
+      error="force_https_drift"
     else
       enabled=1
     fi

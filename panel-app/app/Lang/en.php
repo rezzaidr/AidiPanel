@@ -235,6 +235,7 @@ return [
     'site.security.drift.missing_credentials'    => 'The credential file is missing. Enter a new password and save again.',
     'site.security.drift.unreadable_credentials' => 'Nginx cannot read the credential file. Re-save Basic Auth to restore secure permissions.',
     'site.security.drift.state_mismatch'         => 'Managed security files do not match the saved state. Re-save or disable Basic Auth.',
+    'site.security.drift.force_https_drift'      => 'Force HTTPS is no longer redirecting plain HTTP, so a visitor could reach this site over HTTP without the password prompt. Restore Force HTTPS in SSL/TLS, or disable Basic Auth.',
     'site.security.drift.status_unavailable'     => 'AidiPanel could not read Basic Auth status. Check the CLI and web-command wrapper.',
     'site.security.ip_blocking.title'    => 'IP Blocking',
     'site.security.ip_blocking.desc'     => 'Block individual IP addresses or CIDR ranges before requests reach the site.',

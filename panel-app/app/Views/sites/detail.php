@@ -1974,6 +1974,7 @@ $tabs = [
       'missing_credentials'    => t('site.security.drift.missing_credentials'),
       'unreadable_credentials' => t('site.security.drift.unreadable_credentials'),
       'state_mismatch'         => t('site.security.drift.state_mismatch'),
+      'force_https_drift'      => t('site.security.drift.force_https_drift'),
       'status_unavailable'     => t('site.security.drift.status_unavailable'),
       default                  => '',
   };
@@ -1982,6 +1983,7 @@ $tabs = [
       'missing_http_include',
       'missing_credentials',
       'unreadable_credentials',
+      'force_https_drift',
   ], true);
   ?>
   <div class="space-y-4" x-data="{ enabled: <?= $baEnabled ? 'true' : 'false' ?>, scope: '<?= e($baScope) ?>' }">
@@ -1995,7 +1997,7 @@ $tabs = [
     </div>
     <?php endif; ?>
 
-    <?php if (!$baForceHttps): ?>
+    <?php if (!$baForceHttps && $baError !== 'force_https_drift'): ?>
     <div class="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
       <i class="ti ti-lock-off text-amber-600 mt-0.5"></i>
       <p class="text-xs text-amber-800 leading-relaxed"><?= e(t('site.security.https_required')) ?></p>
