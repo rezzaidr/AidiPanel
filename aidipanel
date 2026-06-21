@@ -3497,7 +3497,8 @@ _security_disable() {
 
   marker_count=$(grep -cF '# >>> AIDIPANEL_BASIC_AUTH >>>' "$conf" 2>/dev/null || true)
   if [[ "$marker_count" -eq 0 && ! -f "$include" && ! -f "$state" && ! -d "$dir" ]]; then
-    [[ "$purge" == "true" ]] && rm -rf -- "$dir"
+    # Nothing to disable and the shared per-site dir is already absent, so there
+    # is nothing to purge (and nothing of a sibling feature to protect).
     rm -rf "$tmp"
     printf 'enabled=0\n'
     return 0
@@ -3544,7 +3545,11 @@ _security_disable() {
   _security_tx_cleanup
   rm -rf "$tmp"
   if [[ "$purge" == "true" ]]; then
-    rm -rf -- "$dir"
+    # Purge only Basic Auth's own artifacts. The per-site dir is shared with
+    # IP Blocking and Cloudflare-only, so never delete it wholesale; rmdir
+    # clears it only when no sibling feature still keeps state there.
+    rm -f -- "$(_security_htpasswd "$domain")" "$state"
+    rmdir "$dir" 2>/dev/null || true
   fi
   _cache_purge_domain "$domain" >/dev/null 2>&1 || warn "Basic Auth is disabled, but stale cache cleanup failed for ${domain}."
   printf 'enabled=0\n'

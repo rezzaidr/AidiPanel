@@ -2024,6 +2024,99 @@ $tabs = [
   };
   ?>
   <div class="space-y-4" x-data="{ enabled: <?= $baEnabled ? 'true' : 'false' ?>, scope: '<?= e($baScope) ?>' }">
+
+    <form method="POST" action="/sites/<?= e($domain) ?>/security/cloudflare-only"
+          class="card overflow-hidden" data-security-card="cloudflare-protection"
+          x-data="{ cfo: <?= $cfoEnabled ? 'true' : 'false' ?> }">
+      <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+      <input type="hidden" name="enabled" value="0">
+      <div class="p-5 space-y-4">
+        <div class="flex items-start justify-between gap-4">
+          <div class="flex items-start gap-3">
+            <i class="ti ti-cloud-lock <?= $cfErrorMessage === '' && $cfEnabled ? 'text-emerald-500' : 'text-zinc-400' ?> text-lg mt-0.5"></i>
+            <div>
+              <h3 class="text-sm font-semibold text-zinc-800"><?= e(t('site.security.cloudflare.title')) ?></h3>
+              <p class="text-xs text-zinc-500 mt-1"><?= e(t('site.security.cloudflare.desc')) ?></p>
+            </div>
+          </div>
+          <span class="badge <?= $cfErrorMessage === '' && $cfEnabled ? 'badge-ok' : 'badge-muted' ?>">
+            <?= e($cfErrorMessage !== ''
+                ? t('site.security.cloudflare.status_error')
+                : ($cfEnabled ? t('site.security.cloudflare.status_active') : t('site.security.cloudflare.status_inactive'))) ?>
+          </span>
+        </div>
+
+        <?php if ($cfErrorMessage !== ''): ?>
+        <div class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          <?= e($cfErrorMessage) ?>
+        </div>
+        <?php elseif ($cfStale): ?>
+        <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <?= e(t('site.security.cloudflare.stale')) ?>
+        </div>
+        <?php endif; ?>
+
+        <p class="text-[11px] leading-relaxed text-zinc-500"><?= e(t('site.security.cloudflare.identity_hint')) ?></p>
+      </div>
+
+      <?php if ($cfErrorMessage === ''): ?>
+      <div class="grid grid-cols-3 divide-x divide-zinc-100 border-t border-zinc-100">
+        <div class="px-5 py-3.5">
+          <p class="eyebrow mb-1.5"><?= e(t('site.security.cloudflare.source')) ?></p>
+          <p class="text-sm font-semibold text-zinc-800"><?= e(ucfirst($cfSource)) ?></p>
+        </div>
+        <div class="px-5 py-3.5">
+          <p class="eyebrow mb-1.5"><?= e(t('site.security.cloudflare.age')) ?></p>
+          <p class="text-sm font-semibold text-zinc-800"><?= e((string) $cfAgeDays) ?> days</p>
+        </div>
+        <div class="px-5 py-3.5">
+          <p class="eyebrow mb-1.5"><?= e(t('site.security.cloudflare.ranges')) ?></p>
+          <p class="text-sm font-semibold text-zinc-800"><?= e($cfRanges) ?></p>
+        </div>
+      </div>
+      <?php endif; ?>
+
+      <?php $cfoCanToggle = $cfoDependencyOk || $cfoEnabled; ?>
+      <div class="p-5 border-t border-zinc-100 space-y-3" data-security-row="cloudflare-only">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <h4 class="text-sm font-semibold text-zinc-800">
+              <?= e(t('site.security.cloudflare_only.label')) ?>
+              <?php if ($cfoErrorMessage !== ''): ?>
+              <span class="badge badge-muted"><span class="dot bg-red-500"></span><?= e(t('site.security.cloudflare.status_error')) ?></span>
+              <?php endif; ?>
+            </h4>
+            <p class="text-xs text-zinc-500 mt-1"><?= e(t('site.security.cloudflare_only.desc')) ?></p>
+          </div>
+          <label class="inline-flex items-center gap-2 <?= $cfoCanToggle ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed' ?>" data-security-toggle="cloudflare-only">
+            <span class="text-[11px] font-medium text-zinc-500"
+                  x-text="cfo ? '<?= e(t('site.security.enabled')) ?>' : '<?= e(t('site.security.disabled')) ?>'"></span>
+            <input type="checkbox" name="enabled" value="1" x-model="cfo" class="sr-only" <?= $cfoCanToggle ? '' : 'disabled' ?>>
+            <span aria-hidden="true" :class="cfo ? 'sw-on' : 'sw-off'"><span></span></span>
+          </label>
+        </div>
+
+        <?php if ($cfoErrorMessage !== ''): ?>
+        <div class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"><?= e($cfoErrorMessage) ?></div>
+        <?php endif; ?>
+
+        <?php if (!$cfoDependencyOk): ?>
+        <div class="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200/70 px-3 py-2">
+          <i class="ti ti-alert-triangle text-amber-600 mt-0.5 text-sm"></i>
+          <p class="text-[11px] text-amber-800 leading-relaxed"><?= e(t('site.security.cloudflare_only.requires')) ?></p>
+        </div>
+        <?php endif; ?>
+
+        <p class="text-[11px] leading-relaxed text-zinc-400"><i class="ti ti-info-circle"></i> <?= e(t('site.security.cloudflare_only.recovery')) ?></p>
+
+        <div class="flex justify-end">
+          <button type="submit" class="btn btn-primary" <?= $cfoCanToggle ? '' : 'disabled' ?>>
+            <i class="ti ti-device-floppy text-sm"></i> <?= e(t('site.security.save')) ?>
+          </button>
+        </div>
+      </div>
+    </form>
+
     <?php if ($driftMessage !== ''): ?>
     <div class="flex items-start gap-3 rounded-lg border <?= $driftCritical ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50' ?> px-4 py-3">
       <i class="ti ti-alert-triangle <?= $driftCritical ? 'text-red-600' : 'text-amber-600' ?> mt-0.5"></i>
@@ -2062,14 +2155,14 @@ $tabs = [
         </div>
         <label class="inline-flex items-center gap-2 cursor-pointer" data-security-toggle="basic-auth">
           <span class="text-[11px] font-medium text-zinc-500"
-                x-text="enabled ? '<?= e(t('site.security.protection_on')) ?>' : '<?= e(t('site.security.protection_off')) ?>'"></span>
+                x-text="enabled ? '<?= e(t('site.security.enabled')) ?>' : '<?= e(t('site.security.disabled')) ?>'"></span>
           <input type="checkbox" name="enabled" value="1" x-model="enabled" class="sr-only">
           <span aria-hidden="true" :class="enabled ? 'sw-on' : 'sw-off'"><span></span></span>
         </label>
       </div>
 
       <div class="p-5 space-y-5">
-        <div class="space-y-4" x-show="enabled" x-cloak>
+        <div class="space-y-4">
           <div data-security-row="scope">
             <label class="lbl"><?= e(t('site.security.scope_label')) ?></label>
             <select name="scope" class="inp w-full" x-model="scope">
@@ -2138,7 +2231,6 @@ $tabs = [
       </div>
     </form>
 
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 <?php
         $ibEnabled = ($ipBlockInfo['enabled'] ?? '0') === '1';
         $ibError   = (string) ($ipBlockInfo['error'] ?? '');
@@ -2184,7 +2276,7 @@ $tabs = [
           </div>
           <label class="inline-flex items-center gap-2 cursor-pointer" data-security-toggle="ip-blocking">
             <span class="text-[11px] font-medium text-zinc-500"
-                  x-text="enabled ? '<?= e(t('site.security.protection_on')) ?>' : '<?= e(t('site.security.protection_off')) ?>'"></span>
+                  x-text="enabled ? '<?= e(t('site.security.enabled')) ?>' : '<?= e(t('site.security.disabled')) ?>'"></span>
             <input type="checkbox" name="enabled" value="1" x-model="enabled" class="sr-only">
             <span aria-hidden="true" :class="enabled ? 'sw-on' : 'sw-off'"><span></span></span>
           </label>
@@ -2202,7 +2294,7 @@ $tabs = [
           </div>
           <?php endif; ?>
 
-          <div x-show="enabled" x-cloak class="space-y-2">
+          <div class="space-y-2">
             <label class="lbl"><?= e(t('site.security.ipblock.list_label')) ?></label>
             <textarea name="ips" rows="6" class="inp w-full mono resize-y"
                       placeholder="203.0.113.10&#10;198.51.100.0/24&#10;2001:db8::/32"><?= e($ibList) ?></textarea>
@@ -2220,113 +2312,6 @@ $tabs = [
           </div>
         </div>
       </form>
-
-      <form method="POST" action="/sites/<?= e($domain) ?>/security/cloudflare-only"
-            class="card overflow-hidden" data-security-card="cloudflare-protection"
-            x-data="{ cfo: <?= $cfoEnabled ? 'true' : 'false' ?> }">
-        <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
-        <input type="hidden" name="enabled" value="0">
-        <div class="p-5 space-y-4">
-          <div class="flex items-start justify-between gap-4">
-            <div class="flex items-start gap-3">
-              <i class="ti ti-cloud-lock <?= $cfErrorMessage === '' && $cfEnabled ? 'text-emerald-500' : 'text-zinc-400' ?> text-lg mt-0.5"></i>
-              <div>
-                <h3 class="text-sm font-semibold text-zinc-800"><?= e(t('site.security.cloudflare.title')) ?></h3>
-                <p class="text-xs text-zinc-500 mt-1"><?= e(t('site.security.cloudflare.desc')) ?></p>
-              </div>
-            </div>
-            <span class="badge <?= $cfErrorMessage === '' && $cfEnabled ? 'badge-ok' : 'badge-muted' ?>">
-              <?= e($cfErrorMessage !== ''
-                  ? t('site.security.cloudflare.status_error')
-                  : ($cfEnabled ? t('site.security.cloudflare.status_active') : t('site.security.cloudflare.status_inactive'))) ?>
-            </span>
-          </div>
-
-          <?php if ($cfErrorMessage !== ''): ?>
-          <div class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-            <?= e($cfErrorMessage) ?>
-          </div>
-          <?php elseif ($cfStale): ?>
-          <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            <?= e(t('site.security.cloudflare.stale')) ?>
-          </div>
-          <?php endif; ?>
-
-          <?php if ($cfErrorMessage === ''): ?>
-          <dl class="grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
-            <div>
-              <dt class="text-zinc-400"><?= e(t('site.security.cloudflare.source')) ?></dt>
-              <dd class="mt-0.5 font-medium text-zinc-700"><?= e(ucfirst($cfSource)) ?></dd>
-            </div>
-            <div>
-              <dt class="text-zinc-400"><?= e(t('site.security.cloudflare.age')) ?></dt>
-              <dd class="mt-0.5 font-medium text-zinc-700"><?= e((string) $cfAgeDays) ?> days</dd>
-            </div>
-            <div>
-              <dt class="text-zinc-400"><?= e(t('site.security.cloudflare.ranges')) ?></dt>
-              <dd class="mt-0.5 font-medium text-zinc-700"><?= e($cfRanges) ?></dd>
-            </div>
-          </dl>
-          <?php endif; ?>
-
-          <p class="text-[11px] leading-relaxed text-zinc-500"><?= e(t('site.security.cloudflare.identity_hint')) ?></p>
-
-          <?php $cfoCanToggle = $cfoDependencyOk || $cfoEnabled; ?>
-          <div class="border-t border-zinc-100 pt-4 space-y-3" data-security-row="cloudflare-only">
-            <div class="flex items-start justify-between gap-4">
-              <div>
-                <h4 class="text-sm font-semibold text-zinc-800">
-                  <?= e(t('site.security.cloudflare_only.label')) ?>
-                  <?php if ($cfoErrorMessage !== ''): ?>
-                  <span class="badge badge-muted"><span class="dot bg-red-500"></span><?= e(t('site.security.cloudflare.status_error')) ?></span>
-                  <?php endif; ?>
-                </h4>
-                <p class="text-xs text-zinc-500 mt-1"><?= e(t('site.security.cloudflare_only.desc')) ?></p>
-              </div>
-              <label class="inline-flex items-center gap-2 <?= $cfoCanToggle ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed' ?>" data-security-toggle="cloudflare-only">
-                <span class="text-[11px] font-medium text-zinc-500"
-                      x-text="cfo ? '<?= e(t('site.security.protection_on')) ?>' : '<?= e(t('site.security.protection_off')) ?>'"></span>
-                <input type="checkbox" name="enabled" value="1" x-model="cfo" class="sr-only" <?= $cfoCanToggle ? '' : 'disabled' ?>>
-                <span aria-hidden="true" :class="cfo ? 'sw-on' : 'sw-off'"><span></span></span>
-              </label>
-            </div>
-
-            <?php if ($cfoErrorMessage !== ''): ?>
-            <div class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"><?= e($cfoErrorMessage) ?></div>
-            <?php endif; ?>
-
-            <?php if (!$cfoDependencyOk): ?>
-            <div class="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200/70 px-3 py-2">
-              <i class="ti ti-alert-triangle text-amber-600 mt-0.5 text-sm"></i>
-              <p class="text-[11px] text-amber-800 leading-relaxed"><?= e(t('site.security.cloudflare_only.requires')) ?></p>
-            </div>
-            <?php endif; ?>
-
-            <p class="text-[11px] leading-relaxed text-zinc-500"><?= e(t('site.security.cloudflare_only.boundary')) ?></p>
-            <p class="text-[11px] leading-relaxed text-zinc-400"><i class="ti ti-info-circle"></i> <?= e(t('site.security.cloudflare_only.recovery')) ?></p>
-
-            <div class="flex justify-end">
-              <button type="submit" class="btn btn-primary" <?= $cfoCanToggle ? '' : 'disabled' ?>>
-                <i class="ti ti-device-floppy text-sm"></i> <?= e(t('site.security.save')) ?>
-              </button>
-            </div>
-          </div>
-        </div>
-      </form>
-
-      <div class="card opacity-70 md:col-span-2">
-        <div class="p-5 flex items-start justify-between gap-4">
-          <div class="flex items-start gap-3">
-            <i class="ti ti-adjustments-horizontal text-zinc-400 text-lg mt-0.5"></i>
-            <div>
-              <h3 class="text-sm font-semibold text-zinc-800"><?= e(t('site.security.advanced.title')) ?></h3>
-              <p class="text-xs text-zinc-500 mt-1"><?= e(t('site.security.advanced.desc')) ?></p>
-            </div>
-          </div>
-          <span class="badge badge-muted"><?= e(t('common.soon')) ?></span>
-        </div>
-      </div>
-    </div>
   </div>
 
 <?php else: ?>

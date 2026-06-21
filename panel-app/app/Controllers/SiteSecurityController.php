@@ -14,9 +14,12 @@ class SiteSecurityController extends BaseController
         $redirect = $this->tab($domain);
 
         if (!$this->checked('enabled')) {
+            // Disabling from the panel also clears the saved credentials so the
+            // form resets on reload (the bare CLI disable retains them).
             $result = run_cli('security:basic-auth', [
                 '--domain', $domain,
                 '--action', 'disable',
+                '--purge',
             ]);
             if (!$result['success']) {
                 $this->error('Could not disable HTTP Basic Authentication: ' . $result['output'], $redirect);
@@ -112,7 +115,9 @@ class SiteSecurityController extends BaseController
         $redirect = $this->tab($domain);
 
         if (!$this->checked('enabled')) {
-            $result = run_cli('security:ip-block', ['--domain', $domain, '--action', 'disable']);
+            // Disabling from the panel also clears the saved list so the textarea
+            // resets on reload (the bare CLI disable retains it).
+            $result = run_cli('security:ip-block', ['--domain', $domain, '--action', 'disable', '--purge']);
             if (!$result['success']) {
                 $this->error('Could not disable IP Blocking: ' . $this->ipBlockError((string) $result['output']), $redirect);
             }
