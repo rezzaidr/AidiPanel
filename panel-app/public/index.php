@@ -100,12 +100,6 @@ $router->post('/cache/purge-urls',      'CacheController@purgeUrls');
 $router->post('/cache/opcache-restart', 'CacheController@opcacheRestart');
 $router->post('/cache/zone',            'CacheController@zone');
 
-// Databases
-$router->get('/databases',         'DatabaseController@index');
-$router->post('/databases/add',    'DatabaseController@add');
-$router->post('/databases/delete', 'DatabaseController@delete');
-$router->post('/databases/backup', 'DatabaseController@backup');
-
 // PHP
 $router->get('/php',           'PhpController@index');
 $router->post('/php/restart',  'PhpController@restart');
