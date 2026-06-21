@@ -1645,6 +1645,24 @@ case "$cmd" in
       exit 126
     fi
     ;;
+  security:ip-block)
+    ipb_action=""; ipb_count=0; ipb_prev=""
+    for ipb_arg in "$@"; do
+      [[ "$ipb_prev" == "--action" ]] && { ipb_action="$ipb_arg"; ipb_count=$((ipb_count + 1)); }
+      ipb_prev="$ipb_arg"
+    done
+    if [[ "$ipb_count" -ne 1 ]]; then
+      echo "AidiPanel web command not allowed: security:ip-block needs exactly one --action" >&2
+      exit 126
+    fi
+    case "$ipb_action" in
+      status|get|set|disable) ;;
+      *)
+        echo "AidiPanel web command not allowed: security:ip-block action '${ipb_action}'" >&2
+        exit 126
+        ;;
+    esac
+    ;;
   site:add|site:delete|site:list|vhost:save|\
   cache:page|cache:redis|cache:zone|cache:status|cache:purge|cache:enable|cache:disable|\
   cache:config|cache:redis-enable|cache:redis-disable|cache:redis-flush|cache:opcache-restart|\

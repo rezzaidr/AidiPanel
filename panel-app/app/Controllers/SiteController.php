@@ -299,6 +299,14 @@ class SiteController extends BaseController
             'cfonly_dependents' => '0',
             'error' => '',
         ];
+        $ipBlockInfo = [
+            'enabled' => '0',
+            'entry_count' => '0',
+            'list_sha256' => '',
+            'realip_active' => '0',
+            'error' => '',
+        ];
+        $ipBlockList = '';
 
         if ($activeTab === 'performance') {
             $pageCacheInfo   = $this->getPageCacheInfo($domain);
@@ -368,6 +376,30 @@ class SiteController extends BaseController
             } else {
                 $cloudflareInfo['error'] = 'status_unavailable';
             }
+
+            $result = run_cli('security:ip-block', ['--domain', $domain, '--action', 'status']);
+            if ($result['success']) {
+                $allowed = array_fill_keys(array_keys($ipBlockInfo), true);
+                foreach (preg_split('/\R/', trim((string) $result['output'])) ?: [] as $line) {
+                    if (!str_contains($line, '=')) {
+                        continue;
+                    }
+                    [$key, $value] = explode('=', $line, 2);
+                    if (isset($allowed[$key])) {
+                        $ipBlockInfo[$key] = $value;
+                    }
+                }
+            } else {
+                $ipBlockInfo['error'] = 'status_unavailable';
+            }
+            // Fetch the saved list ONLY when status is healthy. The body is kept
+            // out of logs and error messages (see security:ip-block get).
+            if ($ipBlockInfo['error'] === '') {
+                $listResult = run_cli('security:ip-block', ['--domain', $domain, '--action', 'get']);
+                if ($listResult['success']) {
+                    $ipBlockList = rtrim((string) $listResult['output'], "\r\n");
+                }
+            }
         }
 
         // Database tab data (scoped to this site by its name prefix).
@@ -394,7 +426,7 @@ class SiteController extends BaseController
             'pageCacheInfo', 'objectCacheInfo', 'opcacheInfo', 'protocolInfo',
             'cacheConfig', 'lastPurge', 'cacheZoneSize', 'httpsOptions', 'certs',
             'databases', 'dbUsers', 'dbHost', 'dbPort', 'dbPrefix', 'pmaInstalled', 'pmaUrl', 'wpDbInfo',
-            'basicAuthInfo', 'cloudflareInfo'
+            'basicAuthInfo', 'cloudflareInfo', 'ipBlockInfo', 'ipBlockList'
         ) + ['_full_bleed' => true]);
     }
 

@@ -229,7 +229,7 @@ function web_cli_allowed_commands(): array
         'php:list', 'php:version', 'php:restart', 'php:install',
         'ssl:install', 'ssl:renew', 'ssl:status', 'ssl:import',
         'ssl:force-https', 'ssl:hsts', 'ssl:autorenew', 'ssl:check', 'ssl:use',
-        'security:basic-auth', 'cloudflare:realip',
+        'security:basic-auth', 'cloudflare:realip', 'security:ip-block',
         'service:status', 'service:start', 'service:stop', 'service:restart', 'service:reload',
         'system:info',
     ];
@@ -251,6 +251,21 @@ function is_web_cli_invocation_allowed(string $command, array $args): bool
 
     if ($command === 'cloudflare:realip') {
         return $args === ['--action', 'status'];
+    }
+
+    if ($command === 'security:ip-block') {
+        // Web permits exactly one --action in {status,get,set,disable}. The deny
+        // list itself travels over stdin, never argv.
+        $action = null;
+        $count = 0;
+        $n = count($args);
+        for ($i = 0; $i < $n; $i++) {
+            if ($args[$i] === '--action') {
+                $count++;
+                $action = $args[$i + 1] ?? null;
+            }
+        }
+        return $count === 1 && in_array($action, ['status', 'get', 'set', 'disable'], true);
     }
 
     return true;

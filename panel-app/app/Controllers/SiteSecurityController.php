@@ -105,6 +105,63 @@ class SiteSecurityController extends BaseController
         $this->success('HTTP Basic Authentication updated.', $redirect);
     }
 
+    public function ipBlock(array $params = []): void
+    {
+        $domain = strtolower(trim((string) ($params['domain'] ?? '')));
+        $this->requireSite($domain);
+        $redirect = $this->tab($domain);
+
+        if (!$this->checked('enabled')) {
+            $result = run_cli('security:ip-block', ['--domain', $domain, '--action', 'disable']);
+            if (!$result['success']) {
+                $this->error('Could not disable IP Blocking: ' . $this->ipBlockError((string) $result['output']), $redirect);
+            }
+            \Core\DB::log('security:ip-block', "Disabled IP Blocking for {$domain}");
+            $this->success('IP Blocking disabled.', $redirect);
+        }
+
+        $rawList = (string) $this->request->post('ips', '');
+        if (strlen($rawList) > 65536) {
+            $this->error('The IP list is too large (max 64 KiB).', $redirect);
+        }
+        if (preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', $rawList)) {
+            $this->error('The IP list contains unsupported control characters.', $redirect);
+        }
+        if (trim($rawList) === '') {
+            $this->error('Enter at least one IP address or CIDR to enable IP Blocking.', $redirect);
+        }
+
+        // The list travels over stdin (never argv/logs). The CLI is the final
+        // validator; on failure we surface only a mapped message, never the list.
+        $result = run_cli_stdin('security:ip-block', [
+            '--domain', $domain,
+            '--action', 'set',
+            '--ips-stdin',
+        ], $rawList . "\n");
+
+        if (!$result['success']) {
+            $this->error('Could not update IP Blocking: ' . $this->ipBlockError((string) $result['output']), $redirect);
+        }
+
+        \Core\DB::log('security:ip-block', "Updated IP Blocking for {$domain}");
+        $this->success('IP Blocking updated.', $redirect);
+    }
+
+    private function ipBlockError(string $output): string
+    {
+        if (preg_match('/^error=(\S+)/m', $output, $m)) {
+            $map = [
+                'invalid_list'   => 'The list has an invalid address or CIDR, a /0, too many entries (max 1000), or exceeds 64 KiB.',
+                'sibling_drift'  => 'Another Security feature on this site has drifted; resolve it before changing IP Blocking.',
+                'nginx_rejected' => 'The web server rejected the change; the previous configuration was restored.',
+                'busy'           => 'Another change is in progress for this site; please try again.',
+                'vhost_edit'     => 'The site vhost could not be edited (it needs exactly one HTTP and one HTTPS server block).',
+            ];
+            return $map[$m[1]] ?? 'The change could not be applied.';
+        }
+        return 'The change could not be applied.';
+    }
+
     private function checked(string $field): bool
     {
         $value = $this->request->post($field);

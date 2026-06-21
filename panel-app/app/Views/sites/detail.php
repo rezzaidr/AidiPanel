@@ -2122,18 +2122,87 @@ $tabs = [
     </form>
 
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-      <div class="card opacity-70" data-security-card="ip-blocking">
-        <div class="p-5 flex items-start justify-between gap-4">
-          <div class="flex items-start gap-3">
-            <i class="ti ti-ban text-zinc-400 text-lg mt-0.5"></i>
+<?php
+        $ibEnabled = ($ipBlockInfo['enabled'] ?? '0') === '1';
+        $ibError   = (string) ($ipBlockInfo['error'] ?? '');
+        $ibCount   = (int) ($ipBlockInfo['entry_count'] ?? 0);
+        $ibRealip  = ($ipBlockInfo['realip_active'] ?? '0') === '1';
+        $ibList    = (string) ($ipBlockList ?? '');
+        $ibErrorMap = [
+            'busy'                       => t('site.security.ipblock.error.busy'),
+            'missing_list'               => t('site.security.ipblock.error.drift'),
+            'missing_include'            => t('site.security.ipblock.error.drift'),
+            'missing_marker'             => t('site.security.ipblock.error.drift'),
+            'marker_drift'               => t('site.security.ipblock.error.drift'),
+            'hash_count_mismatch'        => t('site.security.ipblock.error.drift'),
+            'generated_content_mismatch' => t('site.security.ipblock.error.drift'),
+            'state_mismatch'             => t('site.security.ipblock.error.drift'),
+            'status_unavailable'         => t('site.security.ipblock.error.status_unavailable'),
+        ];
+        $ibErrorMessage = $ibError === '' ? '' : ($ibErrorMap[$ibError] ?? t('site.security.ipblock.error.generic'));
+?>
+      <form method="POST" action="/sites/<?= e($domain) ?>/security/ip-block"
+            class="card overflow-hidden md:col-span-2" data-security-card="ip-blocking"
+            x-data="{ enabled: <?= $ibEnabled ? 'true' : 'false' ?> }">
+        <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+        <input type="hidden" name="enabled" value="0">
+
+        <div class="card-head">
+          <div class="flex items-center gap-2.5">
+            <i class="ti ti-ban text-lg" :class="enabled ? 'text-speed' : 'text-zinc-300'"></i>
             <div>
-              <h3 class="text-sm font-semibold text-zinc-800"><?= e(t('site.security.ip_blocking.title')) ?></h3>
-              <p class="text-xs text-zinc-500 mt-1"><?= e(t('site.security.ip_blocking.desc')) ?></p>
+              <h2 class="card-title">
+                <?= e(t('site.security.ip_blocking.title')) ?>
+                <?php if ($ibErrorMessage !== ''): ?>
+                <span class="badge badge-muted"><span class="dot bg-red-500"></span><?= e(t('site.security.ipblock.status_error')) ?></span>
+                <?php else: ?>
+                <span class="badge" :class="enabled ? 'badge-ok' : 'badge-muted'">
+                  <span class="dot" :class="enabled ? 'bg-emerald-500' : 'bg-zinc-400'"></span>
+                  <span x-text="enabled ? '<?= e(t('site.security.enabled')) ?>' : '<?= e(t('site.security.disabled')) ?>'"></span>
+                </span>
+                <?php endif; ?>
+              </h2>
+              <p class="text-[11px] text-zinc-400"><?= e(t('site.security.ip_blocking.desc')) ?></p>
             </div>
           </div>
-          <span class="badge badge-muted"><?= e(t('common.soon')) ?></span>
+          <label class="inline-flex items-center gap-2 cursor-pointer" data-security-toggle="ip-blocking">
+            <span class="text-[11px] font-medium text-zinc-500"
+                  x-text="enabled ? '<?= e(t('site.security.protection_on')) ?>' : '<?= e(t('site.security.protection_off')) ?>'"></span>
+            <input type="checkbox" name="enabled" value="1" x-model="enabled" class="sr-only">
+            <span aria-hidden="true" :class="enabled ? 'sw-on' : 'sw-off'"><span></span></span>
+          </label>
         </div>
-      </div>
+
+        <div class="p-5 space-y-4">
+          <?php if ($ibErrorMessage !== ''): ?>
+          <div class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"><?= e($ibErrorMessage) ?></div>
+          <?php endif; ?>
+
+          <?php if (!$ibRealip): ?>
+          <div class="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200/70 px-3 py-2">
+            <i class="ti ti-alert-triangle text-amber-600 mt-0.5 text-sm"></i>
+            <p class="text-[11px] text-amber-800 leading-relaxed"><?= e(t('site.security.ipblock.realip_warning')) ?></p>
+          </div>
+          <?php endif; ?>
+
+          <div x-show="enabled" x-cloak class="space-y-2">
+            <label class="lbl"><?= e(t('site.security.ipblock.list_label')) ?></label>
+            <textarea name="ips" rows="6" class="inp w-full mono resize-y"
+                      placeholder="203.0.113.10&#10;198.51.100.0/24&#10;2001:db8::/32"><?= e($ibList) ?></textarea>
+            <p class="text-[11px] text-zinc-400"><?= e(t('site.security.ipblock.list_hint')) ?></p>
+            <p class="text-[11px] text-zinc-400"><i class="ti ti-info-circle"></i> <?= e(t('site.security.ipblock.acme_note')) ?></p>
+            <?php if ($ibEnabled && $ibErrorMessage === ''): ?>
+            <p class="text-[11px] text-zinc-500"><?= e(sprintf(t('site.security.ipblock.count'), $ibCount)) ?></p>
+            <?php endif; ?>
+          </div>
+
+          <div class="flex justify-end border-t border-zinc-100 pt-4">
+            <button type="submit" class="btn btn-primary">
+              <i class="ti ti-device-floppy text-sm"></i> <?= e(t('site.security.save')) ?>
+            </button>
+          </div>
+        </div>
+      </form>
 
       <div class="card" data-security-card="cloudflare-protection">
         <div class="p-5 space-y-4">
