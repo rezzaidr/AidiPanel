@@ -109,6 +109,12 @@ class DB
         // Additive migrations (CREATE TABLE IF NOT EXISTS won't alter an existing table).
         $this->addColumnIfMissing('sites', 'site_user', 'TEXT');
 
+        // Account-settings profile fields (self-service Settings → Profile tab).
+        $this->addColumnIfMissing('users', 'email',      'TEXT');
+        $this->addColumnIfMissing('users', 'first_name', 'TEXT');
+        $this->addColumnIfMissing('users', 'last_name',  'TEXT');
+        $this->addColumnIfMissing('users', 'timezone',   "TEXT DEFAULT 'UTC'");
+
         // Seed admin ONLY if there is no user at all yet
         // Password hash is written by deploy-panel.sh via the CLI -
         // NOT read from a file at runtime, to avoid permission issues

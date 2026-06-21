@@ -881,3 +881,79 @@ function sys_disk_io(): array
         'write_rate' => max(0, ($write - $prev['w']) / $elapsed),
     ];
 }
+
+/**
+ * Friendly label for a PHP timezone identifier:
+ * strip the continent prefix, "_"→space, deeper paths as "Region - City".
+ *  'UTC' -> 'UTC';  'Asia/Jakarta' -> 'Jakarta';
+ *  'America/Argentina/Buenos_Aires' -> 'Argentina - Buenos Aires'
+ */
+function tz_label(string $id): string
+{
+    $pos = strpos($id, '/');
+    if ($pos === false) {
+        return $id;
+    }
+    $rest = substr($id, $pos + 1);
+    $rest = str_replace('_', ' ', $rest);
+    return str_replace('/', ' - ', $rest);
+}
+
+/**
+ * PHP timezone identifiers grouped by continent for a <select>.
+ * Zones without a "/" (e.g. UTC) go under the '' key so the view can pin them on top.
+ * Returns ['' => [['value'=>'UTC','label'=>'UTC']], 'Africa' => [...], ...].
+ */
+function tz_grouped(): array
+{
+    $groups = [];
+    foreach (\DateTimeZone::listIdentifiers() as $id) {
+        $pos = strpos($id, '/');
+        $continent = $pos === false ? '' : substr($id, 0, $pos);
+        $groups[$continent][] = ['value' => $id, 'label' => tz_label($id)];
+    }
+    return $groups;
+}
+
+/**
+ * Timezone of the signed-in user, resolved once per request (cached).
+ * Falls back to 'UTC' for anonymous requests or a missing/blank value.
+ */
+function current_user_tz(): string
+{
+    static $tz = null;
+    if ($tz !== null) {
+        return $tz;
+    }
+    $tz = 'UTC';
+    $u = \Core\Auth::user();
+    if ($u && !empty($u['id'])) {
+        $row = \Core\DB::instance()->row('SELECT timezone FROM users WHERE id = ?', [(int) $u['id']]);
+        if ($row && !empty($row['timezone'])) {
+            $tz = (string) $row['timezone'];
+        }
+    }
+    return $tz;
+}
+
+/**
+ * Render a stored UTC datetime string in a target timezone.
+ * $tz defaults to the signed-in user's timezone; null/empty input -> "—";
+ * an unparseable value falls back to the raw string (never throws).
+ */
+function fmt_dt(?string $stored, ?string $tz = null, string $fmt = 'M j, Y H:i'): string
+{
+    if ($stored === null || trim($stored) === '') {
+        return '—';
+    }
+    if ($tz === null || $tz === '') {
+        $tz = current_user_tz();
+    }
+    try {
+        $dt = new \DateTime($stored, new \DateTimeZone('UTC'));
+        $dt->setTimezone(new \DateTimeZone($tz ?: 'UTC'));
+        return $dt->format($fmt);
+    } catch (\Throwable $e) {
+        return $stored;
+    }
+}

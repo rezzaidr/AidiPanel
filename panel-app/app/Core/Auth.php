@@ -53,7 +53,7 @@ class Auth
         }
 
         // Update last login
-        $db->run('UPDATE users SET last_login = ? WHERE id = ?', [date('Y-m-d H:i:s'), $user['id']]);
+        $db->run('UPDATE users SET last_login = ? WHERE id = ?', [gmdate('Y-m-d H:i:s'), $user['id']]);
 
         self::login($user);
         return true;

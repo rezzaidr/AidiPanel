@@ -53,6 +53,16 @@ return [
     'settings.2fa.heading'        => 'Protect your account with an authenticator app',
     'settings.2fa.desc'           => 'Add a one-time code from an app like Google Authenticator or 1Password on top of your password.',
     'settings.2fa.btn'            => 'Enable 2FA',
+    'settings.2fa.soon_note'      => 'Two-Factor Authentication arrives in an upcoming update.',
+
+    'settings.flash.profile_saved'    => 'Profile updated.',
+    'settings.flash.password_changed' => 'Password updated.',
+    'settings.err.email'              => 'Please enter a valid email address.',
+    'settings.err.name'               => 'Names may contain letters, spaces, hyphens, apostrophes and dots (max 60 characters).',
+    'settings.err.timezone'           => 'Please choose a valid timezone.',
+    'settings.err.current_password'   => 'Your current password is incorrect.',
+    'settings.err.password_mismatch'  => 'The new passwords do not match.',
+    'settings.err.password_short'     => 'New password must be at least 8 characters.',
 
     // Generic actions / labels
     'action.manage'         => 'Manage',

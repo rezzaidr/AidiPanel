@@ -105,7 +105,7 @@
       <span class="badge badge-info mono text-[10px] shrink-0"><?= e($log['action']) ?></span>
       <span class="text-xs text-zinc-500 flex-1 truncate"><?= e($log['detail']) ?></span>
       <span class="text-[10px] text-zinc-400 shrink-0"><?= e($log['username'] ?? 'system') ?></span>
-      <span class="mono text-[10px] text-zinc-300 shrink-0"><?= e($log['created_at']) ?></span>
+      <span class="mono text-[10px] text-zinc-300 shrink-0"><?= e(fmt_dt($log['created_at'])) ?></span>
     </div>
     <?php endforeach; ?>
   </div>

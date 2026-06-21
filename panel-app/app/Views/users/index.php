@@ -75,7 +75,7 @@
             </span>
           </td>
           <td class="text-xs text-zinc-400">
-            <?= $user['last_login'] ? e($user['last_login']) : e(t('users.never_login')) ?>
+            <?= $user['last_login'] ? e(fmt_dt($user['last_login'])) : e(t('users.never_login')) ?>
           </td>
           <td>
             <span class="badge <?= $user['active'] ? 'badge-ok' : 'badge-muted' ?>">

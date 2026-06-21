@@ -262,7 +262,7 @@ $tabs = [
             <?php foreach ($logs as $log): ?>
             <div class="px-5 py-2.5 flex items-center gap-3">
               <span class="text-zinc-300 shrink-0 w-24 truncate">
-                <?= e(date('M d H:i', strtotime($log['created_at']))) ?>
+                <?= e(fmt_dt($log['created_at'], null, 'M d H:i')) ?>
               </span>
               <span class="badge badge-info shrink-0"><?= e($log['action']) ?></span>
               <span class="text-zinc-600 truncate"><?= e($log['detail']) ?></span>
