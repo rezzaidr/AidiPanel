@@ -231,6 +231,7 @@ function web_cli_allowed_commands(): array
         'ssl:force-https', 'ssl:hsts', 'ssl:autorenew', 'ssl:check', 'ssl:use',
         'security:basic-auth', 'cloudflare:realip', 'security:ip-block', 'security:cloudflare-only',
         'service:status', 'service:start', 'service:stop', 'service:restart', 'service:reload',
+        'cron:list', 'cron:add', 'cron:delete', 'cron:toggle', 'cron:wp',
         'system:info',
     ];
 }

@@ -268,6 +268,8 @@ class SiteController extends BaseController
         $objectCacheInfo = [];
         $opcacheInfo   = [];
         $protocolInfo  = [];
+        $cronJobs      = [];
+        $cronManualCount = 0;
         $cacheConfig   = [];
         $lastPurge     = null;
         $cacheZoneSize = null;
@@ -344,6 +346,25 @@ class SiteController extends BaseController
         if ($activeTab === 'ssl') {
             $httpsOptions = $this->getHttpsOptions($domain, $nginxConf);
             $certs        = $this->getCertificates($domain, $ssl);
+        }
+
+        if ($activeTab === 'cron') {
+            $result = run_cli('cron:list', ['--domain', $domain]);
+            if ($result['success']) {
+                foreach (preg_split('/\R/', trim((string) $result['output'])) ?: [] as $line) {
+                    $parts = explode("\t", $line);
+                    if (($parts[0] ?? '') === 'job') {
+                        $job = [];
+                        foreach (array_slice($parts, 1) as $kv) {
+                            [$k, $v] = array_pad(explode('=', $kv, 2), 2, '');
+                            $job[$k] = $v;
+                        }
+                        $cronJobs[] = $job;
+                    } elseif (str_starts_with($line, 'manual_count=')) {
+                        $cronManualCount = (int) substr($line, strlen('manual_count='));
+                    }
+                }
+            }
         }
 
         if ($activeTab === 'security') {
@@ -447,7 +468,8 @@ class SiteController extends BaseController
             'pageCacheInfo', 'objectCacheInfo', 'opcacheInfo', 'protocolInfo',
             'cacheConfig', 'lastPurge', 'cacheZoneSize', 'httpsOptions', 'certs',
             'databases', 'dbUsers', 'dbHost', 'dbPort', 'dbPrefix', 'pmaInstalled', 'pmaUrl', 'wpDbInfo',
-            'basicAuthInfo', 'cloudflareInfo', 'ipBlockInfo', 'ipBlockList', 'cloudflareOnlyInfo'
+            'basicAuthInfo', 'cloudflareInfo', 'ipBlockInfo', 'ipBlockList', 'cloudflareOnlyInfo',
+            'cronJobs', 'cronManualCount'
         ) + ['_full_bleed' => true]);
     }
 

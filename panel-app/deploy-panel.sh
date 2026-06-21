@@ -188,6 +188,7 @@ case "$cmd" in
   ssl:force-https|ssl:hsts|ssl:autorenew|ssl:check|ssl:use|\
   security:basic-auth|\
   service:status|service:start|service:stop|service:restart|service:reload|\
+  cron:list|cron:add|cron:delete|cron:toggle|cron:wp|\
   system:info)
     ;;
   *)

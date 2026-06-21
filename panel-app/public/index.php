@@ -89,6 +89,13 @@ $router->post('/sites/{domain}/database/phpmyadmin/open',    'SiteDatabaseContro
 $router->post('/sites/{domain}/database/delete',      'SiteDatabaseController@deleteDatabase');
 $router->post('/sites/{domain}/database/user/delete', 'SiteDatabaseController@deleteUser');
 
+// Per-site cron jobs
+$router->post('/sites/{domain}/cron/add',    'SiteCronController@add');
+$router->post('/sites/{domain}/cron/update', 'SiteCronController@update');
+$router->post('/sites/{domain}/cron/delete', 'SiteCronController@delete');
+$router->post('/sites/{domain}/cron/toggle', 'SiteCronController@toggle');
+$router->post('/sites/{domain}/cron/wp',     'SiteCronController@wpCron');
+
 // Cache
 $router->get('/cache',         'CacheController@index');
 $router->post('/cache/purge',  'CacheController@purge');

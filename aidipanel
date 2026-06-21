@@ -405,6 +405,11 @@ _usage() {
 
   echo -e "\n${BOLD}${BLUE}Site Security${RESET}"
   echo "  security:basic-auth  Manage per-site HTTP Basic Authentication"
+  echo "  cron:list            List a site's cron jobs (--domain)"
+  echo "  cron:add             Add or replace a cron job (--domain --schedule; command on stdin)"
+  echo "  cron:delete          Delete a cron job (--domain --id)"
+  echo "  cron:toggle          Enable/disable a cron job (--domain --id --state on|off)"
+  echo "  cron:wp              Toggle the WordPress real-cron preset (--domain --action enable|disable)"
   echo "  security:ip-block    Manage per-site IP deny list (--action status|get|set|disable)"
   echo "  security:cloudflare-only  Reject direct-origin HTTPS requests (--action status|enable|disable)"
   echo "  cloudflare:realip    Manage global Cloudflare real-IP restoration (--action status|provision|enable|refresh|disable)"
@@ -1061,6 +1066,214 @@ _site_list() {
 # ACME-challenge root that SSL vhosts also contain. Echoes empty if none found.
 _vhost_webroot() {
   grep -oP '^\s*root\s+\K/home/[^;]+' "$1" 2>/dev/null | head -1 | tr -d ' ' || true
+}
+
+# ---------------------------------------------------------------------------
+# Cron jobs (per-site). Managed jobs live in the site user's own crontab and are
+# tagged so manually added lines are never touched. The pure helpers below are
+# unit-tested; crontab integration + the cron:* commands build on them.
+# ---------------------------------------------------------------------------
+
+# Validate a 5-field cron schedule. Returns 0 if valid, 1 otherwise. No output.
+_cron_validate_schedule() {
+  python3 - "$1" <<'PY'
+import sys, re
+s = sys.argv[1].split()
+if len(s) != 5:
+    sys.exit(1)
+bounds = [(0, 59), (0, 23), (1, 31), (1, 12), (0, 7)]   # min hour dom mon dow
+def ok_field(field, lo, hi):
+    for part in field.split(','):
+        if part == '*':
+            continue
+        m = re.fullmatch(r'(\*|\d+(?:-\d+)?)(?:/(\d+))?', part)
+        if not m:
+            return False
+        rng, step = m.group(1), m.group(2)
+        if step is not None and int(step) < 1:
+            return False
+        if rng != '*':
+            nums = [int(x) for x in rng.split('-')]
+            if any(n < lo or n > hi for n in nums):
+                return False
+            if len(nums) == 2 and nums[0] > nums[1]:
+                return False
+    return True
+for field, (lo, hi) in zip(s, bounds):
+    if not ok_field(field, lo, hi):
+        sys.exit(1)
+sys.exit(0)
+PY
+}
+
+# Trailing managed-job tag for an id.
+_cron_tag() {
+  printf '# aidipanel id=%s' "$1"
+}
+
+# Build the ACTIVE crontab line: "<schedule> <command> # aidipanel id=<id>"
+_cron_line_active() {
+  local id="$1" sched="$2" cmd="$3"
+  printf '%s %s %s' "$sched" "$cmd" "$(_cron_tag "$id")"
+}
+
+# Render one stored line for a state (active|off) from schedule + command.
+_cron_render() {
+  local id="$1" state="$2" sched="$3" cmd="$4" line
+  line="$(_cron_line_active "$id" "$sched" "$cmd")"
+  if [[ "$state" == "off" ]]; then printf '#AIDIPANEL_OFF %s' "$line"; else printf '%s' "$line"; fi
+  return 0
+}
+
+# Read a crontab on stdin, drop any managed line for <id> (active or off), then
+# (unless action=delete) append the rendered <state> line. Foreign/manual lines
+# pass through untouched and in order.
+_cron_merge() {
+  local id="$1" action="$2" sched="$3" cmd="$4" tag line
+  tag="$(_cron_tag "$id")"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" == *"$tag" ]] && continue
+    printf '%s\n' "$line"
+  done
+  if [[ "$action" != "delete" ]]; then
+    _cron_render "$id" "$action" "$sched" "$cmd"
+    printf '\n'
+  fi
+  return 0
+}
+
+# Resolve a domain to its site user + webroot (mirrors _cache_redis_resolve).
+# Sets CRON_CONF / CRON_USER / CRON_WEBROOT; die on unknown/invalid domain.
+_cron_resolve() {
+  local domain="$1"
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
+  CRON_CONF="${NGINX_CONF_DIR}/${domain}.conf"
+  [[ -f "$CRON_CONF" ]] || die "Site not found: ${domain}"
+  CRON_USER=$(grep -oP '^\s*root\s+/home/\K[^/;]+' "$CRON_CONF" 2>/dev/null | head -1 || echo "")
+  [[ -n "$CRON_USER" ]] || die "Could not resolve the site user for ${domain}."
+  CRON_WEBROOT=$(_vhost_webroot "$CRON_CONF")
+  return 0
+}
+
+# Replace a user's crontab from stdin text (crontab itself validates syntax).
+_cron_install_for_user() {
+  local user="$1" tmp; tmp=$(mktemp) || return 1
+  cat > "$tmp"
+  if ! crontab -u "$user" "$tmp" 2>/dev/null; then rm -f "$tmp"; return 1; fi
+  rm -f "$tmp"; return 0
+}
+
+_cron_list() {
+  _require_root "cron:list"
+  _parse_opts "$@"
+  local domain; domain=$(_opt "domain"); _require_arg "domain" "$domain" "cron:list --domain example.com"
+  _cron_resolve "$domain"
+  local manual=0 line body sched cmd id state m h dom mon dow
+  echo "site_user=${CRON_USER}"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" != \#* && "$line" == *' # aidipanel id='* ]]; then
+      state=active
+    elif [[ "$line" == '#AIDIPANEL_OFF '*' # aidipanel id='* ]]; then
+      state=off; line="${line#\#AIDIPANEL_OFF }"
+    elif [[ -n "${line// }" ]]; then
+      manual=$((manual + 1)); continue
+    else
+      continue
+    fi
+    id="${line##* id=}"
+    body="${line% # aidipanel id=*}"
+    IFS=' ' read -r m h dom mon dow cmd <<< "$body"
+    sched="${m} ${h} ${dom} ${mon} ${dow}"
+    printf 'job\tid=%s\tstate=%s\tschedule=%s\tcommand=%s\n' "$id" "$state" "$sched" "$cmd"
+  done < <(crontab -u "$CRON_USER" -l 2>/dev/null || true)
+  echo "manual_count=${manual}"
+  return 0
+}
+
+_cron_add() {
+  _require_root "cron:add"
+  _parse_opts "$@"
+  local domain sched id cmd
+  domain=$(_opt "domain"); _require_arg "domain" "$domain" "cron:add --domain X --schedule '* * * * *' (command on stdin)"
+  sched=$(_opt "schedule"); _require_arg "schedule" "$sched" "cron:add --domain X --schedule '* * * * *'"
+  _cron_validate_schedule "$sched" || die "Invalid cron schedule: ${sched}"
+  id=$(_opt "id"); [[ -n "$id" ]] || id=$(openssl rand -hex 4)
+  [[ "$id" =~ ^[a-z0-9]+$ ]] || die "Invalid job id."
+  cmd=$(cat); cmd="${cmd%$'\n'}"
+  [[ -n "$cmd" ]] || die "Command is required."
+  [[ "$cmd" != *$'\n'* ]] || die "Command must be a single line."
+  [[ "${#cmd}" -le 1000 ]] || die "Command is too long (max 1000 characters)."
+  _cron_resolve "$domain"
+  { crontab -u "$CRON_USER" -l 2>/dev/null || true; } | _cron_merge "$id" active "$sched" "$cmd" \
+    | _cron_install_for_user "$CRON_USER" || die "Could not update the crontab for ${domain}."
+  ok "Cron job saved."
+  echo "id=${id}"
+  return 0
+}
+
+_cron_delete() {
+  _require_root "cron:delete"
+  _parse_opts "$@"
+  local domain id
+  domain=$(_opt "domain"); _require_arg "domain" "$domain" "cron:delete --domain X --id <id>"
+  id=$(_opt "id"); [[ "$id" =~ ^[a-z0-9]+$ ]] || die "Invalid job id."
+  _cron_resolve "$domain"
+  { crontab -u "$CRON_USER" -l 2>/dev/null || true; } | _cron_merge "$id" delete "" "" \
+    | _cron_install_for_user "$CRON_USER" || die "Could not update the crontab for ${domain}."
+  ok "Cron job deleted."
+  return 0
+}
+
+_cron_toggle() {
+  _require_root "cron:toggle"
+  _parse_opts "$@"
+  local domain id state current body sched cmd render_state m h dom mon dow
+  domain=$(_opt "domain"); _require_arg "domain" "$domain" "cron:toggle --domain X --id <id> --state on|off"
+  id=$(_opt "id"); [[ "$id" =~ ^[a-z0-9]+$ ]] || die "Invalid job id."
+  state=$(_opt "state"); [[ "$state" == "on" || "$state" == "off" ]] || die "State must be on or off."
+  _cron_resolve "$domain"
+  current=$({ crontab -u "$CRON_USER" -l 2>/dev/null || true; } | grep -E " # aidipanel id=${id}\$" | head -1 || true)
+  [[ -n "$current" ]] || die "Cron job not found: ${id}"
+  current="${current#\#AIDIPANEL_OFF }"
+  body="${current% # aidipanel id=*}"
+  IFS=' ' read -r m h dom mon dow cmd <<< "$body"
+  sched="${m} ${h} ${dom} ${mon} ${dow}"
+  if [[ "$state" == "on" ]]; then render_state=active; else render_state=off; fi
+  { crontab -u "$CRON_USER" -l 2>/dev/null || true; } | _cron_merge "$id" "$render_state" "$sched" "$cmd" \
+    | _cron_install_for_user "$CRON_USER" || die "Could not update the crontab for ${domain}."
+  ok "Cron job turned ${state}."
+  return 0
+}
+
+_cron_wp() {
+  _require_root "cron:wp"
+  _parse_opts "$@"
+  local domain action interval wp_bak wp_bin
+  domain=$(_opt "domain"); _require_arg "domain" "$domain" "cron:wp --domain X --action enable|disable [--interval 5]"
+  action=$(_opt "action"); [[ "$action" == "enable" || "$action" == "disable" ]] || die "Action must be enable or disable."
+  _cron_resolve "$domain"
+  [[ -f "${CRON_WEBROOT}/wp-config.php" ]] || die "This site is not a WordPress install."
+  local wp=(sudo -u "$CRON_USER" -- env "WP_CLI_CACHE_DIR=/tmp/aidipanel-wp-cli-cache" wp --path="$CRON_WEBROOT")
+  wp_bin=$(command -v wp 2>/dev/null || echo /usr/local/bin/wp)   # absolute path for cron (minimal PATH)
+  if [[ "$action" == "enable" ]]; then
+    interval=$(_opt "interval" "5")
+    { [[ "$interval" =~ ^[0-9]+$ ]] && (( interval >= 1 && interval <= 60 )); } || die "Interval must be between 1 and 60 minutes."
+    wp_bak="${CRON_WEBROOT}/wp-config.php.aidipanel-bak.$(date +%Y%m%dT%H%M%SZ)"
+    cp -p "${CRON_WEBROOT}/wp-config.php" "$wp_bak" || die "Could not back up wp-config.php."
+    "${wp[@]}" config set DISABLE_WP_CRON true --raw --type=constant >/dev/null 2>&1 || die "Could not set DISABLE_WP_CRON."
+    { crontab -u "$CRON_USER" -l 2>/dev/null || true; } \
+      | _cron_merge wpcron active "*/${interval} * * * *" "cd ${CRON_WEBROOT} && ${wp_bin} cron event run --due-now --quiet" \
+      | _cron_install_for_user "$CRON_USER" || die "Could not install the WordPress cron job."
+    ok "WordPress cron enabled (every ${interval} min)."
+  else
+    { crontab -u "$CRON_USER" -l 2>/dev/null || true; } | _cron_merge wpcron delete "" "" \
+      | _cron_install_for_user "$CRON_USER" || die "Could not remove the WordPress cron job."
+    "${wp[@]}" config set DISABLE_WP_CRON false --raw --type=constant >/dev/null 2>&1 \
+      || warn "Removed the cron job, but could not revert DISABLE_WP_CRON."
+    ok "WordPress cron disabled."
+  fi
+  echo "wp_cron=${action}d"
+  return 0
 }
 
 _site_info() {
@@ -6776,6 +6989,11 @@ main() {
 
     # Site security
     security:basic-auth) _security_basic_auth "$@" ;;
+    cron:list)   _cron_list "$@" ;;
+    cron:add)    _cron_add "$@" ;;
+    cron:delete) _cron_delete "$@" ;;
+    cron:toggle) _cron_toggle "$@" ;;
+    cron:wp)     _cron_wp "$@" ;;
     security:ip-block)   _security_ipblock "$@" ;;
     security:cloudflare-only) _security_cloudflare_only "$@" ;;
 

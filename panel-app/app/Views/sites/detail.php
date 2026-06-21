@@ -2314,8 +2314,246 @@ $tabs = [
       </form>
   </div>
 
+<?php elseif ($activeTab === 'cron'): ?>
+<!-- ──────────────── CRON JOBS ──────────────── -->
+<?php
+  $cronSiteUser = (string) ($site['site_user'] ?? '');
+  $cronWebroot  = (string) ($site['webroot'] ?? '');
+  $cronPhp      = (string) ($site['php_version'] ?? '');
+  $cronIsWp     = ($site['type'] ?? '') === 'wordpress';
+  $cronPrefill  = $cronWebroot !== '' ? 'cd ' . $cronWebroot . ' && ' : '';
+  $cronRunsAs   = sprintf(t('site.cron.runs_as'), $cronSiteUser ?: '—', $cronWebroot ?: '—', $cronPhp ?: '—');
+  // The WordPress preset has its own card below; pull it out of the list + read its interval.
+  $wpJob = null;
+  foreach ($cronJobs as $cj) { if (($cj['id'] ?? '') === 'wpcron') { $wpJob = $cj; break; } }
+  $wpActive   = $wpJob !== null;
+  $wpInterval = 5;
+  if ($wpActive && preg_match('#^\*/(\d+)$#', (string) strtok((string) ($wpJob['schedule'] ?? ''), ' '), $wm)) { $wpInterval = (int) $wm[1]; }
+  $cronUserJobs = array_values(array_filter($cronJobs, static fn($j) => ($j['id'] ?? '') !== 'wpcron'));
+?>
+  <div class="space-y-4" x-data="cronForm()">
+
+    <?php if ($cronIsWp): ?>
+    <!-- WordPress cron preset (tinted banner, top) — single stateful control for the wpcron job -->
+    <div class="bg-ink-pale border border-ink/15 rounded-lg px-5 py-3">
+      <div class="flex items-center justify-between gap-4">
+        <div class="flex items-center gap-2.5 min-w-0">
+          <i class="ti ti-brand-wordpress text-ink text-lg shrink-0"></i>
+          <div class="min-w-0">
+            <h2 class="card-title">
+              <?= e(t('site.cron.wp_title')) ?>
+              <?php if ($wpActive): ?><span class="badge badge-ok"><span class="dot bg-emerald-500"></span> <?= e(t('site.cron.enabled')) ?></span><?php endif; ?>
+            </h2>
+            <p class="text-[11px] text-zinc-500 mt-0.5"><?= $wpActive ? e(sprintf(t('site.cron.wp_active'), $wpInterval)) : e(t('site.cron.wp_note')) ?></p>
+          </div>
+        </div>
+        <form method="POST" action="/sites/<?= e($site['domain']) ?>/cron/wp" class="flex items-center gap-2 shrink-0">
+          <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+          <?php if ($wpActive): ?>
+            <input type="hidden" name="action" value="disable">
+            <button type="submit" class="btn btn-danger btn-sm"><i class="ti ti-player-stop text-sm"></i> <?= e(t('site.cron.wp_disable')) ?></button>
+          <?php else: ?>
+            <input type="hidden" name="action" value="enable">
+            <select name="interval" class="inp text-sm py-1.5">
+              <option value="1">1 min</option><option value="5" selected>5 min</option><option value="15">15 min</option><option value="30">30 min</option>
+            </select>
+            <button type="submit" class="btn btn-primary btn-sm"><i class="ti ti-bolt text-sm"></i> <?= e(t('site.cron.wp_enable')) ?></button>
+          <?php endif; ?>
+        </form>
+      </div>
+    </div>
+    <?php endif; ?>
+
+    <!-- Cron jobs -->
+    <div class="card">
+      <div class="card-head">
+        <div class="flex items-center gap-2.5 min-w-0">
+          <i class="ti ti-clock-hour-4 text-zinc-400 text-lg"></i>
+          <div class="min-w-0">
+            <h2 class="card-title"><?= e(t('site.cron.title')) ?></h2>
+            <p class="text-[11px] text-zinc-400 mt-0.5 truncate"><i class="ti ti-user"></i> <?= e($cronRunsAs) ?></p>
+          </div>
+        </div>
+        <button type="button" @click="openAdd()" class="btn btn-primary btn-sm">
+          <i class="ti ti-plus text-sm"></i> <?= e(t('site.cron.add')) ?>
+        </button>
+      </div>
+
+      <?php if (empty($cronUserJobs)): ?>
+      <div class="px-5 py-10 text-center">
+        <p class="text-sm font-medium text-zinc-600"><?= e(t('site.cron.empty')) ?></p>
+        <p class="text-xs text-zinc-400 mt-1"><?= e(t('site.cron.empty_hint')) ?></p>
+      </div>
+      <?php else: ?>
+      <table class="tbl table-fixed">
+        <colgroup>
+          <col style="width:26%">
+          <col style="width:48%">
+          <col style="width:12%">
+          <col style="width:14%">
+        </colgroup>
+        <thead>
+          <tr>
+            <th class="pl-5"><?= e(t('site.cron.col_schedule')) ?></th>
+            <th><?= e(t('site.cron.col_command')) ?></th>
+            <th><?= e(t('site.cron.col_status')) ?></th>
+            <th class="pr-5 text-center" style="text-align:center"><?= e(t('site.cron.col_action')) ?></th>
+          </tr>
+        </thead>
+        <tbody>
+          <?php foreach ($cronUserJobs as $job):
+            $jid = (string) ($job['id'] ?? ''); $jstate = (string) ($job['state'] ?? 'active');
+            $jsched = (string) ($job['schedule'] ?? ''); $jcmd = (string) ($job['command'] ?? '');
+            $jjson = htmlspecialchars(json_encode(['id' => $jid, 'schedule' => $jsched, 'command' => $jcmd]), ENT_QUOTES); ?>
+          <tr>
+            <td class="pl-5">
+              <span class="font-medium text-zinc-900" x-text="cronText(<?= htmlspecialchars(json_encode($jsched), ENT_QUOTES) ?>)"><?= e($jsched) ?></span>
+              <span class="block text-[11px] text-zinc-400 mono"><?= e($jsched) ?></span>
+            </td>
+            <td class="mono text-[13px] text-zinc-700 break-all"><?= e($jcmd) ?></td>
+            <td>
+              <form method="POST" action="/sites/<?= e($site['domain']) ?>/cron/toggle">
+                <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+                <input type="hidden" name="id" value="<?= e($jid) ?>">
+                <input type="hidden" name="state" value="<?= $jstate === 'active' ? 'off' : 'on' ?>">
+                <button type="submit" class="<?= $jstate === 'active' ? 'sw-on' : 'sw-off' ?>" title="<?= $jstate === 'active' ? e(t('site.cron.click_off')) : e(t('site.cron.click_on')) ?>"><span></span></button>
+              </form>
+            </td>
+            <td class="pr-5 text-center">
+              <div class="relative inline-block text-left" x-data="{ row:false }" @click.outside="row=false">
+                <button type="button" @click="row=!row" class="w-8 h-8 rounded-lg hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700"><i class="ti ti-dots-vertical"></i></button>
+                <div x-show="row" x-cloak x-transition.opacity class="absolute right-0 mt-1 w-44 bg-white border border-zinc-200 rounded-lg shadow-lg py-1 z-30 text-left">
+                  <button type="button" @click="row=false; openEdit(<?= $jjson ?>)" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-edit text-sm text-zinc-400"></i> <?= e(t('site.cron.edit')) ?></button>
+                  <button type="button" @click="row=false; openDel(<?= $jjson ?>)" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 text-left"><i class="ti ti-trash text-sm"></i> <?= e(t('site.cron.delete')) ?></button>
+                </div>
+              </div>
+            </td>
+          </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+      <?php endif; ?>
+
+      <?php if ($cronManualCount > 0): ?>
+      <p class="px-5 py-2 text-[11px] text-zinc-400 border-t border-zinc-100"><i class="ti ti-info-circle"></i> <?= e(sprintf(t('site.cron.manual_note'), $cronManualCount)) ?></p>
+      <?php endif; ?>
+    </div>
+
+    <!-- Modal: Add / Edit cron job (teleported to body so the overlay covers the full viewport) -->
+    <template x-teleport="body">
+    <div x-show="modal==='form'" x-cloak class="fixed inset-0 z-50">
+      <div class="absolute inset-0 bg-zinc-900/40"></div>
+      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl">
+        <div class="card-head flex items-center justify-between">
+          <h3 class="card-title"><i class="ti ti-clock-hour-4 text-zinc-400"></i> <span x-text="editId ? <?= htmlspecialchars(json_encode(t('site.cron.edit')), ENT_QUOTES) ?> : <?= htmlspecialchars(json_encode(t('site.cron.add')), ENT_QUOTES) ?>"></span></h3>
+          <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
+        </div>
+        <form method="POST" :action="'/sites/<?= e($site['domain']) ?>/cron/' + (editId ? 'update' : 'add')" class="p-5 space-y-3">
+          <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+          <input type="hidden" name="id" :value="editId">
+          <div>
+            <label class="lbl"><?= e(t('site.cron.preset_label')) ?> <span class="text-red-500">*</span></label>
+            <select class="inp w-full" x-model="preset" @change="applyPreset()">
+              <option value="* * * * *"><?= e(t('site.cron.p_every_min')) ?></option>
+              <option value="*/5 * * * *"><?= e(t('site.cron.p_5min')) ?></option>
+              <option value="*/15 * * * *"><?= e(t('site.cron.p_15min')) ?></option>
+              <option value="0 * * * *"><?= e(t('site.cron.p_hourly')) ?></option>
+              <option value="0 0 * * *"><?= e(t('site.cron.p_daily')) ?></option>
+              <option value="0 0 * * 0"><?= e(t('site.cron.p_weekly')) ?></option>
+              <option value="0 0 1 * *"><?= e(t('site.cron.p_monthly')) ?></option>
+              <option value="custom"><?= e(t('site.cron.p_custom')) ?></option>
+            </select>
+          </div>
+          <div class="grid grid-cols-5 gap-2">
+            <?php foreach (['m' => 'Min', 'h' => 'Hour', 'dom' => 'Day', 'mon' => 'Month', 'dow' => 'Wkday'] as $f => $lbl): ?>
+            <div>
+              <label class="block text-[10px] text-zinc-400 mb-1"><?= $lbl ?> <span class="text-red-500">*</span></label>
+              <input type="text" name="<?= $f ?>" x-model="<?= $f ?>" required class="inp w-full text-center mono">
+            </div>
+            <?php endforeach; ?>
+          </div>
+          <p class="text-[11px] text-zinc-500"><i class="ti ti-clock"></i> <?= e(t('site.cron.preview')) ?>: <span class="font-medium text-zinc-700" x-text="cronText(m+' '+h+' '+dom+' '+mon+' '+dow)"></span></p>
+          <div>
+            <label class="lbl"><?= e(t('site.cron.command_label')) ?> <span class="text-red-500">*</span></label>
+            <input type="text" name="command" x-model="command" required class="inp w-full mono" autocomplete="off" spellcheck="false" placeholder="<?= e($cronPrefill) ?>your-script.sh">
+            <p class="text-[11px] text-zinc-400 mt-1"><?= e(t('site.cron.one_line')) ?></p>
+          </div>
+          <div class="flex justify-end gap-2 pt-1">
+            <button type="button" @click="modal=null" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
+            <button type="submit" class="btn btn-primary"><i class="ti ti-device-floppy text-sm"></i> <?= e(t('site.cron.save')) ?></button>
+          </div>
+        </form>
+      </div>
+    </div>
+    </template>
+
+    <!-- Modal: Delete cron job (teleported to body) -->
+    <template x-teleport="body">
+    <div x-show="modal==='del'" x-cloak class="fixed inset-0 z-50">
+      <div class="absolute inset-0 bg-zinc-900/40"></div>
+      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl">
+        <div class="card-head flex items-center justify-between">
+          <h3 class="card-title"><i class="ti ti-trash text-red-500"></i> <?= e(t('site.cron.delete')) ?></h3>
+          <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x"></i></button>
+        </div>
+        <form method="POST" action="/sites/<?= e($site['domain']) ?>/cron/delete" class="p-5 space-y-3">
+          <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+          <input type="hidden" name="id" :value="delId">
+          <p class="text-sm text-zinc-600"><?= e(t('site.cron.delete_confirm')) ?></p>
+          <p class="text-[11px] text-zinc-500 mono break-all bg-zinc-50 border border-zinc-100 rounded px-3 py-2" x-text="delCmd"></p>
+          <div class="flex justify-end gap-2 pt-1">
+            <button type="button" @click="modal=null" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
+            <button type="submit" class="btn btn-danger"><i class="ti ti-trash text-sm"></i> <?= e(t('site.cron.delete')) ?></button>
+          </div>
+        </form>
+      </div>
+    </div>
+    </template>
+
+  </div>
+
+  <script>
+  function cronForm() {
+    return {
+      modal: null, editId: '', command: <?= json_encode($cronPrefill) ?>,
+      m: '*', h: '*', dom: '*', mon: '*', dow: '*', preset: '* * * * *',
+      delId: '', delCmd: '',
+      applyPreset() {
+        if (this.preset === 'custom') return;
+        var p = this.preset.split(' ');
+        this.m = p[0]; this.h = p[1]; this.dom = p[2]; this.mon = p[3]; this.dow = p[4];
+      },
+      openAdd() {
+        this.editId = ''; this.command = <?= json_encode($cronPrefill) ?>;
+        this.preset = '* * * * *'; this.applyPreset(); this.modal = 'form';
+      },
+      openEdit(j) {
+        this.editId = j.id; this.command = j.command; this.preset = 'custom';
+        var p = (j.schedule || '').split(' ');
+        this.m = p[0] || '*'; this.h = p[1] || '*'; this.dom = p[2] || '*'; this.mon = p[3] || '*'; this.dow = p[4] || '*';
+        this.modal = 'form';
+      },
+      openDel(j) { this.delId = j.id; this.delCmd = j.command; this.modal = 'del'; }
+    };
+  }
+  function cronText(expr) {
+    var p = (expr || '').trim().split(/\s+/);
+    if (p.length !== 5) return expr;
+    var m = p[0], h = p[1], dom = p[2], mon = p[3], dow = p[4];
+    var num = function (x) { return /^[0-9]+$/.test(x); };
+    var pad = function (x) { return ('0' + x).slice(-2); };
+    if (expr === '* * * * *') return 'Every minute';
+    if (m.indexOf('*/') === 0 && h === '*' && dom === '*' && mon === '*' && dow === '*') return 'Every ' + m.slice(2) + ' minutes';
+    if (h === '*' && dom === '*' && mon === '*' && dow === '*' && num(m)) return 'Hourly at :' + pad(m);
+    if (dom === '*' && mon === '*' && dow === '*' && num(m) && num(h)) return 'Daily at ' + pad(h) + ':' + pad(m);
+    if (dom === '*' && mon === '*' && num(dow) && num(m) && num(h)) return 'Weekly (day ' + dow + ') at ' + pad(h) + ':' + pad(m);
+    if (mon === '*' && num(dom) && num(m) && num(h)) return 'Monthly (day ' + dom + ') at ' + pad(h) + ':' + pad(m);
+    return expr;
+  }
+  </script>
+
 <?php else: ?>
-<!-- ──────────────── DATABASE / SECURITY / CRON / FILES ────────────── -->
+<!-- ──────────────── FILES ──────────────── -->
 
   <div class="card px-8 py-16 text-center max-w-lg mx-auto">
     <?php
