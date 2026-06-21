@@ -1,9 +1,9 @@
 <?php $pageTitle = t('admin.users.title'); ?>
 
 <!-- page header -->
-<div class="mb-6">
+<div class="mb-5">
   <a href="/admin" class="text-xs text-zinc-400 hover:text-ink flex items-center gap-1 mb-2">
-    <i class="ti ti-arrow-left text-sm"></i> <?= e(t('admin.title')) ?>
+    <i class="ti ti-arrow-left text-sm" aria-hidden="true"></i> <?= e(t('admin.title')) ?>
   </a>
   <h1 class="font-head font-bold text-[22px] text-zinc-900 leading-none"><?= e(t('admin.users.title')) ?></h1>
   <p class="text-sm text-zinc-400 mt-1.5"><?= e(t('admin.users.desc')) ?></p>
@@ -44,7 +44,7 @@
   <!-- Users table -->
   <div class="lg:col-span-2 card overflow-hidden">
     <div class="card-head">
-      <h2 class="card-title"><i class="ti ti-users text-zinc-400"></i> <?= e(t('users.list_title')) ?></h2>
+      <h2 class="card-title"><i class="ti ti-users text-zinc-400" aria-hidden="true"></i> <?= e(t('users.list_title')) ?></h2>
     </div>
     <table class="tbl">
       <thead>
@@ -91,7 +91,7 @@
                       @click="openPassModal(<?= (int)$user['id'] ?>, '<?= e($user['username']) ?>')"
                       class="w-7 h-7 rounded-md hover:bg-zinc-100 flex items-center justify-center text-zinc-400"
                       title="<?= e(t('users.change_pass')) ?>">
-                <i class="ti ti-key text-sm"></i>
+                <i class="ti ti-key text-sm" aria-hidden="true"></i>
               </button>
 
               <?php if ($user['id'] != ($_user['id'] ?? 0)): ?>
@@ -99,9 +99,9 @@
                     onsubmit="return confirm('<?= e(t('users.delete_confirm', ['username' => $user['username']])) ?>')">
                 <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
                 <input type="hidden" name="id" value="<?= e((string)$user['id']) ?>">
-                <button type="submit"
+                <button type="submit" aria-label="<?= e(t('common.delete')) ?>"
                         class="w-7 h-7 rounded-md hover:bg-red-50 flex items-center justify-center text-zinc-400 hover:text-red-500">
-                  <i class="ti ti-trash text-sm"></i>
+                  <i class="ti ti-trash text-sm" aria-hidden="true"></i>
                 </button>
               </form>
               <?php endif; ?>
@@ -128,8 +128,8 @@
                placeholder="<?= e(t('users.new_pass_ph')) ?>"
                class="inp mb-4">
         <div class="flex gap-2">
-          <button type="submit" class="btn btn-primary flex-1">Save</button>
-          <button type="button" @click="showPassModal = false" class="btn btn-ghost flex-1">Cancel</button>
+          <button type="submit" class="btn btn-primary flex-1"><?= e(t('common.save')) ?></button>
+          <button type="button" @click="showPassModal = false" class="btn btn-ghost flex-1"><?= e(t('common.cancel')) ?></button>
         </div>
       </form>
     </div>

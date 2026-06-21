@@ -31,16 +31,16 @@ $usesPhp = static function (string $type): bool {
     <h1 class="font-head font-bold text-[22px] text-zinc-900 leading-none"><?= e(t('nav.sites')) ?></h1>
     <p class="text-sm text-zinc-400 mt-1.5"><?= e(t('sites.subtitle', ['n' => $count])) ?></p>
   </div>
-  <a href="/sites/add" class="btn btn-primary"><i class="ti ti-plus text-sm"></i> <?= e(t('sites.new')) ?></a>
+  <a href="/sites/add" class="btn btn-primary"><i class="ti ti-plus text-sm" aria-hidden="true"></i> <?= e(t('sites.new')) ?></a>
 </div>
 
 <?php if (empty($sites)): ?>
 
 <div class="card px-8 py-16 text-center">
-  <i class="ti ti-world text-5xl text-zinc-200 block mb-3"></i>
+  <i class="ti ti-world text-5xl text-zinc-200 block mb-3" aria-hidden="true"></i>
   <p class="text-sm font-medium text-zinc-700 mb-1"><?= e(t('sites.empty')) ?></p>
   <p class="text-xs text-zinc-400 mb-5"><?= e(t('sites.add_first')) ?></p>
-  <a href="/sites/add" class="btn btn-primary"><i class="ti ti-plus text-sm"></i> <?= e(t('sites.new')) ?></a>
+  <a href="/sites/add" class="btn btn-primary"><i class="ti ti-plus text-sm" aria-hidden="true"></i> <?= e(t('sites.new')) ?></a>
 </div>
 
 <?php else: ?>
@@ -48,7 +48,7 @@ $usesPhp = static function (string $type): bool {
 <!-- toolbar -->
 <div class="flex items-center gap-3 mb-4">
   <div class="relative flex-1 max-w-xs">
-    <i class="ti ti-search absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 text-sm pointer-events-none"></i>
+    <i class="ti ti-search absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 text-sm pointer-events-none" aria-hidden="true"></i>
     <input type="text"
            id="siteSearch"
            placeholder="<?= e(t('sites.search_ph')) ?>"
@@ -94,7 +94,7 @@ $usesPhp = static function (string $type): bool {
         <td class="px-5 py-3.5">
           <div class="flex items-center gap-3">
             <span class="w-8 h-8 rounded-lg <?= $iconBg ?> flex items-center justify-center shrink-0">
-              <i class="ti <?= e($appIcon($type)) ?> <?= $iconColor ?>"></i>
+              <i class="ti <?= e($appIcon($type)) ?> <?= $iconColor ?>" aria-hidden="true"></i>
             </span>
             <div>
               <div class="font-medium flex items-center gap-1.5">

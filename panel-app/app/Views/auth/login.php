@@ -16,7 +16,7 @@
   <div class="text-center mb-8">
     <div class="inline-flex items-center gap-2.5">
       <div class="w-10 h-10 bg-brand rounded-xl flex items-center justify-center shadow">
-        <i class="ti ti-server text-white text-lg"></i>
+        <i class="ti ti-server text-white text-lg" aria-hidden="true"></i>
       </div>
       <span class="text-xl font-bold text-gray-900">AidiPanel</span>
     </div>
@@ -28,7 +28,7 @@
 
     <?php if ($error): ?>
     <div class="mb-4 bg-red-50 border border-red-200 text-red-600 text-sm px-4 py-3 rounded-lg flex items-center gap-2">
-      <i class="ti ti-alert-circle shrink-0"></i>
+      <i class="ti ti-alert-circle shrink-0" aria-hidden="true"></i>
       <?= e($error) ?>
     </div>
     <?php endif; ?>
@@ -39,7 +39,7 @@
       <div class="mb-4">
         <label class="block text-xs font-medium text-gray-700 mb-1.5" for="username">Username</label>
         <div class="relative">
-          <i class="ti ti-user absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"></i>
+          <i class="ti ti-user absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" aria-hidden="true"></i>
           <input type="text" id="username" name="username" required autofocus
             class="w-full pl-9 pr-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent"
             placeholder="admin">
@@ -49,7 +49,7 @@
       <div class="mb-6">
         <label class="block text-xs font-medium text-gray-700 mb-1.5" for="password">Password</label>
         <div class="relative">
-          <i class="ti ti-lock absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"></i>
+          <i class="ti ti-lock absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" aria-hidden="true"></i>
           <input type="password" id="password" name="password" required
             class="w-full pl-9 pr-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent"
             placeholder="••••••••">

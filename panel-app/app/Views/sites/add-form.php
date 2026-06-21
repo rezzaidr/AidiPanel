@@ -71,7 +71,7 @@ $renderField = function (array $f): void {
             if (!empty($f['generate'])) {
                 $gc = $dis ? 'text-zinc-300 cursor-not-allowed' : 'text-ink hover:underline';
                 echo '<button type="button" data-gen-pass="' . e($f['key']) . '" class="text-[11px] ' . $gc . ' mt-1 inline-flex items-center gap-1"' . $da . '>'
-                   . '<i class="ti ti-refresh text-xs"></i> ' . e(t('site.add.generate')) . '</button>';
+                   . '<i class="ti ti-refresh text-xs" aria-hidden="true"></i> ' . e(t('site.add.generate')) . '</button>';
             }
     }
 
@@ -84,14 +84,14 @@ $renderField = function (array $f): void {
 
 <div class="max-w-xl mx-auto">
   <div class="flex items-center gap-1.5 text-xs text-zinc-400 mb-3">
-    <a href="/sites/add" class="hover:text-ink flex items-center gap-1"><i class="ti ti-arrow-left text-sm"></i> <?= e(t('site.add.back')) ?></a>
+    <a href="/sites/add" class="hover:text-ink flex items-center gap-1"><i class="ti ti-arrow-left text-sm" aria-hidden="true"></i> <?= e(t('site.add.back')) ?></a>
     <span>·</span><span class="mono text-zinc-500">/sites/add/<?= e($form['slug']) ?></span>
   </div>
 
   <div class="card p-6">
     <div class="flex items-center gap-3 mb-5">
       <span class="w-10 h-10 rounded-lg <?= $creatable ? 'bg-ink-pale' : 'bg-zinc-100' ?> flex items-center justify-center">
-        <i class="ti <?= e($form['icon']) ?> <?= $creatable ? 'text-ink' : 'text-zinc-400' ?> text-xl"></i>
+        <i class="ti <?= e($form['icon']) ?> <?= $creatable ? 'text-ink' : 'text-zinc-400' ?> text-xl" aria-hidden="true"></i>
       </span>
       <div>
         <h2 class="font-head font-bold text-lg <?= $creatable ? 'text-zinc-900' : 'text-zinc-700' ?> leading-none"><?= e(t($form['title'])) ?></h2>
@@ -101,7 +101,7 @@ $renderField = function (array $f): void {
 
     <?php if (!empty($form['banner'])): ?>
     <div class="flex items-start gap-2.5 bg-amber-50 border border-amber-200/70 rounded-lg px-4 py-2.5 mb-5">
-      <i class="ti ti-tools text-amber-500 mt-0.5 text-sm"></i>
+      <i class="ti ti-tools text-amber-500 mt-0.5 text-sm" aria-hidden="true"></i>
       <p class="text-[11px] text-amber-800 leading-relaxed"><?= e(t($form['banner'])) ?></p>
     </div>
     <?php endif; ?>
@@ -120,12 +120,12 @@ $renderField = function (array $f): void {
         <div class="flex items-center gap-3 mt-6 pt-5 border-t border-zinc-100">
           <?php if ($creatable): ?>
             <button type="submit" class="btn btn-primary" :disabled="submitting">
-              <span x-show="!submitting"><i class="ti ti-plus text-sm"></i> <?= e(t('site.add.create')) ?></span>
-              <span x-show="submitting" x-cloak><i class="ti ti-loader-2 text-sm spin"></i> <?= e(t('site.add.creating')) ?></span>
+              <span x-show="!submitting"><i class="ti ti-plus text-sm" aria-hidden="true"></i> <?= e(t('site.add.create')) ?></span>
+              <span x-show="submitting" x-cloak><i class="ti ti-loader-2 text-sm spin" aria-hidden="true"></i> <?= e(t('site.add.creating')) ?></span>
             </button>
             <a href="/sites/add" class="text-xs font-medium text-zinc-500 hover:text-zinc-700 px-2"><?= e(t('common.cancel')) ?></a>
           <?php else: ?>
-            <button type="button" class="btn btn-secondary" disabled><i class="ti ti-clock text-sm"></i> <?= e(t('site.add.coming_soon')) ?></button>
+            <button type="button" class="btn btn-secondary" disabled><i class="ti ti-clock text-sm" aria-hidden="true"></i> <?= e(t('site.add.coming_soon')) ?></button>
           <?php endif; ?>
         </div>
       </div>
@@ -141,27 +141,27 @@ $renderField = function (array $f): void {
           <div class="card-head flex items-center justify-between gap-3">
             <div class="flex items-center gap-2">
               <span class="w-8 h-8 rounded-lg bg-ink-pale flex items-center justify-center shrink-0">
-                <i class="ti ti-download text-ink"></i>
+                <i class="ti ti-download text-ink" aria-hidden="true"></i>
               </span>
               <h3 class="card-title"><span x-text="'PHP ' + confirmVer"></span> <?= e(t('site.add.php_modal_title')) ?></h3>
             </div>
-            <button type="button" @click="confirmVer=null" :disabled="submitting" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><i class="ti ti-x"></i></button>
+            <button type="button" @click="confirmVer=null" :disabled="submitting" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><i class="ti ti-x" aria-hidden="true"></i></button>
           </div>
           <div class="p-5 space-y-4">
             <p class="text-sm text-zinc-600"><?= e(t('site.add.php_modal_body')) ?></p>
             <div class="flex items-start gap-2 bg-amber-50 border border-amber-200/70 rounded-lg px-3 py-2">
-              <i class="ti ti-clock text-amber-500 mt-0.5 text-sm"></i>
+              <i class="ti ti-clock text-amber-500 mt-0.5 text-sm" aria-hidden="true"></i>
               <p class="text-[11px] text-amber-800 leading-relaxed"><?= e(t('site.add.php_modal_eta')) ?></p>
             </div>
             <div x-show="submitting" x-cloak class="flex items-start gap-2 bg-ink-pale border border-ink/15 rounded-lg px-3 py-2">
-              <i class="ti ti-loader-2 text-ink mt-0.5 text-sm spin"></i>
+              <i class="ti ti-loader-2 text-ink mt-0.5 text-sm spin" aria-hidden="true"></i>
               <p class="text-[11px] text-ink leading-relaxed"><?= e(t('site.add.php_installing_note')) ?></p>
             </div>
             <div class="flex justify-end gap-2 pt-1">
               <button type="button" @click="confirmVer=null" :disabled="submitting" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
               <button type="button" @click="proceed()" :disabled="submitting" class="btn btn-primary">
-                <span x-show="!submitting"><i class="ti ti-check text-sm"></i> <?= e(t('site.add.php_modal_confirm')) ?></span>
-                <span x-show="submitting" x-cloak><i class="ti ti-loader-2 text-sm spin"></i> <?= e(t('site.add.creating')) ?></span>
+                <span x-show="!submitting"><i class="ti ti-check text-sm" aria-hidden="true"></i> <?= e(t('site.add.php_modal_confirm')) ?></span>
+                <span x-show="submitting" x-cloak><i class="ti ti-loader-2 text-sm spin" aria-hidden="true"></i> <?= e(t('site.add.creating')) ?></span>
               </button>
             </div>
           </div>

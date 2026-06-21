@@ -70,14 +70,14 @@ if ($_ip === '') { $_ip = $_hostname; }
 <!-- ===== TOP BAR ===== -->
 <header class="h-16 bg-white border-b border-zinc-200/80 flex items-center px-5 gap-4">
   <a href="/dashboard" class="flex items-center gap-2.5 pr-4 shrink-0">
-    <div class="w-9 h-9 rounded-lg flex items-center justify-center bg-ink"><i class="ti ti-bolt text-white text-lg"></i></div>
+    <div class="w-9 h-9 rounded-lg flex items-center justify-center bg-ink"><i class="ti ti-bolt text-white text-lg" aria-hidden="true"></i></div>
     <span class="font-head font-bold text-[15px] text-zinc-900"><?= e(t('app.name')) ?></span>
   </a>
 
   <nav class="flex items-center gap-1">
-    <a href="/dashboard" class="topnav <?= $navDashboard ?>"><i class="ti ti-chart-line text-base"></i> <?= e(t('nav.dashboard')) ?></a>
-    <a href="/sites" class="topnav <?= $navSites ?>"><i class="ti ti-world text-base"></i> <?= e(t('nav.sites')) ?></a>
-    <a href="/admin" class="topnav <?= $navAdmin ?>"><i class="ti ti-server-cog text-base"></i> <?= e(t('nav.admin')) ?></a>
+    <a href="/dashboard" class="topnav <?= $navDashboard ?>"><i class="ti ti-chart-line text-base" aria-hidden="true"></i> <?= e(t('nav.dashboard')) ?></a>
+    <a href="/sites" class="topnav <?= $navSites ?>"><i class="ti ti-world text-base" aria-hidden="true"></i> <?= e(t('nav.sites')) ?></a>
+    <a href="/admin" class="topnav <?= $navAdmin ?>"><i class="ti ti-server-cog text-base" aria-hidden="true"></i> <?= e(t('nav.admin')) ?></a>
   </nav>
 
   <div class="ml-auto flex items-center gap-2.5">
@@ -90,13 +90,13 @@ if ($_ip === '') { $_ip = $_hostname; }
       <span class="mono text-emerald-600" x-show="copied" x-cloak><?= e(t('topbar.copied')) ?></span>
     </button>
 
-    <button type="button" class="w-8 h-8 rounded-lg hover:bg-zinc-100 flex items-center justify-center text-zinc-400" title="<?= e(t('topbar.theme')) ?>"><i class="ti ti-moon text-[18px]"></i></button>
+    <button type="button" class="w-8 h-8 rounded-lg hover:bg-zinc-100 flex items-center justify-center text-zinc-400" title="<?= e(t('topbar.theme')) ?>"><i class="ti ti-moon text-[18px]" aria-hidden="true"></i></button>
 
     <!-- account menu -->
     <div class="relative">
       <button type="button" @click="userMenu = !userMenu" class="flex items-center gap-1.5 pl-1 hover:bg-zinc-100 rounded-lg py-1 pr-1.5" title="<?= e(t('topbar.account')) ?>">
         <div class="w-8 h-8 rounded-full bg-ink-pale flex items-center justify-center text-ink text-xs font-bold font-head"><?= e($_initials) ?></div>
-        <i class="ti ti-chevron-down text-zinc-400 text-sm"></i>
+        <i class="ti ti-chevron-down text-zinc-400 text-sm" aria-hidden="true"></i>
       </button>
       <div x-show="userMenu" x-cloak @click.outside="userMenu = false" x-transition.opacity
            class="absolute right-0 mt-2 w-48 bg-white border border-zinc-200 rounded-xl shadow-lg py-1.5 z-50">
@@ -105,10 +105,10 @@ if ($_ip === '') { $_ip = $_hostname; }
           <p class="text-[11px] text-zinc-400"><?= !empty($_is_admin) ? 'Administrator' : 'Read-only' ?></p>
         </div>
         <a href="/settings" class="flex items-center gap-2 px-3.5 py-2 text-sm text-zinc-600 hover:bg-zinc-50">
-          <i class="ti ti-settings text-base text-zinc-400"></i> <?= e(t('topbar.settings')) ?>
+          <i class="ti ti-settings text-base text-zinc-400" aria-hidden="true"></i> <?= e(t('topbar.settings')) ?>
         </a>
         <a href="/logout" class="flex items-center gap-2 px-3.5 py-2 text-sm text-zinc-600 hover:bg-zinc-50">
-          <i class="ti ti-logout text-base text-zinc-400"></i> <?= e(t('topbar.logout')) ?>
+          <i class="ti ti-logout text-base text-zinc-400" aria-hidden="true"></i> <?= e(t('topbar.logout')) ?>
         </a>
       </div>
     </div>
@@ -129,29 +129,29 @@ if ($_ip === '') { $_ip = $_hostname; }
   <?php if (!empty($_flash_success ?? '')): ?>
     <div x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 8000)" x-transition
          class="toast toast-ok">
-      <i class="ti ti-circle-check text-base shrink-0"></i>
+      <i class="ti ti-circle-check text-base shrink-0" aria-hidden="true"></i>
       <span class="flex-1">
         <?= e($_flash_success) ?>
         <?php if (!empty($_flash_success_warn ?? '')): ?>
           <span class="block text-amber-700 mt-0.5"><?= e($_flash_success_warn) ?></span>
         <?php endif; ?>
       </span>
-      <button type="button" @click="show = false" class="text-emerald-700/60 hover:text-emerald-700 shrink-0"><i class="ti ti-x text-sm"></i></button>
+      <button type="button" @click="show = false" aria-label="<?= e(t('common.dismiss')) ?>" class="text-emerald-700/60 hover:text-emerald-700 shrink-0"><i class="ti ti-x text-sm" aria-hidden="true"></i></button>
     </div>
   <?php endif; ?>
   <?php if (!empty($_flash_warning ?? '')): ?>
     <div x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 10000)" x-transition
          class="toast toast-warn">
-      <i class="ti ti-alert-triangle text-base"></i>
+      <i class="ti ti-alert-triangle text-base" aria-hidden="true"></i>
       <span class="flex-1"><?= e($_flash_warning) ?></span>
-      <button type="button" @click="show = false" class="text-amber-700/60 hover:text-amber-700"><i class="ti ti-x text-sm"></i></button>
+      <button type="button" @click="show = false" aria-label="<?= e(t('common.dismiss')) ?>" class="text-amber-700/60 hover:text-amber-700"><i class="ti ti-x text-sm" aria-hidden="true"></i></button>
     </div>
   <?php endif; ?>
   <?php if (!empty($_flash_error ?? '')): ?>
     <div x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 10000)" x-transition class="toast toast-error">
-      <i class="ti ti-alert-circle text-base"></i>
+      <i class="ti ti-alert-circle text-base" aria-hidden="true"></i>
       <span class="flex-1"><?= e($_flash_error) ?></span>
-      <button type="button" @click="show = false" class="text-red-600/60 hover:text-red-600"><i class="ti ti-x text-sm"></i></button>
+      <button type="button" @click="show = false" aria-label="<?= e(t('common.dismiss')) ?>" class="text-red-600/60 hover:text-red-600"><i class="ti ti-x text-sm" aria-hidden="true"></i></button>
     </div>
   <?php endif; ?>
 </div>
@@ -225,9 +225,9 @@ window.AidiToast = function (kind, message) {
   var cfg = map[kind] || map.success;
   var el = document.createElement('div');
   el.className = 'toast ' + cfg[0];
-  el.innerHTML = '<i class="ti ' + cfg[1] + ' text-base shrink-0"></i>'
+  el.innerHTML = '<i class="ti ' + cfg[1] + ' text-base shrink-0" aria-hidden="true"></i>'
     + '<span class="flex-1"></span>'
-    + '<button type="button" class="shrink-0"><i class="ti ti-x text-sm"></i></button>';
+    + '<button type="button" aria-label="Dismiss" class="shrink-0"><i class="ti ti-x text-sm" aria-hidden="true"></i></button>';
   el.querySelector('span').textContent = message;        // textContent = no HTML injection
   el.querySelector('button').addEventListener('click', function () { el.remove(); });
   stack.appendChild(el);

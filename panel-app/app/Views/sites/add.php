@@ -17,16 +17,16 @@ $pageTitle = t('site.add.picker.title');
     <?php if ($c['soon']): ?>
     <a href="/sites/add/<?= e($c['slug']) ?>" class="relative group card p-5 opacity-80 hover:opacity-100 transition">
       <span class="absolute top-4 right-4 tag tag-soon"><?= e(t('site.add.soon')) ?></span>
-      <span class="w-11 h-11 rounded-lg bg-zinc-100 flex items-center justify-center mb-3"><i class="ti <?= e($c['icon']) ?> text-zinc-400 text-2xl"></i></span>
+      <span class="w-11 h-11 rounded-lg bg-zinc-100 flex items-center justify-center mb-3"><i class="ti <?= e($c['icon']) ?> text-zinc-400 text-2xl" aria-hidden="true"></i></span>
       <h3 class="font-head font-semibold text-[15px] text-zinc-700"><?= e(t($c['title'])) ?></h3>
       <p class="text-xs text-zinc-400 mt-1 leading-relaxed"><?= e(t($c['desc'])) ?></p>
     </a>
     <?php else: ?>
     <a href="/sites/add/<?= e($c['slug']) ?>" class="relative group card p-5 hover:border-ink hover:shadow-sm transition">
-      <span class="w-11 h-11 rounded-lg bg-ink-pale flex items-center justify-center mb-3"><i class="ti <?= e($c['icon']) ?> text-ink text-2xl"></i></span>
+      <span class="w-11 h-11 rounded-lg bg-ink-pale flex items-center justify-center mb-3"><i class="ti <?= e($c['icon']) ?> text-ink text-2xl" aria-hidden="true"></i></span>
       <h3 class="font-head font-semibold text-[15px] text-zinc-900"><?= e(t($c['title'])) ?></h3>
       <p class="text-xs text-zinc-400 mt-1 leading-relaxed"><?= e(t($c['desc'])) ?></p>
-      <i class="ti ti-arrow-right absolute top-5 right-5 text-zinc-300 group-hover:text-ink transition"></i>
+      <i class="ti ti-arrow-right absolute top-5 right-5 text-zinc-300 group-hover:text-ink transition" aria-hidden="true"></i>
     </a>
     <?php endif; ?>
   <?php endforeach; ?>

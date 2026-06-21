@@ -35,6 +35,23 @@ html { scrollbar-gutter: stable; }
 /* Monospace signature for numbers, IDs, paths, technical values */
 .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
 
+/* --- Keyboard focus ring (a11y) ------------------------------------------ */
+/* Visible focus indicator for keyboard users only (:focus-visible), so mouse
+   clicks stay clean. Buttons, links, tabs and toggles had no focus style;
+   inputs already provide their own ring via .inp:focus. Brand ink colour. */
+a:focus-visible,
+button:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible,
+.btn:focus-visible,
+.topnav:focus-visible,
+.tab:focus-visible,
+.sw-on:focus-visible,
+.sw-off:focus-visible {
+  outline: 2px solid var(--ink-light);
+  outline-offset: 2px;
+}
+
 /* --- Top navigation (primary nav in the top bar) ------------------------- */
 .topnav {
   display: inline-flex; align-items: center; gap: 6px;
@@ -156,6 +173,8 @@ select.inp {
 .tbl tbody tr      { border-top: 1px solid #fafafa; }
 .tbl tbody tr:hover{ background: rgba(250,250,250,.6); }
 .tbl td            { padding: .875rem .75rem; vertical-align: middle; }
+/* Center a header/cell without an inline style (beats `.tbl thead th { text-align:left }`). */
+.tbl .th-center    { text-align: center; }
 
 /* --- Live status dot (server badge, "online") ---------------------------- */
 .pulse { position: relative; display: inline-flex; height: .5rem; width: .5rem; }

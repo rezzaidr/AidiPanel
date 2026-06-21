@@ -12,18 +12,16 @@
     <p class="text-sm text-zinc-400 mt-1.5"><?= e(t('settings.subtitle')) ?></p>
   </div>
 
-  <!-- Tabs -->
-  <div class="flex items-center gap-1 border-b border-zinc-200 mb-5">
-    <button type="button" @click="tab='profile'"
-            :class="tab==='profile' ? 'text-ink border-ink' : 'text-zinc-500 border-transparent hover:text-zinc-800'"
-            class="flex items-center gap-1.5 px-3.5 py-2 text-sm font-semibold border-b-2 -mb-px transition cursor-pointer">
-      <i class="ti ti-user-circle text-base"></i> <?= e(t('settings.tab.profile')) ?>
-    </button>
-    <button type="button" @click="tab='security'"
-            :class="tab==='security' ? 'text-ink border-ink' : 'text-zinc-500 border-transparent hover:text-zinc-800'"
-            class="flex items-center gap-1.5 px-3.5 py-2 text-sm font-semibold border-b-2 -mb-px transition cursor-pointer">
-      <i class="ti ti-shield-lock text-base"></i> <?= e(t('settings.tab.security')) ?>
-    </button>
+  <!-- Tabs (shared .tab component, matching the site-detail tabs) -->
+  <div class="border-b border-zinc-200 mb-5">
+    <div class="flex items-center overflow-x-auto -mb-px">
+      <button type="button" @click="tab='profile'" :class="tab==='profile' ? 'active' : ''" class="tab">
+        <i class="ti ti-user-circle text-[15px]" aria-hidden="true"></i> <?= e(t('settings.tab.profile')) ?>
+      </button>
+      <button type="button" @click="tab='security'" :class="tab==='security' ? 'active' : ''" class="tab">
+        <i class="ti ti-shield-lock text-[15px]" aria-hidden="true"></i> <?= e(t('settings.tab.security')) ?>
+      </button>
+    </div>
   </div>
 
   <!-- ================= PROFILE ================= -->
@@ -31,7 +29,7 @@
 
     <!-- Profile details -->
     <div class="card">
-      <div class="card-head"><h2 class="card-title"><i class="ti ti-id-badge-2 text-ink"></i> <?= e(t('settings.profile.title')) ?></h2></div>
+      <div class="card-head"><h2 class="card-title"><i class="ti ti-id-badge-2 text-ink" aria-hidden="true"></i> <?= e(t('settings.profile.title')) ?></h2></div>
       <form method="POST" action="/settings/profile">
         <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
         <div class="px-5 py-4 space-y-4">
@@ -81,7 +79,7 @@
 
     <!-- Change password -->
     <div class="card">
-      <div class="card-head"><h2 class="card-title"><i class="ti ti-key text-ink"></i> <?= e(t('settings.password.title')) ?></h2></div>
+      <div class="card-head"><h2 class="card-title"><i class="ti ti-key text-ink" aria-hidden="true"></i> <?= e(t('settings.password.title')) ?></h2></div>
       <form method="POST" action="/settings/password">
         <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
         <div class="px-5 py-4 space-y-4">
@@ -111,12 +109,12 @@
   <div x-show="tab==='security'" x-cloak class="max-w-2xl">
     <div class="card">
       <div class="card-head">
-        <h2 class="card-title"><i class="ti ti-shield-lock text-ink"></i> <?= e(t('settings.2fa.title')) ?></h2>
+        <h2 class="card-title"><i class="ti ti-shield-lock text-ink" aria-hidden="true"></i> <?= e(t('settings.2fa.title')) ?></h2>
         <span class="badge badge-muted"><?= e(t('common.soon')) ?></span>
       </div>
       <div class="px-5 py-4">
         <div class="flex items-start gap-3.5">
-          <span class="w-10 h-10 rounded-lg bg-ink-pale text-ink flex items-center justify-center shrink-0"><i class="ti ti-device-mobile-check text-xl"></i></span>
+          <span class="w-10 h-10 rounded-lg bg-ink-pale text-ink flex items-center justify-center shrink-0"><i class="ti ti-device-mobile-check text-xl" aria-hidden="true"></i></span>
           <div class="flex-1">
             <p class="text-sm font-medium text-zinc-800"><?= e(t('settings.2fa.heading')) ?></p>
             <p class="hint mt-1"><?= e(t('settings.2fa.desc')) ?></p>
@@ -125,7 +123,7 @@
         <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200/70 rounded-md px-3 py-2 mt-3"><?= e(t('settings.2fa.soon_note')) ?></p>
       </div>
       <div class="flex justify-end px-5 py-3.5 border-t border-zinc-100">
-        <button type="button" class="btn btn-primary opacity-50 cursor-not-allowed" disabled title="<?= e(t('settings.soon_tooltip')) ?>"><i class="ti ti-shield-plus text-sm"></i> <?= e(t('settings.2fa.btn')) ?></button>
+        <button type="button" class="btn btn-primary opacity-50 cursor-not-allowed" disabled title="<?= e(t('settings.soon_tooltip')) ?>"><i class="ti ti-shield-plus text-sm" aria-hidden="true"></i> <?= e(t('settings.2fa.btn')) ?></button>
       </div>
     </div>
   </div>

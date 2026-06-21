@@ -38,9 +38,9 @@ $sections = [
 ?>
 
 <!-- page header -->
-<div class="mb-6">
+<div class="mb-5">
   <a href="/admin" class="text-xs text-zinc-400 hover:text-ink flex items-center gap-1 mb-2">
-    <i class="ti ti-arrow-left text-sm"></i> <?= e(t('admin.title')) ?>
+    <i class="ti ti-arrow-left text-sm" aria-hidden="true"></i> <?= e(t('admin.title')) ?>
   </a>
   <h1 class="font-head font-bold text-[22px] text-zinc-900 leading-none"><?= e(t('admin.services.title')) ?></h1>
   <p class="text-sm text-zinc-400 mt-1.5"><?= e(t('admin.services.desc')) ?></p>
@@ -48,7 +48,7 @@ $sections = [
 
 <?php if (empty($services)): ?>
 <div class="card px-8 py-14 text-center">
-  <i class="ti ti-server text-5xl text-zinc-200 block mb-3"></i>
+  <i class="ti ti-server text-5xl text-zinc-200 block mb-3" aria-hidden="true"></i>
   <p class="text-sm text-zinc-400"><?= e(t('services.empty')) ?></p>
 </div>
 <?php else: ?>
@@ -57,7 +57,7 @@ $sections = [
 <div class="card mb-6">
   <div class="card-head">
     <div class="card-title">
-      <i class="ti <?= e($section['icon']) ?> text-base text-zinc-400"></i> <?= e($section['title']) ?>
+      <i class="ti <?= e($section['icon']) ?> text-base text-zinc-400" aria-hidden="true"></i> <?= e($section['title']) ?>
     </div>
   </div>
   <!-- table-layout:fixed + shared colgroup so both section tables (Core / PHP)
@@ -86,7 +86,7 @@ $sections = [
         <td class="px-5 py-3">
           <div class="flex items-center gap-3">
             <span class="w-8 h-8 rounded-lg <?= $iconBg ?> flex items-center justify-center shrink-0">
-              <i class="ti <?= e($icon) ?> <?= $iconColor ?>"></i>
+              <i class="ti <?= e($icon) ?> <?= $iconColor ?>" aria-hidden="true"></i>
             </span>
             <span class="font-medium text-zinc-900"><?= e($svcLabel($name)) ?></span>
           </div>
@@ -109,7 +109,7 @@ $sections = [
         <td class="px-5 py-3">
           <div class="relative flex justify-end" x-data="{ open: false }" @click.outside="open = false" @keydown.escape.window="open = false">
             <button type="button" @click="open = !open" :aria-expanded="open" aria-label="<?= e(t('svc.col_actions')) ?>" class="btn btn-ghost btn-sm px-2">
-              <i class="ti ti-dots-vertical text-base"></i>
+              <i class="ti ti-dots-vertical text-base" aria-hidden="true"></i>
             </button>
             <div x-show="open" x-cloak x-transition.opacity class="absolute right-0 top-full mt-1 z-30 min-w-[10rem] card shadow-xl py-1">
               <?php if ($canReload): ?>
@@ -118,7 +118,7 @@ $sections = [
                 <input type="hidden" name="service" value="<?= e($name) ?>">
                 <input type="hidden" name="action" value="reload">
                 <button type="submit" class="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50">
-                  <i class="ti ti-reload text-sm text-sky-600"></i> <?= e(t('svc.reload')) ?>
+                  <i class="ti ti-reload text-sm text-sky-600" aria-hidden="true"></i> <?= e(t('svc.reload')) ?>
                 </button>
               </form>
               <?php endif; ?>
@@ -127,7 +127,7 @@ $sections = [
                 <input type="hidden" name="service" value="<?= e($name) ?>">
                 <input type="hidden" name="action" value="restart">
                 <button type="submit" class="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50">
-                  <i class="ti ti-refresh text-sm text-zinc-400"></i> <?= e(t('svc.restart')) ?>
+                  <i class="ti ti-refresh text-sm text-zinc-400" aria-hidden="true"></i> <?= e(t('svc.restart')) ?>
                 </button>
               </form>
               <?php if ($active): ?>
@@ -137,7 +137,7 @@ $sections = [
                 <input type="hidden" name="service" value="<?= e($name) ?>">
                 <input type="hidden" name="action" value="stop">
                 <button type="submit" class="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-red-600 hover:bg-red-50">
-                  <i class="ti ti-player-stop-filled text-sm"></i> <?= e(t('svc.stop')) ?>
+                  <i class="ti ti-player-stop-filled text-sm" aria-hidden="true"></i> <?= e(t('svc.stop')) ?>
                 </button>
               </form>
               <?php else: ?>
@@ -146,7 +146,7 @@ $sections = [
                 <input type="hidden" name="service" value="<?= e($name) ?>">
                 <input type="hidden" name="action" value="start">
                 <button type="submit" class="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50">
-                  <i class="ti ti-player-play-filled text-sm"></i> <?= e(t('svc.start')) ?>
+                  <i class="ti ti-player-play-filled text-sm" aria-hidden="true"></i> <?= e(t('svc.start')) ?>
                 </button>
               </form>
               <?php endif; ?>
