@@ -405,6 +405,9 @@ _usage() {
 
   echo -e "\n${BOLD}${BLUE}Site Security${RESET}"
   echo "  security:basic-auth  Manage per-site HTTP Basic Authentication"
+  echo "  security:ip-block    Manage per-site IP deny list (--action status|get|set|disable)"
+  echo "  security:cloudflare-only  Reject direct-origin HTTPS requests (--action status|enable|disable)"
+  echo "  cloudflare:realip    Manage global Cloudflare real-IP restoration (--action status|provision|enable|refresh|disable)"
 
   echo -e "\n${BOLD}${BLUE}Database Management${RESET}"
   echo "  db:add          Create a new database and user"
@@ -963,25 +966,34 @@ _site_delete() {
   force=$(_opt "force" "false"); expect_user=$(_opt "user" "")
   [[ "$force" == "true" ]] && yes="true"     # back-compat: --force == non-interactive (keep-home)
 
-  # Resolve site_user from the vhost root (works for ALL types incl static/proxy);
+  if [[ "$purge" == "true" ]]; then
+    [[ "$yes" == "true" ]] || die "Refusing purge without --yes (no interactive TTY through the web wrapper)."
+  elif [[ "$yes" != "true" ]]; then
+    echo -e "${RED}WARNING: removes vhost + PHP-FPM pool + databases for ${domain} (home kept).${RESET}"
+    _confirm "Delete site '${domain}'?" || { log "Cancelled."; return 0; }
+  fi
+
+  # Site deletion removes Cloudflare-only dependency state plus the shared vhost.
+  # Serialize it with global mutations first, then every per-site Security action.
+  _cloudflare_lock x || { echo "error=busy"; return 3; }
+  _security_lock "$domain" x || { echo "error=busy"; return 3; }
+
+  # Resolve site_user from the now-locked vhost root (all types incl static/proxy);
   # php_ver from the FPM socket if present (none for static/proxy -> no pool).
   local conf="${NGINX_CONF_DIR}/${domain}.conf"
   local site_user php_ver
   site_user=$(grep -oP '^\s*root\s+/home/\K[^/;]+' "$conf" 2>/dev/null | head -1 || echo "")
   php_ver=$(grep -oP 'php\K[0-9.]+(?=-fpm)' "$conf" 2>/dev/null | head -1 || echo "")
-
   if [[ "$purge" == "true" ]]; then
-    [[ "$yes" == "true" ]] || die "Refusing purge without --yes (no interactive TTY through the web wrapper)."
-    _site_purge_guard "$domain" "$site_user" "$expect_user" || die "Purge refused for ${domain} (marker validation failed)."
-  elif [[ "$yes" != "true" ]]; then
-    echo -e "${RED}WARNING: removes vhost + PHP-FPM pool + databases for ${domain} (home kept).${RESET}"
-    _confirm "Delete site '${domain}'?" || { log "Cancelled."; return 0; }
+    _site_purge_guard "$domain" "$site_user" "$expect_user" \
+      || die "Purge refused for ${domain} (marker validation failed)."
   fi
 
   # Teardown (both modes)
   _db_deprovision_site "$site_user" "$domain"
   rm -f "${NGINX_ENABLED_DIR}/${domain}.conf" "${NGINX_CONF_DIR}/${domain}.conf"
   rm -f "$(_security_http_inc "$domain")"
+  rm -f "$(_security_ipblock_inc "$domain")"
   rm -rf -- "$(_security_dir "$domain")"
   rm -f "/etc/ssl/aidipanel-self/${domain}.crt" "/etc/ssl/aidipanel-self/${domain}.key"
   # Remove the per-site FPM pool. A site has exactly one pool (named by site_user);
@@ -2753,6 +2765,131 @@ _security_http_inc() {
   printf '/etc/nginx/conf.d/aidipanel-security-%s.conf' "$(_security_id "$1")"
 }
 
+# Per-site mutation lock (shared by every per-site Security feature so that
+# Basic Auth, IP Block, and Cloudflare-only mutations on one domain serialize).
+_security_lock_path() {
+  printf '/run/lock/aidipanel-security-%s.lock' "$(_security_id "$1")"
+}
+
+# IP-Block per-site artifacts: saved deny list + state under the domain dir, and
+# a dedicated http-context include (kept separate from the Basic Auth include so
+# each feature is independently writable).
+_security_ipblock_list() {
+  printf '%s/ip-block.list' "$(_security_dir "$1")"
+}
+
+_security_ipblock_state() {
+  printf '%s/ip-block.state' "$(_security_dir "$1")"
+}
+
+_security_ipblock_inc() {
+  printf '/etc/nginx/conf.d/aidipanel-ipblock-%s.conf' "$(_security_id "$1")"
+}
+
+_security_cfonly_state() {
+  printf '%s/cloudflare-only.state' "$(_security_dir "$1")"
+}
+
+_security_cfonly_state_render() {
+  local target="$1" enabled="$2"
+  [[ "$enabled" == 0 || "$enabled" == 1 ]] || return 1
+  printf 'schema=1\nenabled=%s\n' "$enabled" > "$target" || return 1
+  chmod 0600 "$target"
+}
+
+_security_cfonly_state_get() {
+  local file="$1" wanted="$2" key value extra
+  local schema="" enabled="" schema_seen=0 enabled_seen=0 lines=0
+  [[ "$wanted" == schema || "$wanted" == enabled ]] || return 1
+  [[ -f "$file" ]] || return 1
+  while IFS='=' read -r key value extra || [[ -n "$key$value$extra" ]]; do
+    lines=$((lines + 1))
+    [[ -z "$extra" ]] || return 1
+    case "$key" in
+      schema)
+        schema_seen=$((schema_seen + 1)); schema="$value"
+        ;;
+      enabled)
+        enabled_seen=$((enabled_seen + 1)); enabled="$value"
+        ;;
+      *) return 1 ;;
+    esac
+  done < "$file"
+  [[ "$lines" -eq 2 && "$schema_seen" -eq 1 && "$enabled_seen" -eq 1 ]] || return 1
+  [[ "$schema" == 1 && ( "$enabled" == 0 || "$enabled" == 1 ) ]] || return 1
+  if [[ "$wanted" == schema ]]; then printf '%s' "$schema"; else printf '%s' "$enabled"; fi
+}
+
+_security_cfonly_render_marker() {
+  local target="$1"
+  {
+    printf '    # >>> AIDIPANEL_CLOUDFLARE_ONLY >>>\n'
+    printf '    if ($aidipanel_from_cloudflare = 0) { return 403; }\n'
+    printf '    # <<< AIDIPANEL_CLOUDFLARE_ONLY <<<\n'
+  } > "$target"
+}
+
+_security_cfonly_dependency_healthy() {
+  local body="$1" enabled error
+  enabled=$(printf '%s\n' "$body" | awk -F= '$1=="enabled"{print substr($0,9); n++} END{if(n!=1)exit 1}') \
+    || return 1
+  error=$(printf '%s\n' "$body" | awk -F= '$1=="error"{print substr($0,7); n++} END{if(n!=1)exit 1}') \
+    || return 1
+  [[ "$enabled" == 1 && -z "$error" ]]
+}
+
+# Return one marker-integrity code: ok, missing_marker, duplicate_marker,
+# misplaced_marker, or misordered_marker. It never rewrites the vhost.
+_security_cfonly_marker_status() {
+  local conf="$1" global_starts global_ends result
+  [[ -f "$conf" ]] || { printf 'missing_marker'; return 0; }
+  global_starts=$(grep -cF '# >>> AIDIPANEL_CLOUDFLARE_ONLY >>>' "$conf" 2>/dev/null || true)
+  global_ends=$(grep -cF '# <<< AIDIPANEL_CLOUDFLARE_ONLY <<<' "$conf" 2>/dev/null || true)
+  if [[ "$global_starts" -eq 0 && "$global_ends" -eq 0 ]]; then printf 'missing_marker'; return 0; fi
+  if [[ "$global_starts" -gt 1 || "$global_ends" -gt 1 ]]; then printf 'duplicate_marker'; return 0; fi
+  if [[ "$global_starts" -ne 1 || "$global_ends" -ne 1 ]]; then printf 'missing_marker'; return 0; fi
+  result=$(awk '
+    function delta(s, a,b,t){t=s;a=gsub(/\{/ ,"{",t);t=s;b=gsub(/\}/,"}",t);return a-b}
+    function flush( i,tok,idx,last,type,seen_name){
+      type="other"; last=0; seen_name=0
+      for(i=1;i<=n;i++){
+        if(buf[i] ~ /listen[[:space:]]+(\[::\]:)?443[[:space:]]+ssl([[:space:]]|;)/) type="tls"
+        else if(type=="other" && buf[i] ~ /listen[[:space:]]+(\[::\]:)?80[[:space:]]*;/) type="http"
+      }
+      if(type=="tls") tls_blocks++
+      for(i=1;i<=n;i++){
+        if(buf[i] ~ /^[[:space:]]*server_name[[:space:]]+[^;]+;[[:space:]]*$/) seen_name=1
+        if(buf[i] !~ /# >>> AIDIPANEL_[A-Z_]+ >>>/) continue
+        tok=buf[i]; sub(/.*# >>> /,"",tok); sub(/ >>>.*/,"",tok)
+        idx=0
+        if(tok=="AIDIPANEL_CLOUDFLARE_ONLY") idx=1
+        else if(tok=="AIDIPANEL_IP_BLOCK") idx=2
+        else if(tok=="AIDIPANEL_BASIC_AUTH") idx=3
+        if(tok=="AIDIPANEL_CLOUDFLARE_ONLY"){
+          starts++; if(type=="tls") in_tls++; else misplaced=1
+          if(type=="tls" && !seen_name) bad_anchor=1
+        }
+        if(type=="tls" && idx>0){if(last>idx) misordered=1; last=idx}
+      }
+      for(i=1;i<=n;i++) if(buf[i] ~ /# <<< AIDIPANEL_CLOUDFLARE_ONLY <<</) ends++
+      n=0
+    }
+    !inb && /^[[:space:]]*server[[:space:]]*\{/ {inb=1;n=0;buf[++n]=$0;depth=delta($0);if(depth<=0){flush();inb=0};next}
+    inb {buf[++n]=$0;depth+=delta($0);if(depth<=0){flush();inb=0};next}
+    END{
+      if(starts==0 && ends==0){print "missing_marker";exit}
+      if(starts>1 || ends>1){print "duplicate_marker";exit}
+      if(starts!=1 || ends!=1){print "missing_marker";exit}
+      if(tls_blocks!=1 || bad_anchor){print "marker_drift";exit}
+      if(misplaced || in_tls!=1){print "misplaced_marker";exit}
+      if(misordered){print "misordered_marker";exit}
+      print "ok"
+    }
+  ' "$conf") || return 1
+  [[ "$result" != missing_marker ]] || result=misplaced_marker
+  printf '%s' "$result"
+}
+
 _security_scope_valid() {
   [[ "$1" == "site" || "$1" == "wp-login" || "$1" == "custom" ]]
 }
@@ -2811,6 +2948,88 @@ _security_normalize_ips() {
   local IFS=','
   printf '%s' "${out[*]}"
   return 0
+}
+
+# Canonicalize an IP-Block deny list from stdin (comma/newline separated, single
+# IPv4/IPv6 addresses or CIDRs). Prints one canonical entry per line, deduped,
+# FIRST-SEEN order preserved. Rejects empty, >1000 unique entries, >64 KiB stdin,
+# invalid tokens, family/prefix mismatches, and /0. Self-contained (inline
+# python3) so the unit test can extract and run it.
+_security_ipblock_normalize() {
+  python3 -c '
+import sys, ipaddress
+data = sys.stdin.buffer.read()
+if len(data) > 65536:
+    sys.exit(1)
+try:
+    text = data.decode("utf-8")
+except UnicodeDecodeError:
+    sys.exit(1)
+tokens = [t.strip() for t in text.replace(",", "\n").split("\n")]
+tokens = [t for t in tokens if t]
+seen = set()
+out = []
+for tok in tokens:
+    try:
+        if "/" in tok:
+            net = ipaddress.ip_network(tok, strict=False)
+            if net.prefixlen == 0:
+                sys.exit(1)
+            canon = str(net)
+        else:
+            canon = str(ipaddress.ip_address(tok))
+    except ValueError:
+        sys.exit(1)
+    if canon not in seen:
+        seen.add(canon)
+        out.append(canon)
+if not out or len(out) > 1000:
+    sys.exit(1)
+sys.stdout.write("\n".join(out) + "\n")
+'
+}
+
+# The IP-Block marker block (identical content for the :80 and :443 server
+# blocks; placement differs and is handled by the vhost editor). The server-level
+# `return 403` precedes Basic Auth and any force-https redirect (when placed at
+# the top of the :80 block).
+_security_ipblock_render_marker() {
+  local domain="$1" target="$2" id
+  id=$(_security_id "$domain")
+  {
+    printf '    # >>> AIDIPANEL_IP_BLOCK >>>\n'
+    printf '    if ($aidipanel_block_%s) { return 403; }\n' "$id"
+    printf '    # <<< AIDIPANEL_IP_BLOCK <<<\n'
+  } > "$target"
+}
+
+# The per-site http-context include: a geo over the real visitor address plus the
+# effective map that keeps HTTP-01 ACME open on port 80. List entries are one
+# canonical address/CIDR per line (already normalized by _security_ipblock_normalize).
+_security_ipblock_render_include() {
+  local domain="$1" list="$2" target="$3" id
+  id=$(_security_id "$domain")
+  {
+    printf '# Managed by AidiPanel (security:ip-block). Do not edit by hand.\n'
+    printf 'geo $remote_addr $aidipanel_block_source_%s {\n' "$id"
+    printf '    default 0;\n'
+    awk 'NF{ print "    " $0 " 1;" }' "$list"
+    printf '}\n'
+    printf 'map "$aidipanel_block_source_%s:$server_port:$uri" $aidipanel_block_%s {\n' "$id" "$id"
+    printf '    ~^1:80:/\\.well-known/acme-challenge(?:/|$) 0;\n'
+    printf '    ~^1: 1;\n'
+    printf '    default 0;\n'
+    printf '}\n'
+  } > "$target"
+}
+
+# schema=1 IP-Block state. List content lives ONLY in the list file; state holds
+# count + sha256 so status can detect drift without echoing list data.
+_security_ipblock_state_render() {
+  local target="$1" enabled="$2" count="$3" sha="$4"
+  printf 'schema=1\nenabled=%s\nentry_count=%s\nlist_sha256=%s\n' \
+    "$enabled" "$count" "$sha" > "$target"
+  chmod 0600 "$target"
 }
 
 _security_state_value() {
@@ -2902,72 +3121,126 @@ _security_render_marker() {
   } > "$target"
 }
 
+# Bounded, parameterized managed-marker editor. Knows only internal marker
+# identities (never user input). Each feature selects its target block(s):
+#   cloudflare_only / basic_auth -> the single TLS (:443) server block
+#   ip_block                     -> both the :80 and :443 server blocks
+# In every target block it removes ALL known managed markers and reinserts the
+# active ones in canonical order (Cloudflare-only -> IP Block -> Basic Auth),
+# changing only the requested feature and staying byte-stable elsewhere.
+# A 4-arg call defaults to basic_auth (Slice 1 compatibility).
 _security_vhost_edit() {
-  local source="$1" target="$2" mode="$3" marker_file="$4"
-  local start_count end_count
-  start_count=$(grep -cF '# >>> AIDIPANEL_BASIC_AUTH >>>' "$source" 2>/dev/null || true)
-  end_count=$(grep -cF '# <<< AIDIPANEL_BASIC_AUTH <<<' "$source" 2>/dev/null || true)
-  [[ "$start_count" -eq "$end_count" && "$start_count" -le 1 ]] || return 1
+  local source="$1" target="$2" mode="$3" marker_file="$4" marker_id="${5:-basic_auth}"
+  local target_token do_http do_tls tok s e expected_target
+  case "$marker_id" in
+    cloudflare_only) target_token='AIDIPANEL_CLOUDFLARE_ONLY'; do_http=0; do_tls=1 ;;
+    ip_block)        target_token='AIDIPANEL_IP_BLOCK';        do_http=1; do_tls=1 ;;
+    basic_auth)      target_token='AIDIPANEL_BASIC_AUTH';      do_http=0; do_tls=1 ;;
+    *) return 1 ;;
+  esac
+  # Every known marker must be globally balanced (catches orphan/stray markers
+  # anywhere, including non-target blocks).
+  for tok in AIDIPANEL_CLOUDFLARE_ONLY AIDIPANEL_IP_BLOCK AIDIPANEL_BASIC_AUTH; do
+    s=$(grep -cF "# >>> ${tok} >>>" "$source" 2>/dev/null || true)
+    e=$(grep -cF "# <<< ${tok} <<<" "$source" 2>/dev/null || true)
+    [[ "$s" -eq "$e" ]] || return 1
+  done
+  expected_target=$(grep -cF "# >>> ${target_token} >>>" "$source" 2>/dev/null || true)
 
-  awk -v mode="$mode" -v mf="$marker_file" -v expected="$start_count" '
+  awk -v mode="$mode" -v mf="$marker_file" -v target_token="$target_token" \
+      -v do_http="$do_http" -v do_tls="$do_tls" -v expected_target="$expected_target" '
     function delta(s, a, b, t) {
       t=s; a=gsub(/\{/,"{",t)
       t=s; b=gsub(/\}/,"}",t)
       return a-b
     }
-    function clear_arrays( i) {
-      for (i in block) delete block[i]
-      for (i in clean) delete clean[i]
-      n=0; m=0
-    }
-    function flush_block( i, line, tls, skip, removed, inserted) {
-      tls=0
-      for (i=1; i<=n; i++) {
-        if (block[i] ~ /^[[:space:]]*listen[[:space:]]+(\[::\]:)?443[[:space:]]+ssl([[:space:]]|;)/) tls=1
-      }
-      if (!tls) {
+    function clear_block( i) { for (i in block) delete block[i]; n=0 }
+    function flush_block( i, line, btype, nm, em, capturing, m, inserted, k, t, content, need) {
+      btype="other"
+      for (i=1; i<=n; i++)
+        if (block[i] ~ /listen[[:space:]]+(\[::\]:)?443[[:space:]]+ssl([[:space:]]|;)/) { btype="tls"; break }
+      if (btype == "other")
+        for (i=1; i<=n; i++)
+          if (block[i] ~ /listen[[:space:]]+(\[::\]:)?80[[:space:]]*;/) { btype="http"; break }
+
+      if (btype == "other" || (btype=="tls" && !do_tls) || (btype=="http" && !do_http)) {
         for (i=1; i<=n; i++) print block[i]
-        clear_arrays()
         return
       }
-      tls_count++
-      skip=0; removed=0; m=0
+      if (btype == "tls") targeted_tls++; else targeted_http++
+
+      for (k in cap) delete cap[k]
+      for (k in capseen) delete capseen[k]
+      capturing=""; m=0
       for (i=1; i<=n; i++) {
         line=block[i]
-        if (line ~ /# >>> AIDIPANEL_BASIC_AUTH >>>/) {
-          if (skip) bad=1
-          skip=1; removed++; total_removed++
+        if (line ~ /# >>> AIDIPANEL_[A-Z_]+ >>>/) {
+          nm=line; sub(/.*# >>> /,"",nm); sub(/ >>>.*/,"",nm)
+          if (capturing != "") bad=1
+          if (capseen[nm]) bad=1
+          if (btype=="tls" && !valid_tls[nm]) bad=1
+          if (btype=="http" && !valid_http[nm]) bad=1
+          capturing=nm; capseen[nm]=1; cap[nm]=line "\n"
+          if (nm == target_token) removed_target++
           continue
         }
-        if (skip) {
-          if (line ~ /# <<< AIDIPANEL_BASIC_AUTH <<</) skip=0
+        if (capturing != "") {
+          cap[capturing]=cap[capturing] line "\n"
+          if (line ~ /# <<< AIDIPANEL_[A-Z_]+ <<</) {
+            em=line; sub(/.*# <<< /,"",em); sub(/ <<<.*/,"",em)
+            if (em != capturing) bad=1
+            capturing=""
+          }
           continue
         }
+        if (line ~ /# <<< AIDIPANEL_[A-Z_]+ <<</) bad=1
         clean[++m]=line
       }
-      if (skip || removed > 1) bad=1
+      if (capturing != "") bad=1
+
+      need=0
+      for (k=1; k<=ord_n[btype]; k++) {
+        t=ord[btype, k]
+        if (t == target_token) { if (mode=="enable") need=1 }
+        else if (capseen[t]) need=1
+      }
+      # Insertion anchor: the :443 block inserts after server_name; the :80 block
+      # inserts at the TOP (right after "server {") so the IP-Block return precedes
+      # any pre-server_name force-https redirect (e.g. Certbot "if ($host) return 301").
       inserted=0
       for (i=1; i<=m; i++) {
         print clean[i]
-        if (mode == "enable" && !inserted && clean[i] ~ /^[[:space:]]*server_name[[:space:]]+[^;]+;[[:space:]]*$/) {
-          for (j=1; j<=marker_n; j++) print marker[j]
+        if (!inserted && \
+            ((btype=="tls"  && clean[i] ~ /^[[:space:]]*server_name[[:space:]]+[^;]+;[[:space:]]*$/) || \
+             (btype=="http" && clean[i] ~ /^[[:space:]]*server[[:space:]]*\{[[:space:]]*$/))) {
+          for (k=1; k<=ord_n[btype]; k++) {
+            t=ord[btype, k]
+            content=""
+            if (t == target_token) { if (mode=="enable") content=marker_text }
+            else if (capseen[t]) content=cap[t]
+            if (content != "") printf "%s", content
+          }
           inserted=1
         }
       }
-      if (mode == "enable" && !inserted) bad=1
-      clear_arrays()
+      if (need && !inserted) bad=1
     }
     BEGIN {
-      depth=0; inblock=0; tls_count=0; total_removed=0; bad=0
-      marker_n=0
+      depth=0; inblock=0; bad=0
+      targeted_tls=0; targeted_http=0; removed_target=0
+      ord["tls",1]="AIDIPANEL_CLOUDFLARE_ONLY"; ord["tls",2]="AIDIPANEL_IP_BLOCK"; ord["tls",3]="AIDIPANEL_BASIC_AUTH"; ord_n["tls"]=3
+      ord["http",1]="AIDIPANEL_IP_BLOCK"; ord_n["http"]=1
+      valid_tls["AIDIPANEL_CLOUDFLARE_ONLY"]=1; valid_tls["AIDIPANEL_IP_BLOCK"]=1; valid_tls["AIDIPANEL_BASIC_AUTH"]=1
+      valid_http["AIDIPANEL_IP_BLOCK"]=1
+      marker_text=""
       if (mode == "enable") {
-        while ((getline marker_line < mf) > 0) marker[++marker_n]=marker_line
+        while ((getline marker_line < mf) > 0) marker_text=marker_text marker_line "\n"
         close(mf)
-        if (marker_n == 0) bad=1
+        if (marker_text == "") bad=1
       }
     }
     !inblock && /^[[:space:]]*server[[:space:]]*\{/ {
-      clear_arrays()
+      clear_block()
       inblock=1
       block[++n]=$0
       depth=delta($0)
@@ -2982,7 +3255,10 @@ _security_vhost_edit() {
     }
     { print }
     END {
-      if (inblock || tls_count != 1 || total_removed != expected || bad) exit 42
+      if (inblock || bad) exit 42
+      if (do_tls && targeted_tls != 1) exit 42
+      if (do_http && targeted_http != 1) exit 42
+      if (removed_target != expected_target) exit 42
     }
   ' "$source" > "$target"
 }
@@ -3046,7 +3322,7 @@ _security_tx_exit_trap() {
   trap - EXIT
   set +e
   if [[ "$SECURITY_TX_ACTIVE" == 1 && "$SECURITY_TX_DIRTY" == 1 ]]; then
-    warn "Basic Auth transaction was interrupted; restoring the previous configuration."
+    warn "Security transaction was interrupted; restoring the previous configuration."
     _security_tx_restore || restore_rc=1
     if [[ "$restore_rc" -eq 0 ]]; then
       if nginx -t >> "$CLI_LOG" 2>&1; then
@@ -3056,7 +3332,7 @@ _security_tx_exit_trap() {
       fi
     fi
     if [[ "$restore_rc" -ne 0 || "$reload_rc" -ne 0 ]]; then
-      warn "Interrupted Basic Auth rollback was incomplete. Inspect nginx immediately."
+      warn "Interrupted Security rollback was incomplete. Inspect nginx immediately."
     fi
   fi
   _security_tx_cleanup
@@ -3120,7 +3396,7 @@ _security_reload_transaction() {
   if nginx -t >> "$CLI_LOG" 2>&1 && systemctl reload nginx >> "$CLI_LOG" 2>&1; then
     return 0
   fi
-  warn "Nginx rejected the Basic Auth change; restoring the previous configuration."
+  warn "Nginx rejected the Security change; restoring the previous configuration."
   _security_tx_restore || return 1
   nginx -t >> "$CLI_LOG" 2>&1 || return 1
   systemctl reload nginx >> "$CLI_LOG" 2>&1 || return 1
@@ -3221,7 +3497,8 @@ _security_disable() {
 
   marker_count=$(grep -cF '# >>> AIDIPANEL_BASIC_AUTH >>>' "$conf" 2>/dev/null || true)
   if [[ "$marker_count" -eq 0 && ! -f "$include" && ! -f "$state" && ! -d "$dir" ]]; then
-    [[ "$purge" == "true" ]] && rm -rf -- "$dir"
+    # Nothing to disable and the shared per-site dir is already absent, so there
+    # is nothing to purge (and nothing of a sibling feature to protect).
     rm -rf "$tmp"
     printf 'enabled=0\n'
     return 0
@@ -3268,7 +3545,11 @@ _security_disable() {
   _security_tx_cleanup
   rm -rf "$tmp"
   if [[ "$purge" == "true" ]]; then
-    rm -rf -- "$dir"
+    # Purge only Basic Auth's own artifacts. The per-site dir is shared with
+    # IP Blocking and Cloudflare-only, so never delete it wholesale; rmdir
+    # clears it only when no sibling feature still keeps state there.
+    rm -f -- "$(_security_htpasswd "$domain")" "$state"
+    rmdir "$dir" 2>/dev/null || true
   fi
   _cache_purge_domain "$domain" >/dev/null 2>&1 || warn "Basic Auth is disabled, but stale cache cleanup failed for ${domain}."
   printf 'enabled=0\n'
@@ -3424,14 +3705,448 @@ _security_status() {
   printf 'error=%s\n' "$error"
 }
 
+# Acquire the per-site Security lock (fd 201; shared for reads, exclusive for
+# mutations). Bounded wait -> return 3 (busy). Mirrors _cloudflare_lock.
+_security_lock() {
+  local domain="$1" mode="${2:-x}" lock flag
+  lock=$(_security_lock_path "$domain")
+  mkdir -p "$(dirname "$lock")" 2>/dev/null || true
+  exec 201>"$lock" || return 1
+  flag='-x'; [[ "$mode" == s ]] && flag='-s'
+  flock -w "${SECURITY_LOCK_WAIT:-10}" "$flag" 201 || return 3
+  return 0
+}
+
+# IP Blocking status with the per-site lock already held. Keys: enabled,
+# entry_count, list_sha256, realip_active, error. Never echoes list content.
+_security_ipblock_status_locked() {
+  local domain="$1"
+  local conf="${NGINX_CONF_DIR}/${domain}.conf"
+  local list state inc cf_state
+  list=$(_security_ipblock_list "$domain"); state=$(_security_ipblock_state "$domain")
+  inc=$(_security_ipblock_inc "$domain"); cf_state=$(_cloudflare_state_path)
+  local stored_enabled enabled=0 entry_count=0 list_sha256="" error="" realip_active=0
+  local starts ends actual_count actual_sha tmp
+
+  grep -q '^enabled=1$' "$cf_state" 2>/dev/null && realip_active=1
+
+  stored_enabled=$(_security_state_value "$state" enabled)
+  entry_count=$(_security_state_value "$state" entry_count); entry_count=${entry_count:-0}
+  list_sha256=$(_security_state_value "$state" list_sha256)
+  starts=$(grep -cF '# >>> AIDIPANEL_IP_BLOCK >>>' "$conf" 2>/dev/null || true)
+  ends=$(grep -cF '# <<< AIDIPANEL_IP_BLOCK <<<' "$conf" 2>/dev/null || true)
+
+  if [[ "$stored_enabled" == "1" ]]; then
+    if [[ ! -f "$list" ]]; then error=missing_list
+    elif [[ ! -f "$inc" ]]; then error=missing_include
+    elif [[ "$starts" -lt 2 || "$ends" -lt 2 ]]; then error=missing_marker
+    elif [[ "$starts" -ne 2 || "$ends" -ne 2 ]]; then error=marker_drift
+    else
+      actual_count=$(grep -c . "$list" 2>/dev/null || true); actual_count=${actual_count:-0}
+      actual_sha=$(sha256sum "$list" | cut -d' ' -f1)
+      if [[ "$actual_count" != "$entry_count" || "$actual_sha" != "$list_sha256" ]]; then
+        error=hash_count_mismatch
+      else
+        tmp=$(mktemp -d /tmp/aidipanel-ipblock-status.XXXXXX) || true
+        if [[ -n "$tmp" ]]; then
+          _security_ipblock_render_include "$domain" "$list" "${tmp}/inc"
+          cmp -s "${tmp}/inc" "$inc" || error=generated_content_mismatch
+          rm -rf "$tmp"
+        fi
+      fi
+    fi
+    [[ -z "$error" ]] && enabled=1
+  elif [[ "$stored_enabled" == "0" ]]; then
+    [[ "$starts" -ne 0 || "$ends" -ne 0 || -f "$inc" ]] && error=state_mismatch
+  else
+    [[ "$starts" -ne 0 || "$ends" -ne 0 || -f "$inc" || -f "$list" ]] && error=state_mismatch
+  fi
+
+  printf 'enabled=%s\n' "$enabled"
+  printf 'entry_count=%s\n' "$entry_count"
+  printf 'list_sha256=%s\n' "$list_sha256"
+  printf 'realip_active=%s\n' "$realip_active"
+  printf 'error=%s\n' "$error"
+}
+
+_security_ipblock_status() {
+  local domain="$1"
+  if ! _security_lock "$domain" s; then
+    printf 'enabled=0\nentry_count=0\nlist_sha256=\nrealip_active=0\nerror=busy\n'
+    return 0
+  fi
+  _security_ipblock_status_locked "$domain"
+}
+
+# Read-only transport for the saved list (the panel textarea). stdout = canonical
+# list body ONLY; no log lines. Non-zero (no output) when absent or drifted.
+_security_ipblock_get() {
+  local domain="$1" list state stored_sha actual_sha
+  list=$(_security_ipblock_list "$domain"); state=$(_security_ipblock_state "$domain")
+  _security_lock "$domain" s || return 3
+  [[ -f "$list" && -f "$state" ]] || return 1
+  stored_sha=$(_security_state_value "$state" list_sha256)
+  actual_sha=$(sha256sum "$list" | cut -d' ' -f1)
+  [[ "$actual_sha" == "$stored_sha" ]] || return 1
+  cat "$list"
+}
+
+# Apply the complete desired deny list (stdin) under the per-site lock.
+_security_ipblock_set() {
+  local domain="$1"
+  local conf="${NGINX_CONF_DIR}/${domain}.conf"
+  local inc list state dir tmp count sha reload_rc install_restore_rc=0
+  inc=$(_security_ipblock_inc "$domain"); list=$(_security_ipblock_list "$domain")
+  state=$(_security_ipblock_state "$domain"); dir=$(_security_dir "$domain")
+
+  _security_lock "$domain" x || { echo "error=busy"; return 3; }
+  tmp=$(mktemp -d /tmp/aidipanel-ipblock-build.XXXXXX) || { echo "error=tmp"; return 1; }
+
+  if ! _security_ipblock_normalize > "${tmp}/list"; then
+    rm -rf "$tmp"; echo "error=invalid_list"; return 1
+  fi
+  # Sibling drift: refuse to mutate while an active Basic Auth sibling is broken.
+  if [[ "$(_security_state_value "$(_security_state "$domain")" enabled)" == "1" ]]; then
+    _security_vhost_marker_valid "$conf" || { rm -rf "$tmp"; echo "error=sibling_drift"; return 1; }
+  fi
+
+  count=$(grep -c . "${tmp}/list"); sha=$(sha256sum "${tmp}/list" | cut -d' ' -f1)
+  _security_ipblock_render_include "$domain" "${tmp}/list" "${tmp}/inc"
+  _security_ipblock_render_marker "$domain" "${tmp}/marker"
+  if ! _security_vhost_edit "$conf" "${tmp}/vhost" enable "${tmp}/marker" ip_block; then
+    rm -rf "$tmp"; echo "error=vhost_edit"; return 1
+  fi
+  _security_ipblock_state_render "${tmp}/state" 1 "$count" "$sha"
+
+  _security_tx_begin "$conf" "$inc" "$list" "$state" \
+    || { rm -rf "$tmp"; _security_tx_cleanup; die "Could not snapshot the IP Block configuration."; }
+  SECURITY_TX_DIRTY=1
+  if ! install -d -o root -g root -m 0755 /etc/nginx/aidipanel \
+    || ! install -d -o root -g www-data -m 0750 /etc/nginx/aidipanel/security "$dir" \
+    || ! _security_install_file "${tmp}/vhost" "$conf" root root 0644 \
+    || ! _security_install_file "${tmp}/inc" "$inc" root root 0644 \
+    || ! _security_install_file "${tmp}/list" "$list" root root 0640 \
+    || ! _security_install_file "${tmp}/state" "$state" root root 0600; then
+    _security_tx_restore || install_restore_rc=1
+    _security_tx_cleanup; rm -rf "$tmp"
+    [[ "$install_restore_rc" -eq 0 ]] \
+      && die "Could not install the IP Block candidate files; the previous state was restored." \
+      || die "Could not install the IP Block candidate files and rollback was incomplete. Inspect nginx immediately."
+  fi
+  rm -rf "$tmp"
+  if _security_reload_transaction; then reload_rc=0; else reload_rc=$?; fi
+  if [[ "$reload_rc" -ne 0 ]]; then
+    _security_tx_cleanup
+    [[ "$reload_rc" -eq 2 ]] \
+      && { echo "error=nginx_rejected"; return 2; } \
+      || die "IP Block rollback could not reload the previous configuration. Inspect nginx immediately."
+  fi
+  _security_tx_cleanup
+  _cache_purge_domain "$domain" >/dev/null 2>&1 || true
+  printf 'enabled=1\nentry_count=%s\n' "$count"
+  ok "IP Blocking updated for ${domain} (${count} entries)"
+}
+
+# Remove the include + both markers transactionally; retain list/state disabled
+# unless --purge deletes them.
+_security_ipblock_disable() {
+  local domain="$1" purge="$2"
+  local conf="${NGINX_CONF_DIR}/${domain}.conf"
+  local inc list state tmp count sha starts reload_rc install_restore_rc=0
+  inc=$(_security_ipblock_inc "$domain"); list=$(_security_ipblock_list "$domain")
+  state=$(_security_ipblock_state "$domain")
+
+  _security_lock "$domain" x || { echo "error=busy"; return 3; }
+  tmp=$(mktemp -d /tmp/aidipanel-ipblock-build.XXXXXX) || { echo "error=tmp"; return 1; }
+
+  starts=$(grep -cF '# >>> AIDIPANEL_IP_BLOCK >>>' "$conf" 2>/dev/null || true)
+  if [[ "$starts" -eq 0 && ! -f "$inc" && ! -f "$state" && ! -f "$list" ]]; then
+    rm -rf "$tmp"
+    printf 'enabled=0\n'; return 0
+  fi
+
+  if ! _security_vhost_edit "$conf" "${tmp}/vhost" disable /dev/null ip_block; then
+    rm -rf "$tmp"; die "Could not edit the vhost to remove IP Block markers."
+  fi
+  if [[ -f "$list" ]]; then count=$(grep -c . "$list"); sha=$(sha256sum "$list" | cut -d' ' -f1); else count=0; sha=""; fi
+  _security_ipblock_state_render "${tmp}/state" 0 "$count" "$sha"
+
+  _security_tx_begin "$conf" "$inc" "$list" "$state" \
+    || { rm -rf "$tmp"; _security_tx_cleanup; die "Could not snapshot the IP Block configuration."; }
+  SECURITY_TX_DIRTY=1
+  if ! _security_install_file "${tmp}/vhost" "$conf" root root 0644 \
+    || ! rm -f "$inc" \
+    || ! _security_install_file "${tmp}/state" "$state" root root 0600; then
+    _security_tx_restore || install_restore_rc=1
+    _security_tx_cleanup; rm -rf "$tmp"
+    [[ "$install_restore_rc" -eq 0 ]] \
+      && die "Could not remove the IP Block configuration; the previous state was restored." \
+      || die "Could not remove the IP Block configuration and rollback was incomplete. Inspect nginx immediately."
+  fi
+  rm -rf "$tmp"
+  if _security_reload_transaction; then reload_rc=0; else reload_rc=$?; fi
+  if [[ "$reload_rc" -ne 0 ]]; then
+    _security_tx_cleanup
+    [[ "$reload_rc" -eq 2 ]] \
+      && die "The web server rejected the IP Block change; every managed file was restored." \
+      || die "IP Block rollback could not reload the previous configuration. Inspect nginx immediately."
+  fi
+  _security_tx_cleanup
+  if [[ "$purge" == "true" ]]; then rm -f -- "$list" "$state"; fi
+  _cache_purge_domain "$domain" >/dev/null 2>&1 || true
+  printf 'enabled=0\n'
+  ok "IP Blocking disabled for ${domain}$([[ "$purge" == "true" ]] && printf ' (list purged)')"
+}
+
+_security_ipblock() {
+  _require_root "security:ip-block"
+  _parse_opts "$@"
+  local domain action purge
+  domain=$(_opt domain); action=$(_opt action status); purge=$(_opt purge)
+  _require_arg "domain" "$domain" "security:ip-block --domain example.com --action status"
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
+  _domain_exists "$domain" || die "Site not found: ${domain}"
+  case "$action" in
+    status)  _security_ipblock_status "$domain" ;;
+    get)     _security_ipblock_get "$domain" ;;
+    set)     _security_ipblock_set "$domain" ;;
+    disable) _security_ipblock_disable "$domain" "$purge" ;;
+    *) die "Unknown action for security:ip-block: ${action} (use status|get|set|disable)" ;;
+  esac
+}
+
+_security_cfonly_siblings_valid() {
+  local domain="$1" basic ip basic_error ip_error
+  basic=$(_security_status "$domain") || return 1
+  basic_error=$(printf '%s\n' "$basic" \
+    | awk -F= '$1=="error"{print substr($0,7); n++} END{if(n!=1)exit 1}') || return 1
+  [[ -z "$basic_error" ]] || return 1
+  ip=$(_security_ipblock_status_locked "$domain") || return 1
+  ip_error=$(printf '%s\n' "$ip" \
+    | awk -F= '$1=="error"{print substr($0,7); n++} END{if(n!=1)exit 1}') || return 1
+  [[ -z "$ip_error" ]]
+}
+
+_security_cfonly_status() {
+  local domain="$1" global_status="${2:-}"
+  local conf="${NGINX_CONF_DIR}/${domain}.conf" state stored="" marker error="" enabled=0
+  state=$(_security_cfonly_state "$domain")
+  [[ -n "$global_status" ]] || global_status=$(_cloudflare_status)
+  marker=$(_security_cfonly_marker_status "$conf")
+
+  if [[ -f "$state" ]]; then
+    if ! stored=$(_security_cfonly_state_get "$state" enabled 2>/dev/null); then
+      error=malformed_state
+    fi
+  elif [[ "$marker" != missing_marker ]]; then
+    error=missing_state
+  fi
+
+  if [[ -z "$error" && "$stored" == 1 ]]; then
+    if [[ "$marker" != ok ]]; then
+      error="$marker"
+    elif [[ "$(grep -cF 'if ($aidipanel_from_cloudflare = 0) { return 403; }' "$conf" 2>/dev/null || true)" -ne 1 ]]; then
+      error=marker_drift
+    elif ! _security_cfonly_siblings_valid "$domain"; then
+      error=sibling_drift
+    elif ! _security_cfonly_dependency_healthy "$global_status"; then
+      error=dependency_unhealthy
+    else
+      enabled=1
+    fi
+  elif [[ -z "$error" && "$stored" == 0 ]]; then
+    [[ "$marker" == missing_marker ]] || error=state_mismatch
+  fi
+
+  printf 'enabled=%s\n' "$enabled"
+  printf 'realip_required=1\n'
+  printf 'error=%s\n' "$error"
+}
+
+_security_cfonly_enable_locked() {
+  local domain="$1" global_status="$2"
+  local conf="${NGINX_CONF_DIR}/${domain}.conf" state dir tmp status error enabled
+  local reload_rc install_restore_rc=0
+  state=$(_security_cfonly_state "$domain"); dir=$(_security_dir "$domain")
+
+  status=$(_security_cfonly_status "$domain" "$global_status") || return 1
+  error=$(printf '%s\n' "$status" | awk -F= '$1=="error"{print substr($0,7)}')
+  enabled=$(printf '%s\n' "$status" | awk -F= '$1=="enabled"{print $2}')
+  if [[ -n "$error" ]]; then echo "error=${error}"; return 1; fi
+  if [[ "$enabled" == 1 ]]; then printf 'enabled=1\n'; return 0; fi
+  _security_cfonly_dependency_healthy "$global_status" \
+    || { echo 'error=dependency_unhealthy'; return 1; }
+  _security_cfonly_siblings_valid "$domain" \
+    || { echo 'error=sibling_drift'; return 1; }
+
+  tmp=$(mktemp -d /tmp/aidipanel-cfonly-build.XXXXXX) || { echo 'error=tmp'; return 1; }
+  _security_cfonly_render_marker "${tmp}/marker"
+  if ! _security_vhost_edit "$conf" "${tmp}/vhost" enable "${tmp}/marker" cloudflare_only; then
+    rm -rf "$tmp"; echo 'error=vhost_edit'; return 1
+  fi
+  _security_cfonly_state_render "${tmp}/state" 1 \
+    || { rm -rf "$tmp"; echo 'error=state_render'; return 1; }
+
+  _security_tx_begin "$conf" "$state" \
+    || { rm -rf "$tmp"; _security_tx_cleanup; die "Could not snapshot Cloudflare-only state."; }
+  SECURITY_TX_DIRTY=1
+  if ! install -d -o root -g root -m 0755 /etc/nginx/aidipanel \
+    || ! install -d -o root -g www-data -m 0750 /etc/nginx/aidipanel/security "$dir" \
+    || ! _security_install_file "${tmp}/vhost" "$conf" root root 0644 \
+    || ! _security_install_file "${tmp}/state" "$state" root root 0600; then
+    _security_tx_restore || install_restore_rc=1
+    _security_tx_cleanup; rm -rf "$tmp"
+    [[ "$install_restore_rc" -eq 0 ]] \
+      && die "Could not install Cloudflare-only; the previous state was restored." \
+      || die "Could not install Cloudflare-only and rollback was incomplete. Inspect nginx immediately."
+  fi
+  rm -rf "$tmp"
+  if _security_reload_transaction; then reload_rc=0; else reload_rc=$?; fi
+  if [[ "$reload_rc" -ne 0 ]]; then
+    _security_tx_cleanup
+    [[ "$reload_rc" -eq 2 ]] \
+      && { echo 'error=nginx_rejected'; return 2; } \
+      || die "Cloudflare-only rollback could not reload the previous configuration. Inspect nginx immediately."
+  fi
+  _security_tx_cleanup
+  _cache_purge_domain "$domain" >/dev/null 2>&1 || true
+  printf 'enabled=1\n'
+  ok "Direct-origin rejection enabled for ${domain}."
+}
+
+_security_cfonly_disable_locked() {
+  local domain="$1"
+  local conf="${NGINX_CONF_DIR}/${domain}.conf" state stored="" marker dir tmp
+  local reload_rc install_restore_rc=0
+  state=$(_security_cfonly_state "$domain"); dir=$(_security_dir "$domain")
+  marker=$(_security_cfonly_marker_status "$conf")
+
+  if [[ ! -f "$state" && "$marker" == missing_marker ]]; then
+    printf 'enabled=0\n'; return 0
+  fi
+  if [[ ! -f "$state" ]]; then echo 'error=missing_state'; return 1; fi
+  if ! stored=$(_security_cfonly_state_get "$state" enabled 2>/dev/null); then
+    echo 'error=malformed_state'; return 1
+  fi
+  if [[ "$stored" == 0 ]]; then
+    [[ "$marker" == missing_marker ]] || { echo 'error=state_mismatch'; return 1; }
+    printf 'enabled=0\n'; return 0
+  fi
+  [[ "$marker" == ok ]] || { echo "error=${marker}"; return 1; }
+  [[ "$(grep -cF 'if ($aidipanel_from_cloudflare = 0) { return 403; }' "$conf" 2>/dev/null || true)" -eq 1 ]] \
+    || { echo 'error=marker_drift'; return 1; }
+  _security_cfonly_siblings_valid "$domain" \
+    || { echo 'error=sibling_drift'; return 1; }
+
+  tmp=$(mktemp -d /tmp/aidipanel-cfonly-build.XXXXXX) || { echo 'error=tmp'; return 1; }
+  if ! _security_vhost_edit "$conf" "${tmp}/vhost" disable /dev/null cloudflare_only; then
+    rm -rf "$tmp"; echo 'error=vhost_edit'; return 1
+  fi
+  _security_cfonly_state_render "${tmp}/state" 0 \
+    || { rm -rf "$tmp"; echo 'error=state_render'; return 1; }
+
+  _security_tx_begin "$conf" "$state" \
+    || { rm -rf "$tmp"; _security_tx_cleanup; die "Could not snapshot Cloudflare-only state."; }
+  SECURITY_TX_DIRTY=1
+  if ! install -d -o root -g root -m 0755 /etc/nginx/aidipanel \
+    || ! install -d -o root -g www-data -m 0750 /etc/nginx/aidipanel/security "$dir" \
+    || ! _security_install_file "${tmp}/vhost" "$conf" root root 0644 \
+    || ! _security_install_file "${tmp}/state" "$state" root root 0600; then
+    _security_tx_restore || install_restore_rc=1
+    _security_tx_cleanup; rm -rf "$tmp"
+    [[ "$install_restore_rc" -eq 0 ]] \
+      && die "Could not disable Cloudflare-only; the previous state was restored." \
+      || die "Could not disable Cloudflare-only and rollback was incomplete. Inspect nginx immediately."
+  fi
+  rm -rf "$tmp"
+  if _security_reload_transaction; then reload_rc=0; else reload_rc=$?; fi
+  if [[ "$reload_rc" -ne 0 ]]; then
+    _security_tx_cleanup
+    [[ "$reload_rc" -eq 2 ]] \
+      && { echo 'error=nginx_rejected'; return 2; } \
+      || die "Cloudflare-only rollback could not reload the previous configuration. Inspect nginx immediately."
+  fi
+  _security_tx_cleanup
+  _cache_purge_domain "$domain" >/dev/null 2>&1 || true
+  printf 'enabled=0\n'
+  ok "Direct-origin rejection disabled for ${domain}."
+}
+
+_security_cloudflare_only() {
+  _require_root "security:cloudflare-only"
+  local domain="" action="" domain_seen=0 action_seen=0 mode global_status
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --domain)
+        [[ "$domain_seen" == 0 && $# -ge 2 && -n "${2:-}" ]] \
+          || { die "Missing or duplicate required option: --domain"; return 1; }
+        domain_seen=1; domain="$2"; shift 2
+        ;;
+      --domain=*)
+        [[ "$domain_seen" == 0 && -n "${1#--domain=}" ]] \
+          || { die "Missing or duplicate required option: --domain"; return 1; }
+        domain_seen=1; domain="${1#--domain=}"; shift
+        ;;
+      --action)
+        [[ "$action_seen" == 0 && $# -ge 2 && -n "${2:-}" ]] \
+          || { die "Missing or duplicate required option: --action"; return 1; }
+        action_seen=1; action="$2"; shift 2
+        ;;
+      --action=*)
+        [[ "$action_seen" == 0 && -n "${1#--action=}" ]] \
+          || { die "Missing or duplicate required option: --action"; return 1; }
+        action_seen=1; action="${1#--action=}"; shift
+        ;;
+      *) die "Unknown option for security:cloudflare-only: $1"; return 1 ;;
+    esac
+  done
+  [[ "$domain_seen" == 1 ]] || { die "Missing required option: --domain"; return 1; }
+  [[ "$action_seen" == 1 ]] || { die "Missing required option: --action"; return 1; }
+  case "$action" in status) mode=s ;; enable|disable) mode=x ;; *) die "Unknown action: ${action}. Use status enable disable"; return 1 ;; esac
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
+
+  if ! _cloudflare_lock "$mode"; then
+    [[ "$action" == status ]] \
+      && printf 'enabled=0\nrealip_required=1\nerror=busy\n' \
+      || echo 'error=busy'
+    return 3
+  fi
+  if ! _security_lock "$domain" "$mode"; then
+    [[ "$action" == status ]] \
+      && printf 'enabled=0\nrealip_required=1\nerror=busy\n' \
+      || echo 'error=busy'
+    return 3
+  fi
+  _domain_exists "$domain" || die "Site not found: ${domain}"
+  global_status=$(_cloudflare_status_locked)
+  case "$action" in
+    status)  _security_cfonly_status "$domain" "$global_status" ;;
+    enable)  _security_cfonly_enable_locked "$domain" "$global_status" ;;
+    disable) _security_cfonly_disable_locked "$domain" ;;
+  esac
+}
+
 _security_basic_auth() {
   _require_root "security:basic-auth"
   _parse_opts "$@"
-  local domain action scope username path bypass_raw bypass_ips
+  local domain action scope username path bypass_raw bypass_ips lock_mode
   domain=$(_opt "domain")
   action=$(_opt "action" "status")
   _require_arg "domain" "$domain" "security:basic-auth --domain example.com --action status"
   _domain_valid "$domain" || die "Invalid domain name: ${domain}"
+  case "$action" in
+    status) lock_mode=s ;;
+    enable|disable) lock_mode=x ;;
+    *) die "Unknown Basic Auth action: ${action}. Use: status, enable, or disable." ;;
+  esac
+  if ! _security_lock "$domain" "$lock_mode"; then
+    if [[ "$action" == status ]]; then
+      printf 'enabled=0\nscope=\npath=\nusername=\nbypass_ips=\nhtpasswd_exists=0\nforce_https=0\nerror=busy\n'
+    else
+      echo 'error=busy'
+    fi
+    return 3
+  fi
   _domain_exists "$domain" || die "Site not found: ${domain}"
 
   case "$action" in
@@ -3464,9 +4179,6 @@ _security_basic_auth() {
       ;;
     disable)
       _security_disable "$domain" "$(_opt "purge" "false")"
-      ;;
-    *)
-      die "Unknown Basic Auth action: ${action}. Use: status, enable, or disable."
       ;;
   esac
 }
@@ -5201,6 +5913,825 @@ run() {
 }
 
 # ===========================================================================
+# CLOUDFLARE REAL-IP / GLOBAL CLASSIFIER  (Slice 2 — Network Rules, Phase 1)
+# ===========================================================================
+# One validated live Cloudflare range list generates one global Nginx file with
+# the trusted real-IP directives plus a single `$aidipanel_from_cloudflare`
+# classifier. The packaged seed is an immutable fallback; the live list changes
+# only after a complete, validated refresh. State is inert `schema=1` key=value
+# data, never sourced. Every action serialises on one global flock.
+
+CF_STALE_SECONDS=1814400          # 21 days = three missed weekly refresh cycles
+CF_SEED_GENERATED_AT=1781913600   # 2026-06-20 — bump only when shipping a new seed
+CF_REFRESH_MAX_BYTES=65536        # response-size ceiling per official list
+CF_LOCK_WAIT=10                   # bounded flock wait (seconds) before error=busy
+
+# --- paths (inline defaults so unit tests can sandbox via the env vars) --------
+_cloudflare_seed_path()     { printf '%s' "${AIDIPANEL_CF_SEED:-/usr/share/aidipanel/cloudflare/ip-ranges.seed}"; }
+_cloudflare_dir()           { printf '%s' "${AIDIPANEL_CF_DIR:-/etc/nginx/aidipanel/cloudflare}"; }
+_cloudflare_live_path()     { printf '%s/ip-ranges.conf' "$(_cloudflare_dir)"; }
+_cloudflare_state_path()    { printf '%s/realip.state' "$(_cloudflare_dir)"; }
+_cloudflare_conf_path()     { printf '%s' "${AIDIPANEL_CF_CONF:-/etc/nginx/conf.d/aidipanel-cloudflare.conf}"; }
+_cloudflare_lock_path()     { printf '%s' "${AIDIPANEL_CF_LOCK:-/run/lock/aidipanel-cloudflare.lock}"; }
+_cloudflare_cron_path()     { printf '%s' "${AIDIPANEL_CRON:-/etc/cron.d/aidipanel}"; }
+_cloudflare_security_root() { printf '%s' "${AIDIPANEL_SECURITY_DIR:-/etc/nginx/aidipanel/security}"; }
+
+# --- embedded immutable seed (canonical Cloudflare CIDRs, IPv4 then IPv6) ------
+_cloudflare_seed_data() {
+  cat <<'SEED'
+173.245.48.0/20
+103.21.244.0/22
+103.22.200.0/22
+103.31.4.0/22
+141.101.64.0/18
+108.162.192.0/18
+190.93.240.0/20
+188.114.96.0/20
+197.234.240.0/22
+198.41.128.0/17
+162.158.0.0/15
+104.16.0.0/13
+104.24.0.0/14
+172.64.0.0/13
+131.0.72.0/22
+2400:cb00::/32
+2606:4700::/32
+2803:f800::/32
+2405:b500::/32
+2405:8100::/32
+2a06:98c0::/29
+2c0f:f248::/32
+SEED
+}
+
+# --- Python-backed validation (use `python3 -c`, NEVER `python3 - <<` which would
+#     consume stdin as the script and silently empty sys.stdin) -----------------
+_cloudflare_normalize_ranges() {
+  python3 -c '
+import sys, ipaddress
+v4=[]; v6=[]; seen=set()
+for raw in sys.stdin:
+    line=raw.strip()
+    if not line:
+        continue
+    if line[0]=="#":
+        sys.exit(1)
+    parts=line.split()
+    if len(parts)!=1:
+        sys.exit(1)
+    try:
+        net=ipaddress.ip_network(parts[0], strict=True)
+    except ValueError:
+        sys.exit(1)
+    if net.prefixlen==0:
+        sys.exit(1)
+    key=net.with_prefixlen
+    if key in seen:
+        continue
+    seen.add(key)
+    (v4 if net.version==4 else v6).append(key)
+if not v4 or not v6:
+    sys.exit(1)
+for k in v4+v6:
+    print(k)
+'
+}
+
+_cloudflare_count_family() {
+  # $1 = file of canonical CIDRs ; $2 = 4|6 ; prints the family count
+  local file="$1" fam="$2"
+  if [[ "$fam" == 4 ]]; then
+    grep -c '\.' "$file" 2>/dev/null || true
+  else
+    grep -c ':' "$file" 2>/dev/null || true
+  fi
+}
+
+_cloudflare_shrink_ok() {
+  local nv4="$1" lv4="$2" nv6="$3" lv6="$4"
+  (( nv4 * 2 >= lv4 )) || return 1
+  (( nv6 * 2 >= lv6 )) || return 1
+  return 0
+}
+
+# --- inert state: render (schema=1 first, 0600) + strict get -------------------
+_cloudflare_state_render() {
+  local file="$1" enabled="$2" source="$3" seed="$4" last="$5" v4="$6" v6="$7" sha="$8"
+  [[ "$enabled" =~ ^(0|1)$ ]] || return 1
+  [[ "$source" =~ ^(seed|refresh)$ ]] || return 1
+  [[ "$seed" =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ "$last" =~ ^(0|[1-9][0-9]*)$ ]] || return 1
+  [[ "$v4" =~ ^[1-9][0-9]*$ && "$v6" =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || return 1
+  if [[ "$source" == seed ]]; then
+    [[ "$last" == 0 ]] || return 1
+  else
+    [[ "$last" != 0 ]] || return 1
+  fi
+  {
+    printf 'schema=1\n'
+    printf 'enabled=%s\n' "$enabled"
+    printf 'source=%s\n' "$source"
+    printf 'seed_generated_at=%s\n' "$seed"
+    printf 'last_success=%s\n' "$last"
+    printf 'ranges_v4=%s\n' "$v4"
+    printf 'ranges_v6=%s\n' "$v6"
+    printf 'sha256=%s\n' "$sha"
+  } > "$file" || return 1
+  chmod 0600 "$file" 2>/dev/null || return 1
+}
+
+_cloudflare_state_get() {
+  local file="$1" want="$2"
+  [[ -f "$file" ]] || return 1
+  awk -F= -v want="$want" '
+    BEGIN{
+      split("schema enabled source seed_generated_at last_success ranges_v4 ranges_v6 sha256", a, " ")
+      for (i in a) allow[a[i]]=1
+    }
+    $0 ~ /^[[:space:]]*$/ { next }
+    {
+      k=$1
+      if ($0 !~ /^[a-z0-9_]+=[^=]*$/) { bad=1; next }
+      if (!(k in allow)) { bad=1; next }
+      if (seen[k]++) { bad=1; next }
+      val[k]=substr($0, length($1)+2)
+    }
+    END{
+      if (bad || !(want in allow)) exit 2
+      for (i in allow) if (seen[i] != 1) exit 3
+      if (val["schema"] != "1") exit 4
+      if (val["enabled"] !~ /^(0|1)$/) exit 4
+      if (val["source"] !~ /^(seed|refresh)$/) exit 4
+      if (val["seed_generated_at"] !~ /^[1-9][0-9]*$/) exit 4
+      if (val["last_success"] !~ /^(0|[1-9][0-9]*)$/) exit 4
+      if (val["ranges_v4"] !~ /^[1-9][0-9]*$/) exit 4
+      if (val["ranges_v6"] !~ /^[1-9][0-9]*$/) exit 4
+      if (length(val["sha256"]) != 64 || val["sha256"] ~ /[^0-9a-f]/) exit 4
+      if (val["source"] == "seed" && val["last_success"] != "0") exit 4
+      if (val["source"] == "refresh" && val["last_success"] == "0") exit 4
+      print val[want]
+    }
+  ' "$file"
+}
+
+_cloudflare_validate_live() {
+  # $1 = live list ; $2 = validated state ; $3 = canonical scratch output
+  local live="$1" state="$2" outfile="$3" v4 v6 sha expected_v4 expected_v6 expected_sha
+  rm -f -- "$outfile"
+  [[ -f "$live" && -f "$state" ]] || return 1
+  if ! _cloudflare_normalize_ranges < "$live" > "$outfile" \
+     || ! cmp -s "$live" "$outfile"; then
+    rm -f -- "$outfile"
+    return 1
+  fi
+  expected_v4=$(_cloudflare_state_get "$state" ranges_v4) || { rm -f -- "$outfile"; return 1; }
+  expected_v6=$(_cloudflare_state_get "$state" ranges_v6) || { rm -f -- "$outfile"; return 1; }
+  expected_sha=$(_cloudflare_state_get "$state" sha256) || { rm -f -- "$outfile"; return 1; }
+  v4=$(_cloudflare_count_family "$outfile" 4)
+  v6=$(_cloudflare_count_family "$outfile" 6)
+  sha=$(sha256sum "$outfile" | cut -d' ' -f1)
+  if [[ "$v4" != "$expected_v4" || "$v6" != "$expected_v6" || "$sha" != "$expected_sha" ]]; then
+    rm -f -- "$outfile"
+    return 1
+  fi
+  return 0
+}
+
+_cloudflare_validate_active() {
+  # $1 = canonical ranges ; $2 = generated conf ; $3 = cron ; $4 = scratch dir
+  local ranges="$1" conf="$2" cron="$3" scratch="$4"
+  [[ -f "$ranges" && -f "$conf" ]] || return 1
+  mkdir -p "$scratch" || return 1
+  _cloudflare_render_conf "$ranges" "${scratch}/conf" || return 1
+  cmp -s "$conf" "${scratch}/conf" || return 1
+  _cloudflare_cron_matches 1 "$cron" || return 1
+  return 0
+}
+
+_cloudflare_age_basis() {
+  if (( ${1:-0} > 0 )); then printf 'refresh'; else printf 'seed'; fi
+}
+
+_cloudflare_is_stale() {
+  (( ${1:-0} >= ${CF_STALE_SECONDS:-1814400} ))
+}
+
+# --- serialization: one global flock; shared for reads, exclusive for writes ---
+_cloudflare_lock() {
+  local mode="${1:-x}" lock flag
+  lock="$(_cloudflare_lock_path)"
+  mkdir -p "$(dirname "$lock")" 2>/dev/null || true
+  exec 200>"$lock" || return 1
+  flag='-x'; [[ "$mode" == s ]] && flag='-s'
+  flock -w "${CF_LOCK_WAIT:-10}" "$flag" 200 || return 3   # bounded busy -> error=busy
+  return 0
+}
+
+# --- render the ONE global classifier file from a validated CIDR list ----------
+_cloudflare_render_conf() {
+  local ranges="$1" outfile="$2"
+  {
+    echo '# Managed by AidiPanel (cloudflare:realip). Do not edit by hand.'
+    awk 'NF{print "set_real_ip_from " $1 ";"}' "$ranges"
+    echo 'real_ip_header CF-Connecting-IP;'
+    echo '# real_ip_recursive stays off; CF-Connecting-IP carries one address.'
+    echo 'geo $realip_remote_addr $aidipanel_from_cloudflare {'
+    echo '    default 0;'
+    awk 'NF{print "    " $1 " 1;"}' "$ranges"
+    echo '}'
+  } > "$outfile" || return 1
+}
+
+# --- bounded cron block ownership (preserve every other AidiPanel job) ---------
+_cloudflare_cron_block() {
+  cat <<'CRON'
+# >>> AIDIPANEL_CLOUDFLARE_REFRESH >>>
+30 3 * * 1 root aidipanel cloudflare:realip --action refresh >> /var/log/aidipanel-cloudflare.log 2>&1
+# <<< AIDIPANEL_CLOUDFLARE_REFRESH <<<
+CRON
+}
+
+_cloudflare_cron_strip() {
+  awk '
+    /^# >>> AIDIPANEL_CLOUDFLARE_REFRESH >>>$/ {
+      if (skip || starts > 0) bad=1
+      starts++; skip=1; next
+    }
+    /^# <<< AIDIPANEL_CLOUDFLARE_REFRESH <<<$/{
+      if (!skip || ends > 0) bad=1
+      ends++; skip=0; next
+    }
+    !skip { print }
+    END { if (bad || skip || starts != ends || starts > 1) exit 1 }
+  ' "$1"
+}
+
+_cloudflare_cron_render() {
+  # $1 = enabled(0|1) ; $2 = current cron file ; $3 = out file
+  local enabled="$1" src="$2" outfile="$3"
+  [[ "$enabled" == 0 || "$enabled" == 1 ]] || return 1
+  if [[ -f "$src" ]]; then
+    _cloudflare_cron_strip "$src" > "$outfile" || return 1
+  else
+    : > "$outfile"
+  fi
+  [[ "$enabled" == 1 ]] && _cloudflare_cron_block >> "$outfile"
+  return 0
+}
+
+_cloudflare_cron_matches() {
+  # Validate only our bounded block; content outside it belongs to other jobs.
+  local enabled="$1" file="$2" starts ends actual expected
+  [[ "$enabled" == 0 || "$enabled" == 1 ]] || return 1
+  if [[ ! -f "$file" ]]; then
+    [[ "$enabled" == 0 ]]
+    return
+  fi
+  _cloudflare_cron_strip "$file" >/dev/null || return 1
+  starts=$(grep -c '^# >>> AIDIPANEL_CLOUDFLARE_REFRESH >>>$' "$file" 2>/dev/null || true)
+  ends=$(grep -c '^# <<< AIDIPANEL_CLOUDFLARE_REFRESH <<<$' "$file" 2>/dev/null || true)
+  if [[ "$enabled" == 0 ]]; then
+    [[ "$starts" == 0 && "$ends" == 0 ]]
+    return
+  fi
+  [[ "$starts" == 1 && "$ends" == 1 ]] || return 1
+  actual=$(awk '
+    /^# >>> AIDIPANEL_CLOUDFLARE_REFRESH >>>$/ { cap=1 }
+    cap { print }
+    /^# <<< AIDIPANEL_CLOUDFLARE_REFRESH <<<$/{ exit }
+  ' "$file")
+  expected=$(_cloudflare_cron_block)
+  [[ "$actual" == "$expected" ]]
+}
+
+_cloudflare_cfonly_dependent_domains() {
+  local root f domain enabled
+  root="$(_cloudflare_security_root)"
+  shopt -s nullglob
+  for f in "$root"/*/cloudflare-only.state; do
+    if ! enabled=$(_security_cfonly_state_get "$f" enabled 2>/dev/null); then
+      shopt -u nullglob
+      return 1
+    fi
+    if [[ "$enabled" == 1 ]]; then
+      domain=$(basename "$(dirname "$f")")
+      printf '%s\n' "$domain"
+    fi
+  done
+  shopt -u nullglob
+}
+
+_cloudflare_cfonly_dependents() {
+  local domains
+  domains=$(_cloudflare_cfonly_dependent_domains) || return 1
+  if [[ -z "$domains" ]]; then printf '0'; else printf '%s\n' "$domains" | grep -c .; fi
+}
+
+# --- rollback transaction over the global artifacts (config + state share it) --
+declare -a CF_TX_PATHS=()
+declare -a CF_TX_PRESENT=()
+CF_TX_DIR=""
+CF_TX_ACTIVE=0
+CF_TX_DIRTY=0
+
+_cloudflare_tx_exit_trap() {
+  local rc="${1:-1}"
+  trap - EXIT
+  set +e
+  if [[ "$CF_TX_ACTIVE" == 1 && "$CF_TX_DIRTY" == 1 ]]; then
+    warn "Cloudflare real-IP transaction interrupted; restoring the previous configuration."
+    _cloudflare_rollback || warn "Cloudflare real-IP rollback needs manual recovery; check ${CLI_LOG}."
+  else
+    _cloudflare_tx_cleanup
+  fi
+  exit "$rc"
+}
+
+_cloudflare_tx_begin() {
+  local p index=0
+  CF_TX_DIR=$(mktemp -d /tmp/aidipanel-cloudflare-tx.XXXXXX) || return 1
+  CF_TX_PATHS=(); CF_TX_PRESENT=()
+  for p in "$@"; do
+    CF_TX_PATHS+=("$p")
+    if [[ -e "$p" ]]; then
+      CF_TX_PRESENT+=(1)
+      if ! cp -a "$p" "${CF_TX_DIR}/${index}"; then
+        rm -rf -- "$CF_TX_DIR"
+        CF_TX_DIR=""; CF_TX_PATHS=(); CF_TX_PRESENT=()
+        return 1
+      fi
+    else
+      CF_TX_PRESENT+=(0)
+    fi
+    index=$((index + 1))
+  done
+  CF_TX_ACTIVE=1; CF_TX_DIRTY=0
+  trap '_cloudflare_tx_exit_trap $?' EXIT
+}
+
+_cloudflare_tx_restore() {
+  local index path rc=0
+  for ((index=0; index<${#CF_TX_PATHS[@]}; index++)); do
+    path="${CF_TX_PATHS[$index]}"
+    rm -rf -- "$path" || rc=1
+    [[ "${CF_TX_PRESENT[$index]}" == 1 ]] && { cp -a "${CF_TX_DIR}/${index}" "$path" || rc=1; }
+  done
+  return "$rc"
+}
+
+_cloudflare_tx_cleanup() {
+  [[ "$CF_TX_ACTIVE" == 1 ]] && trap - EXIT
+  CF_TX_ACTIVE=0; CF_TX_DIRTY=0
+  [[ -n "$CF_TX_DIR" ]] && rm -rf -- "$CF_TX_DIR" || true
+  CF_TX_DIR=""; CF_TX_PATHS=(); CF_TX_PRESENT=()
+}
+
+_cloudflare_rollback() {
+  local rc=0
+  _cloudflare_tx_restore || rc=1
+  if ! nginx -t >> "$CLI_LOG" 2>&1; then
+    rc=1
+  elif ! systemctl reload nginx >> "$CLI_LOG" 2>&1; then
+    rc=1
+  fi
+  _cloudflare_tx_cleanup
+  return "$rc"
+}
+
+# install a validated live list -> render conf/state/cron candidates, swap atomically
+_cloudflare_apply() {
+  local ranges="$1" source="$2" last="$3"
+  local dir live conf state cron v4 v6 sha tmp
+  dir="$(_cloudflare_dir)"; live="$(_cloudflare_live_path)"; conf="$(_cloudflare_conf_path)"
+  state="$(_cloudflare_state_path)"; cron="$(_cloudflare_cron_path)"
+  mkdir -p "$dir" || return 1
+  tmp=$(mktemp -d /tmp/aidipanel-cloudflare-build.XXXXXX) || return 1
+  if ! _cloudflare_normalize_ranges < "$ranges" > "${tmp}/live" \
+     || ! cmp -s "$ranges" "${tmp}/live"; then
+    rm -rf -- "$tmp"
+    return 1
+  fi
+  v4=$(_cloudflare_count_family "${tmp}/live" 4)
+  v6=$(_cloudflare_count_family "${tmp}/live" 6)
+  sha=$(sha256sum "${tmp}/live" | cut -d' ' -f1) || { rm -rf -- "$tmp"; return 1; }
+  _cloudflare_render_conf "${tmp}/live" "${tmp}/conf" || { rm -rf -- "$tmp"; return 1; }
+  _cloudflare_state_render "${tmp}/state" 1 "$source" "$CF_SEED_GENERATED_AT" "$last" "$v4" "$v6" "$sha" \
+    || { rm -rf -- "$tmp"; return 1; }
+  _cloudflare_cron_render 1 "$cron" "${tmp}/cron" || { rm -rf -- "$tmp"; return 1; }
+
+  _cloudflare_tx_begin "$live" "$conf" "$state" "$cron" || { rm -rf "$tmp"; return 1; }
+  CF_TX_DIRTY=1
+  install -o root -g root -m 0644 "${tmp}/live"  "$live"  || { rm -rf "$tmp"; die "Could not install the live Cloudflare ranges."; }
+  install -o root -g root -m 0644 "${tmp}/conf"  "$conf"  || { rm -rf "$tmp"; die "Could not install the Cloudflare classifier."; }
+  install -o root -g root -m 0600 "${tmp}/state" "$state" || { rm -rf "$tmp"; die "Could not install the Cloudflare state."; }
+  install -o root -g root -m 0644 "${tmp}/cron"  "$cron"  || { rm -rf "$tmp"; die "Could not install the Cloudflare cron block."; }
+  rm -rf "$tmp"
+
+  if nginx -t >> "$CLI_LOG" 2>&1 && systemctl reload nginx >> "$CLI_LOG" 2>&1; then
+    _cloudflare_tx_cleanup   # commit: drop the rollback snapshot/trap
+    return 0
+  fi
+  warn "Nginx rejected the Cloudflare real-IP change; rolling back."
+  _cloudflare_rollback || warn "Cloudflare real-IP rollback needs manual recovery; check ${CLI_LOG}."
+  return 2
+}
+
+_cloudflare_apply_disabled() {
+  # Install/retain canonical live data and enabled=0 state while removing only
+  # the generated classifier and this feature's bounded cron block.
+  local ranges="$1" source="$2" last="$3"
+  local dir live conf state cron v4 v6 sha tmp rc=0
+  dir="$(_cloudflare_dir)"; live="$(_cloudflare_live_path)"; conf="$(_cloudflare_conf_path)"
+  state="$(_cloudflare_state_path)"; cron="$(_cloudflare_cron_path)"
+  mkdir -p "$dir" || return 1
+  tmp=$(mktemp -d /tmp/aidipanel-cloudflare-off.XXXXXX) || return 1
+  if ! _cloudflare_normalize_ranges < "$ranges" > "${tmp}/live" \
+     || ! cmp -s "$ranges" "${tmp}/live"; then
+    rm -rf -- "$tmp"
+    return 1
+  fi
+  v4=$(_cloudflare_count_family "${tmp}/live" 4)
+  v6=$(_cloudflare_count_family "${tmp}/live" 6)
+  sha=$(sha256sum "${tmp}/live" | cut -d' ' -f1) || { rm -rf -- "$tmp"; return 1; }
+  _cloudflare_cron_render 0 "$cron" "${tmp}/cron" || { rm -rf -- "$tmp"; return 1; }
+  _cloudflare_state_render "${tmp}/state" 0 "$source" "$CF_SEED_GENERATED_AT" "$last" "$v4" "$v6" "$sha" \
+    || { rm -rf -- "$tmp"; return 1; }
+
+  _cloudflare_tx_begin "$live" "$conf" "$cron" "$state" || { rm -rf -- "$tmp"; return 1; }
+  CF_TX_DIRTY=1
+  install -o root -g root -m 0644 "${tmp}/live" "$live" || rc=1
+  rm -f -- "$conf" || rc=1
+  install -o root -g root -m 0644 "${tmp}/cron" "$cron" || rc=1
+  install -o root -g root -m 0600 "${tmp}/state" "$state" || rc=1
+  rm -rf -- "$tmp"
+  if [[ "$rc" == 0 ]] \
+     && nginx -t >> "$CLI_LOG" 2>&1 \
+     && systemctl reload nginx >> "$CLI_LOG" 2>&1; then
+    _cloudflare_tx_cleanup
+    return 0
+  fi
+  warn "Could not apply the disabled Cloudflare real-IP state; rolling back."
+  _cloudflare_rollback || warn "Cloudflare real-IP rollback needs manual recovery; check ${CLI_LOG}."
+  return 2
+}
+
+_cloudflare_fetch_one() {
+  # $1 = HTTPS URL ; $2 = output file
+  local url="$1" outfile="$2" size
+  rm -f -- "$outfile"
+  if ! curl --fail --silent --show-error --location \
+      --connect-timeout 5 --max-time 20 \
+      --max-filesize "$CF_REFRESH_MAX_BYTES" \
+      -o "$outfile" "$url"; then
+    rm -f -- "$outfile"
+    return 1
+  fi
+  size=$(stat -c '%s' "$outfile" 2>/dev/null) || { rm -f -- "$outfile"; return 1; }
+  if (( size > CF_REFRESH_MAX_BYTES )); then
+    rm -f -- "$outfile"
+    return 1
+  fi
+  return 0
+}
+
+_cloudflare_combine_ranges() {
+  # awk terminates the final record from each response even when the HTTP body
+  # itself has no trailing newline, keeping the IPv4/IPv6 boundary intact.
+  awk '{ print }' "$1" "$2"
+}
+
+_cloudflare_refresh_locked() {
+  local quiet=0; [[ "${1:-}" == "--quiet" ]] && quiet=1
+  local live state conf cron tmp nv4 nv6 lv4 lv6 now
+  live="$(_cloudflare_live_path)"; state="$(_cloudflare_state_path)"
+  conf="$(_cloudflare_conf_path)"; cron="$(_cloudflare_cron_path)"
+  tmp=$(mktemp -d /tmp/aidipanel-cloudflare-refresh.XXXXXX) || return 1
+  if ! _cloudflare_validate_live "$live" "$state" "${tmp}/baseline"; then
+    rm -rf "$tmp"; [[ "$quiet" == 1 ]] || echo "error=hash_count_mismatch"; return 1
+  fi
+  if ! _cloudflare_validate_active "${tmp}/baseline" "$conf" "$cron" "${tmp}/active"; then
+    rm -rf "$tmp"; [[ "$quiet" == 1 ]] || echo "error=generated_content_drift"; return 1
+  fi
+  if ! _cloudflare_fetch_one https://www.cloudflare.com/ips-v4 "${tmp}/v4" \
+     || ! _cloudflare_fetch_one https://www.cloudflare.com/ips-v6 "${tmp}/v6"; then
+    rm -rf "$tmp"; [[ "$quiet" == 1 ]] || echo "error=fetch"; return 1
+  fi
+  if ! _cloudflare_combine_ranges "${tmp}/v4" "${tmp}/v6" > "${tmp}/all"; then
+    rm -rf "$tmp"; [[ "$quiet" == 1 ]] || echo "error=validate"; return 1
+  fi
+  if ! _cloudflare_normalize_ranges < "${tmp}/all" > "${tmp}/norm"; then
+    rm -rf "$tmp"; [[ "$quiet" == 1 ]] || echo "error=validate"; return 1
+  fi
+  nv4=$(_cloudflare_count_family "${tmp}/norm" 4)
+  nv6=$(_cloudflare_count_family "${tmp}/norm" 6)
+  lv4=$(_cloudflare_count_family "${tmp}/baseline" 4)
+  lv6=$(_cloudflare_count_family "${tmp}/baseline" 6)
+  if ! _cloudflare_shrink_ok "$nv4" "$lv4" "$nv6" "$lv6"; then
+    rm -rf "$tmp"; [[ "$quiet" == 1 ]] || echo "error=shrink"; return 1
+  fi
+  now=$(date +%s)
+  if _cloudflare_apply "${tmp}/norm" refresh "$now"; then
+    rm -rf "$tmp"; [[ "$quiet" == 1 ]] || echo "ok=refresh"; return 0
+  fi
+  rm -rf "$tmp"; [[ "$quiet" == 1 ]] || echo "error=apply"; return 1
+}
+
+# --- public lifecycle actions (each acquires the lock + asserts privilege) -----
+_cloudflare_provision_enabled() {
+  # A validated seed/last-good apply is mandatory. Only the network refresh is
+  # best-effort, because the committed local data is already safe to serve.
+  local ranges="$1" source="$2" last="$3"
+  _cloudflare_apply "$ranges" "$source" "$last" || return $?
+  if ! _cloudflare_refresh_locked --quiet; then
+    warn "Initial Cloudflare refresh failed; the validated seed remains active."
+  fi
+  return 0
+}
+
+_cloudflare_provision() {
+  _require_root "cloudflare:realip --action provision"
+  _cloudflare_lock x || { echo "error=busy"; return 3; }
+  local seed live state dir enabled=1 source=seed last=0 ranges tmpseed
+  seed="$(_cloudflare_seed_path)"; live="$(_cloudflare_live_path)"
+  state="$(_cloudflare_state_path)"; dir="$(_cloudflare_dir)"
+  mkdir -p "$dir" "$(dirname "$seed")" || return 1
+
+  tmpseed=$(mktemp) || return 1
+  _cloudflare_seed_data > "$tmpseed"
+  if ! _cloudflare_normalize_ranges < "$tmpseed" > "${tmpseed}.norm"; then
+    rm -f "$tmpseed" "${tmpseed}.norm"; die "The packaged Cloudflare seed is invalid."
+  fi
+  install -o root -g root -m 0644 "${tmpseed}.norm" "$seed" \
+    || { rm -f "$tmpseed" "${tmpseed}.norm"; return 1; }
+  rm -f "$tmpseed" "${tmpseed}.norm"
+
+  if [[ -f "$state" ]]; then
+    if ! enabled=$(_cloudflare_state_get "$state" enabled 2>/dev/null); then
+      echo "error=malformed_state"
+      return 1
+    fi
+    if [[ -f "$live" ]]; then
+      tmpseed=$(mktemp) || return 1
+      if ! _cloudflare_validate_live "$live" "$state" "$tmpseed"; then
+        rm -f -- "$tmpseed"
+        echo "error=hash_count_mismatch"
+        return 1
+      fi
+      rm -f -- "$tmpseed"
+      ranges="$live"
+      source=$(_cloudflare_state_get "$state" source)
+      last=$(_cloudflare_state_get "$state" last_success)
+    else
+      ranges="$seed"
+      source=seed
+      last=0
+    fi
+  else
+    ranges="$seed"
+    source=seed
+    last=0
+  fi
+
+  if [[ "$enabled" == 1 ]]; then
+    if ! _cloudflare_provision_enabled "$ranges" "$source" "$last"; then
+      echo "error=apply"
+      return 1
+    fi
+    ok "Cloudflare real-IP provisioned (enabled)."
+  else
+    _cloudflare_apply_disabled "$ranges" "$source" "$last" || return $?
+    ok "Cloudflare real-IP provisioned (kept disabled per saved choice)."
+  fi
+}
+
+_cloudflare_enable() {
+  _require_root "cloudflare:realip --action enable"
+  _cloudflare_lock x || { echo "error=busy"; return 3; }
+  local live seed state source last ranges tmp
+  live="$(_cloudflare_live_path)"; seed="$(_cloudflare_seed_path)"; state="$(_cloudflare_state_path)"
+  if [[ ! -f "$seed" || ! -f "$live" || ! -f "$state" ]]; then
+    echo "error=missing_artifact"
+    return 1
+  fi
+  if ! source=$(_cloudflare_state_get "$state" source 2>/dev/null); then
+    echo "error=malformed_state"
+    return 1
+  fi
+  last=$(_cloudflare_state_get "$state" last_success)
+  tmp=$(mktemp) || return 1
+  if ! _cloudflare_validate_live "$live" "$state" "$tmp"; then
+    rm -f -- "$tmp"
+    echo "error=hash_count_mismatch"
+    return 1
+  fi
+  rm -f -- "$tmp"
+  ranges="$live"
+  _cloudflare_apply "$ranges" "$source" "$last" && ok "Cloudflare real-IP enabled." || die "Could not enable Cloudflare real-IP."
+}
+
+_cloudflare_refresh() {
+  _require_root "cloudflare:realip --action refresh"
+  _cloudflare_lock x || { echo "error=busy"; return 3; }
+  local state enabled
+  state="$(_cloudflare_state_path)"
+  if [[ ! -f "$state" ]]; then
+    echo "error=missing_state"
+    return 1
+  fi
+  if ! enabled=$(_cloudflare_state_get "$state" enabled 2>/dev/null); then
+    echo "error=malformed_state"
+    return 1
+  fi
+  if [[ "$enabled" != 1 ]]; then
+    echo "error=disabled"
+    return 1
+  fi
+  _cloudflare_refresh_locked
+}
+
+_cloudflare_disable() {
+  _require_root "cloudflare:realip --action disable"
+  _cloudflare_lock x || { echo "error=busy"; return 3; }
+  local deps deps_csv live state source last tmp
+  if ! deps=$(_cloudflare_cfonly_dependent_domains); then
+    echo "error=cfonly_dependency_drift"
+    return 1
+  fi
+  if [[ -n "$deps" ]]; then
+    deps_csv=$(printf '%s\n' "$deps" | paste -sd, -)
+    echo "error=cfonly_dependents:${deps_csv}"
+    return 1
+  fi
+  live="$(_cloudflare_live_path)"; state="$(_cloudflare_state_path)"
+  if [[ ! -f "$live" || ! -f "$state" ]]; then
+    echo "error=missing_artifact"
+    return 1
+  fi
+  if ! source=$(_cloudflare_state_get "$state" source 2>/dev/null); then
+    echo "error=malformed_state"
+    return 1
+  fi
+  last=$(_cloudflare_state_get "$state" last_success)
+  tmp=$(mktemp) || return 1
+  if ! _cloudflare_validate_live "$live" "$state" "$tmp"; then
+    rm -f -- "$tmp"
+    echo "error=hash_count_mismatch"
+    return 1
+  fi
+  rm -f -- "$tmp"
+  _cloudflare_apply_disabled "$live" "$source" "$last" \
+    && ok "Cloudflare real-IP disabled (data retained)." \
+    || die "Could not disable Cloudflare real-IP."
+}
+
+_cloudflare_status_empty() {
+  local error="$1"
+  echo "schema=1"
+  echo "enabled=0"
+  echo "source=seed"
+  echo "seed_generated_at=${CF_SEED_GENERATED_AT}"
+  echo "last_success=0"
+  echo "age_basis=seed"
+  echo "age_seconds=0"
+  echo "stale=0"
+  echo "warning="
+  echo "ranges_v4=0"
+  echo "ranges_v6=0"
+  echo "sha256="
+  echo "cfonly_dependents=0"
+  echo "error=${error}"
+}
+
+_cloudflare_status_locked() {
+  local state live conf cron seed_path enabled source seed last v4 v6 sha
+  state="$(_cloudflare_state_path)"; live="$(_cloudflare_live_path)"
+  conf="$(_cloudflare_conf_path)"; cron="$(_cloudflare_cron_path)"
+  seed_path="$(_cloudflare_seed_path)"
+  if [[ ! -f "$state" ]]; then
+    _cloudflare_status_empty missing_state
+    return 0
+  fi
+  if ! enabled=$(_cloudflare_state_get "$state" enabled 2>/dev/null); then
+    _cloudflare_status_empty malformed_state
+    return 0
+  fi
+  source=$(_cloudflare_state_get "$state" source)
+  seed=$(_cloudflare_state_get "$state" seed_generated_at)
+  last=$(_cloudflare_state_get "$state" last_success)
+  v4=$(_cloudflare_state_get "$state" ranges_v4)
+  v6=$(_cloudflare_state_get "$state" ranges_v6)
+  sha=$(_cloudflare_state_get "$state" sha256)
+  local age_basis ref now age stale=0 warning="" error="" deps tmp=""
+  local actual_v4 actual_v6 actual_sha
+  age_basis=$(_cloudflare_age_basis "$last")
+  if [[ "$age_basis" == refresh ]]; then ref="$last"; else ref="$seed"; fi
+  now=$(date +%s); age=$(( now - ref )); (( age < 0 )) && age=0
+  if _cloudflare_is_stale "$age"; then stale=1; warning=stale; fi
+
+  if [[ ! -f "$seed_path" ]]; then
+    error=missing_seed
+  elif [[ ! -f "$live" ]]; then
+    error=missing_live
+  elif [[ "$enabled" == 1 && ! -f "$conf" ]]; then
+    error=missing_generated
+  fi
+
+  if [[ -z "$error" ]]; then
+    tmp=$(mktemp -d /tmp/aidipanel-cloudflare-status.XXXXXX) || error=generated_content_drift
+  fi
+  if [[ -z "$error" ]]; then
+    if ! _cloudflare_normalize_ranges < "$seed_path" > "${tmp}/seed" \
+       || ! cmp -s "$seed_path" "${tmp}/seed" \
+       || ! _cloudflare_normalize_ranges < "$live" > "${tmp}/live" \
+       || ! cmp -s "$live" "${tmp}/live"; then
+      error=hash_count_mismatch
+    fi
+  fi
+  if [[ -z "$error" ]]; then
+    actual_v4=$(_cloudflare_count_family "${tmp}/live" 4)
+    actual_v6=$(_cloudflare_count_family "${tmp}/live" 6)
+    actual_sha=$(sha256sum "${tmp}/live" | cut -d' ' -f1)
+    if [[ "$actual_v4" != "$v4" || "$actual_v6" != "$v6" || "$actual_sha" != "$sha" ]]; then
+      error=hash_count_mismatch
+    fi
+  fi
+  if [[ -z "$error" ]]; then
+    if [[ "$enabled" == 1 ]]; then
+      _cloudflare_render_conf "${tmp}/live" "${tmp}/conf"
+      if ! cmp -s "$conf" "${tmp}/conf" \
+         || ! _cloudflare_cron_matches 1 "$cron"; then
+        error=generated_content_drift
+      fi
+    elif [[ -f "$conf" ]]; then
+      error=generated_content_drift
+    elif ! _cloudflare_cron_matches 0 "$cron"; then
+      error=generated_content_drift
+    fi
+  fi
+  [[ -n "$tmp" ]] && rm -rf -- "$tmp"
+
+  if ! deps=$(_cloudflare_cfonly_dependents); then
+    deps=0
+    [[ -n "$error" ]] || error=cfonly_dependency_drift
+  fi
+  echo "schema=1"
+  echo "enabled=${enabled}"
+  echo "source=${source}"
+  echo "seed_generated_at=${seed}"
+  echo "last_success=${last}"
+  echo "age_basis=${age_basis}"
+  echo "age_seconds=${age}"
+  echo "stale=${stale}"
+  echo "warning=${warning}"
+  echo "ranges_v4=${v4}"
+  echo "ranges_v6=${v6}"
+  echo "sha256=${sha}"
+  echo "cfonly_dependents=${deps}"
+  echo "error=${error}"
+}
+
+_cloudflare_status() {
+  _cloudflare_lock s || { _cloudflare_status_empty busy; return 0; }
+  _cloudflare_status_locked
+}
+
+_cloudflare_realip() {
+  local action="" action_seen=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --action)
+        if [[ "$action_seen" == 1 || $# -lt 2 || -z "${2:-}" ]]; then
+          die "Missing or duplicate required option: --action"
+          return 1
+        fi
+        action_seen=1; action="$2"; shift 2
+        ;;
+      --action=*)
+        if [[ "$action_seen" == 1 || -z "${1#--action=}" ]]; then
+          die "Missing or duplicate required option: --action"
+          return 1
+        fi
+        action_seen=1; action="${1#--action=}"; shift
+        ;;
+      *)
+        die "Unknown option for cloudflare:realip: $1"
+        return 1
+        ;;
+    esac
+  done
+  case "$action" in
+    status)    _cloudflare_status ;;
+    provision) _cloudflare_provision ;;
+    enable)    _cloudflare_enable ;;
+    refresh)   _cloudflare_refresh ;;
+    disable)   _cloudflare_disable ;;
+    "")        die "Missing required option: --action\n  Example: aidipanel cloudflare:realip --action status" ;;
+    *)         die "Unknown action: ${action}. Use one of: status provision enable refresh disable" ;;
+  esac
+}
+
+# ===========================================================================
 # MAIN DISPATCHER
 # ===========================================================================
 main() {
@@ -5245,6 +6776,11 @@ main() {
 
     # Site security
     security:basic-auth) _security_basic_auth "$@" ;;
+    security:ip-block)   _security_ipblock "$@" ;;
+    security:cloudflare-only) _security_cloudflare_only "$@" ;;
+
+    # Network rules (Slice 2)
+    cloudflare:realip)   _cloudflare_realip "$@" ;;
 
     # Database
     db:add)         _db_add "$@" ;;

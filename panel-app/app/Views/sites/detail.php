@@ -36,6 +36,17 @@ $baScope = in_array(($basicAuthInfo['scope'] ?? ''), ['wp-login', 'custom', 'sit
 $baError = (string) ($basicAuthInfo['error'] ?? '');
 $baForceHttps = ($basicAuthInfo['force_https'] ?? '0') === '1';
 $baHasPassword = ($basicAuthInfo['htpasswd_exists'] ?? '0') === '1';
+$cloudflareInfo = $cloudflareInfo ?? [];
+$cfEnabled = ($cloudflareInfo['enabled'] ?? '0') === '1';
+$cfSource = (string) ($cloudflareInfo['source'] ?? 'seed');
+$cfAgeDays = max(0, intdiv((int) ($cloudflareInfo['age_seconds'] ?? 0), 86400));
+$cfRanges = (int) ($cloudflareInfo['ranges_v4'] ?? 0) . ' IPv4 · '
+    . (int) ($cloudflareInfo['ranges_v6'] ?? 0) . ' IPv6';
+$cfError = (string) ($cloudflareInfo['error'] ?? '');
+$cfStale = ($cloudflareInfo['warning'] ?? '') === 'stale';
+$cloudflareOnlyInfo = $cloudflareOnlyInfo ?? [];
+$cfoEnabled = ($cloudflareOnlyInfo['enabled'] ?? '0') === '1';
+$cfoError = (string) ($cloudflareOnlyInfo['error'] ?? '');
 
 $appIcon = static function (string $type): string {
     return match ($type) {
@@ -1985,8 +1996,127 @@ $tabs = [
       'unreadable_credentials',
       'force_https_drift',
   ], true);
+  $cfErrorMessage = match ($cfError) {
+      'busy'                    => t('site.security.cloudflare.error.busy'),
+      'missing_seed'            => t('site.security.cloudflare.error.missing_seed'),
+      'missing_live'            => t('site.security.cloudflare.error.missing_live'),
+      'missing_generated'       => t('site.security.cloudflare.error.missing_generated'),
+      'missing_state'           => t('site.security.cloudflare.error.missing_state'),
+      'malformed_state'         => t('site.security.cloudflare.error.malformed_state'),
+      'hash_count_mismatch'     => t('site.security.cloudflare.error.hash_count_mismatch'),
+      'generated_content_drift' => t('site.security.cloudflare.error.generated_content_drift'),
+      'status_unavailable'      => t('site.security.cloudflare.error.status_unavailable'),
+      default                   => '',
+  };
+  // Direct-origin rejection (Cloudflare-only) depends on a healthy, active global
+  // real-IP foundation. The CLI is the final guard; the panel mirrors it for UX.
+  $cfoDependencyOk = $cfErrorMessage === '' && $cfEnabled && !$cfStale;
+  $cfoErrorMessage = match ($cfoError) {
+      'busy'                 => t('site.security.cloudflare_only.error.busy'),
+      'dependency_unhealthy' => t('site.security.cloudflare_only.error.dependency'),
+      'sibling_drift'        => t('site.security.cloudflare_only.error.sibling_drift'),
+      'marker_drift', 'missing_marker', 'state_mismatch',
+      'missing_state', 'malformed_state'
+                             => t('site.security.cloudflare_only.error.drift'),
+      'status_unavailable'   => t('site.security.cloudflare_only.error.status_unavailable'),
+      ''                     => '',
+      default                => t('site.security.cloudflare_only.error.generic'),
+  };
   ?>
   <div class="space-y-4" x-data="{ enabled: <?= $baEnabled ? 'true' : 'false' ?>, scope: '<?= e($baScope) ?>' }">
+
+    <form method="POST" action="/sites/<?= e($domain) ?>/security/cloudflare-only"
+          class="card overflow-hidden" data-security-card="cloudflare-protection"
+          x-data="{ cfo: <?= $cfoEnabled ? 'true' : 'false' ?> }">
+      <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+      <input type="hidden" name="enabled" value="0">
+      <div class="p-5 space-y-4">
+        <div class="flex items-start justify-between gap-4">
+          <div class="flex items-start gap-3">
+            <i class="ti ti-cloud-lock <?= $cfErrorMessage === '' && $cfEnabled ? 'text-emerald-500' : 'text-zinc-400' ?> text-lg mt-0.5"></i>
+            <div>
+              <h3 class="text-sm font-semibold text-zinc-800"><?= e(t('site.security.cloudflare.title')) ?></h3>
+              <p class="text-xs text-zinc-500 mt-1"><?= e(t('site.security.cloudflare.desc')) ?></p>
+            </div>
+          </div>
+          <span class="badge <?= $cfErrorMessage === '' && $cfEnabled ? 'badge-ok' : 'badge-muted' ?>">
+            <?= e($cfErrorMessage !== ''
+                ? t('site.security.cloudflare.status_error')
+                : ($cfEnabled ? t('site.security.cloudflare.status_active') : t('site.security.cloudflare.status_inactive'))) ?>
+          </span>
+        </div>
+
+        <?php if ($cfErrorMessage !== ''): ?>
+        <div class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          <?= e($cfErrorMessage) ?>
+        </div>
+        <?php elseif ($cfStale): ?>
+        <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <?= e(t('site.security.cloudflare.stale')) ?>
+        </div>
+        <?php endif; ?>
+
+        <p class="text-[11px] leading-relaxed text-zinc-500"><?= e(t('site.security.cloudflare.identity_hint')) ?></p>
+      </div>
+
+      <?php if ($cfErrorMessage === ''): ?>
+      <div class="grid grid-cols-3 divide-x divide-zinc-100 border-t border-zinc-100">
+        <div class="px-5 py-3.5">
+          <p class="eyebrow mb-1.5"><?= e(t('site.security.cloudflare.source')) ?></p>
+          <p class="text-sm font-semibold text-zinc-800"><?= e(ucfirst($cfSource)) ?></p>
+        </div>
+        <div class="px-5 py-3.5">
+          <p class="eyebrow mb-1.5"><?= e(t('site.security.cloudflare.age')) ?></p>
+          <p class="text-sm font-semibold text-zinc-800"><?= e((string) $cfAgeDays) ?> days</p>
+        </div>
+        <div class="px-5 py-3.5">
+          <p class="eyebrow mb-1.5"><?= e(t('site.security.cloudflare.ranges')) ?></p>
+          <p class="text-sm font-semibold text-zinc-800"><?= e($cfRanges) ?></p>
+        </div>
+      </div>
+      <?php endif; ?>
+
+      <?php $cfoCanToggle = $cfoDependencyOk || $cfoEnabled; ?>
+      <div class="p-5 border-t border-zinc-100 space-y-3" data-security-row="cloudflare-only">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <h4 class="text-sm font-semibold text-zinc-800">
+              <?= e(t('site.security.cloudflare_only.label')) ?>
+              <?php if ($cfoErrorMessage !== ''): ?>
+              <span class="badge badge-muted"><span class="dot bg-red-500"></span><?= e(t('site.security.cloudflare.status_error')) ?></span>
+              <?php endif; ?>
+            </h4>
+            <p class="text-xs text-zinc-500 mt-1"><?= e(t('site.security.cloudflare_only.desc')) ?></p>
+          </div>
+          <label class="inline-flex items-center gap-2 <?= $cfoCanToggle ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed' ?>" data-security-toggle="cloudflare-only">
+            <span class="text-[11px] font-medium text-zinc-500"
+                  x-text="cfo ? '<?= e(t('site.security.enabled')) ?>' : '<?= e(t('site.security.disabled')) ?>'"></span>
+            <input type="checkbox" name="enabled" value="1" x-model="cfo" class="sr-only" <?= $cfoCanToggle ? '' : 'disabled' ?>>
+            <span aria-hidden="true" :class="cfo ? 'sw-on' : 'sw-off'"><span></span></span>
+          </label>
+        </div>
+
+        <?php if ($cfoErrorMessage !== ''): ?>
+        <div class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"><?= e($cfoErrorMessage) ?></div>
+        <?php endif; ?>
+
+        <?php if (!$cfoDependencyOk): ?>
+        <div class="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200/70 px-3 py-2">
+          <i class="ti ti-alert-triangle text-amber-600 mt-0.5 text-sm"></i>
+          <p class="text-[11px] text-amber-800 leading-relaxed"><?= e(t('site.security.cloudflare_only.requires')) ?></p>
+        </div>
+        <?php endif; ?>
+
+        <p class="text-[11px] leading-relaxed text-zinc-400"><i class="ti ti-info-circle"></i> <?= e(t('site.security.cloudflare_only.recovery')) ?></p>
+
+        <div class="flex justify-end">
+          <button type="submit" class="btn btn-primary" <?= $cfoCanToggle ? '' : 'disabled' ?>>
+            <i class="ti ti-device-floppy text-sm"></i> <?= e(t('site.security.save')) ?>
+          </button>
+        </div>
+      </div>
+    </form>
+
     <?php if ($driftMessage !== ''): ?>
     <div class="flex items-start gap-3 rounded-lg border <?= $driftCritical ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50' ?> px-4 py-3">
       <i class="ti ti-alert-triangle <?= $driftCritical ? 'text-red-600' : 'text-amber-600' ?> mt-0.5"></i>
@@ -2025,14 +2155,14 @@ $tabs = [
         </div>
         <label class="inline-flex items-center gap-2 cursor-pointer" data-security-toggle="basic-auth">
           <span class="text-[11px] font-medium text-zinc-500"
-                x-text="enabled ? '<?= e(t('site.security.protection_on')) ?>' : '<?= e(t('site.security.protection_off')) ?>'"></span>
+                x-text="enabled ? '<?= e(t('site.security.enabled')) ?>' : '<?= e(t('site.security.disabled')) ?>'"></span>
           <input type="checkbox" name="enabled" value="1" x-model="enabled" class="sr-only">
           <span aria-hidden="true" :class="enabled ? 'sw-on' : 'sw-off'"><span></span></span>
         </label>
       </div>
 
       <div class="p-5 space-y-5">
-        <div class="space-y-4" x-show="enabled" x-cloak>
+        <div class="space-y-4">
           <div data-security-row="scope">
             <label class="lbl"><?= e(t('site.security.scope_label')) ?></label>
             <select name="scope" class="inp w-full" x-model="scope">
@@ -2101,46 +2231,87 @@ $tabs = [
       </div>
     </form>
 
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-      <div class="card opacity-70" data-security-card="ip-blocking">
-        <div class="p-5 flex items-start justify-between gap-4">
-          <div class="flex items-start gap-3">
-            <i class="ti ti-ban text-zinc-400 text-lg mt-0.5"></i>
-            <div>
-              <h3 class="text-sm font-semibold text-zinc-800"><?= e(t('site.security.ip_blocking.title')) ?></h3>
-              <p class="text-xs text-zinc-500 mt-1"><?= e(t('site.security.ip_blocking.desc')) ?></p>
-            </div>
-          </div>
-          <span class="badge badge-muted"><?= e(t('common.soon')) ?></span>
-        </div>
-      </div>
+<?php
+        $ibEnabled = ($ipBlockInfo['enabled'] ?? '0') === '1';
+        $ibError   = (string) ($ipBlockInfo['error'] ?? '');
+        $ibCount   = (int) ($ipBlockInfo['entry_count'] ?? 0);
+        $ibRealip  = ($ipBlockInfo['realip_active'] ?? '0') === '1';
+        $ibList    = (string) ($ipBlockList ?? '');
+        $ibErrorMap = [
+            'busy'                       => t('site.security.ipblock.error.busy'),
+            'missing_list'               => t('site.security.ipblock.error.drift'),
+            'missing_include'            => t('site.security.ipblock.error.drift'),
+            'missing_marker'             => t('site.security.ipblock.error.drift'),
+            'marker_drift'               => t('site.security.ipblock.error.drift'),
+            'hash_count_mismatch'        => t('site.security.ipblock.error.drift'),
+            'generated_content_mismatch' => t('site.security.ipblock.error.drift'),
+            'state_mismatch'             => t('site.security.ipblock.error.drift'),
+            'status_unavailable'         => t('site.security.ipblock.error.status_unavailable'),
+        ];
+        $ibErrorMessage = $ibError === '' ? '' : ($ibErrorMap[$ibError] ?? t('site.security.ipblock.error.generic'));
+?>
+      <form method="POST" action="/sites/<?= e($domain) ?>/security/ip-block"
+            class="card overflow-hidden md:col-span-2" data-security-card="ip-blocking"
+            x-data="{ enabled: <?= $ibEnabled ? 'true' : 'false' ?> }">
+        <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+        <input type="hidden" name="enabled" value="0">
 
-      <div class="card opacity-70" data-security-card="cloudflare-protection">
-        <div class="p-5 flex items-start justify-between gap-4">
-          <div class="flex items-start gap-3">
-            <i class="ti ti-cloud-lock text-zinc-400 text-lg mt-0.5"></i>
+        <div class="card-head">
+          <div class="flex items-center gap-2.5">
+            <i class="ti ti-ban text-lg" :class="enabled ? 'text-speed' : 'text-zinc-300'"></i>
             <div>
-              <h3 class="text-sm font-semibold text-zinc-800"><?= e(t('site.security.cloudflare.title')) ?></h3>
-              <p class="text-xs text-zinc-500 mt-1"><?= e(t('site.security.cloudflare.desc')) ?></p>
+              <h2 class="card-title">
+                <?= e(t('site.security.ip_blocking.title')) ?>
+                <?php if ($ibErrorMessage !== ''): ?>
+                <span class="badge badge-muted"><span class="dot bg-red-500"></span><?= e(t('site.security.ipblock.status_error')) ?></span>
+                <?php else: ?>
+                <span class="badge" :class="enabled ? 'badge-ok' : 'badge-muted'">
+                  <span class="dot" :class="enabled ? 'bg-emerald-500' : 'bg-zinc-400'"></span>
+                  <span x-text="enabled ? '<?= e(t('site.security.enabled')) ?>' : '<?= e(t('site.security.disabled')) ?>'"></span>
+                </span>
+                <?php endif; ?>
+              </h2>
+              <p class="text-[11px] text-zinc-400"><?= e(t('site.security.ip_blocking.desc')) ?></p>
             </div>
           </div>
-          <span class="badge badge-muted"><?= e(t('common.soon')) ?></span>
+          <label class="inline-flex items-center gap-2 cursor-pointer" data-security-toggle="ip-blocking">
+            <span class="text-[11px] font-medium text-zinc-500"
+                  x-text="enabled ? '<?= e(t('site.security.enabled')) ?>' : '<?= e(t('site.security.disabled')) ?>'"></span>
+            <input type="checkbox" name="enabled" value="1" x-model="enabled" class="sr-only">
+            <span aria-hidden="true" :class="enabled ? 'sw-on' : 'sw-off'"><span></span></span>
+          </label>
         </div>
-      </div>
 
-      <div class="card opacity-70 md:col-span-2">
-        <div class="p-5 flex items-start justify-between gap-4">
-          <div class="flex items-start gap-3">
-            <i class="ti ti-adjustments-horizontal text-zinc-400 text-lg mt-0.5"></i>
-            <div>
-              <h3 class="text-sm font-semibold text-zinc-800"><?= e(t('site.security.advanced.title')) ?></h3>
-              <p class="text-xs text-zinc-500 mt-1"><?= e(t('site.security.advanced.desc')) ?></p>
-            </div>
+        <div class="p-5 space-y-4">
+          <?php if ($ibErrorMessage !== ''): ?>
+          <div class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"><?= e($ibErrorMessage) ?></div>
+          <?php endif; ?>
+
+          <?php if (!$ibRealip): ?>
+          <div class="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200/70 px-3 py-2">
+            <i class="ti ti-alert-triangle text-amber-600 mt-0.5 text-sm"></i>
+            <p class="text-[11px] text-amber-800 leading-relaxed"><?= e(t('site.security.ipblock.realip_warning')) ?></p>
           </div>
-          <span class="badge badge-muted"><?= e(t('common.soon')) ?></span>
+          <?php endif; ?>
+
+          <div class="space-y-2">
+            <label class="lbl"><?= e(t('site.security.ipblock.list_label')) ?></label>
+            <textarea name="ips" rows="6" class="inp w-full mono resize-y"
+                      placeholder="203.0.113.10&#10;198.51.100.0/24&#10;2001:db8::/32"><?= e($ibList) ?></textarea>
+            <p class="text-[11px] text-zinc-400"><?= e(t('site.security.ipblock.list_hint')) ?></p>
+            <p class="text-[11px] text-zinc-400"><i class="ti ti-info-circle"></i> <?= e(t('site.security.ipblock.acme_note')) ?></p>
+            <?php if ($ibEnabled && $ibErrorMessage === ''): ?>
+            <p class="text-[11px] text-zinc-500"><?= e(sprintf(t('site.security.ipblock.count'), $ibCount)) ?></p>
+            <?php endif; ?>
+          </div>
+
+          <div class="flex justify-end border-t border-zinc-100 pt-4">
+            <button type="submit" class="btn btn-primary">
+              <i class="ti ti-device-floppy text-sm"></i> <?= e(t('site.security.save')) ?>
+            </button>
+          </div>
         </div>
-      </div>
-    </div>
+      </form>
   </div>
 
 <?php else: ?>

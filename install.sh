@@ -448,7 +448,7 @@ _install_base_packages() {
     software-properties-common unzip zip tar \
     git cron ufw fail2ban \
     openssl certbot \
-    sqlite3 \
+    sqlite3 python3 \
     net-tools jq
   ok "Base packages installed"
 }
@@ -1639,6 +1639,48 @@ set -Eeuo pipefail
 export NO_COLOR=1
 cmd="${1:-}"
 case "$cmd" in
+  cloudflare:realip)
+    if [[ "$#" -ne 3 || "${2:-}" != "--action" || "${3:-}" != "status" ]]; then
+      echo "AidiPanel web command not allowed: cloudflare:realip is status-only" >&2
+      exit 126
+    fi
+    ;;
+  security:ip-block)
+    ipb_action=""; ipb_count=0; ipb_prev=""
+    for ipb_arg in "$@"; do
+      [[ "$ipb_prev" == "--action" ]] && { ipb_action="$ipb_arg"; ipb_count=$((ipb_count + 1)); }
+      ipb_prev="$ipb_arg"
+    done
+    if [[ "$ipb_count" -ne 1 ]]; then
+      echo "AidiPanel web command not allowed: security:ip-block needs exactly one --action" >&2
+      exit 126
+    fi
+    case "$ipb_action" in
+      status|get|set|disable) ;;
+      *)
+        echo "AidiPanel web command not allowed: security:ip-block action '${ipb_action}'" >&2
+        exit 126
+        ;;
+    esac
+    ;;
+  security:cloudflare-only)
+    cfo_action=""; cfo_count=0; cfo_prev=""
+    for cfo_arg in "$@"; do
+      [[ "$cfo_prev" == "--action" ]] && { cfo_action="$cfo_arg"; cfo_count=$((cfo_count + 1)); }
+      cfo_prev="$cfo_arg"
+    done
+    if [[ "$cfo_count" -ne 1 ]]; then
+      echo "AidiPanel web command not allowed: security:cloudflare-only needs exactly one --action" >&2
+      exit 126
+    fi
+    case "$cfo_action" in
+      status|enable|disable) ;;
+      *)
+        echo "AidiPanel web command not allowed: security:cloudflare-only action '${cfo_action}'" >&2
+        exit 126
+        ;;
+    esac
+    ;;
   site:add|site:delete|site:list|vhost:save|\
   cache:page|cache:redis|cache:zone|cache:status|cache:purge|cache:enable|cache:disable|\
   cache:config|cache:redis-enable|cache:redis-disable|cache:redis-flush|cache:opcache-restart|\
@@ -1776,6 +1818,13 @@ CRONFILE
 
   chmod 644 /etc/cron.d/aidipanel
   ok "Cron jobs configured"
+}
+
+_provision_cloudflare_realip() {
+  log "Provisioning the global Cloudflare real-IP foundation..."
+  [[ "$DRY_RUN" == "true" ]] && { warn "[dry-run] skipping Cloudflare real-IP provision"; return 0; }
+  /usr/local/bin/aidipanel cloudflare:realip --action provision >> "$PANEL_LOG" 2>&1
+  ok "Cloudflare real-IP foundation provisioned"
 }
 
 # ---------------------------------------------------------------------------
@@ -2017,6 +2066,7 @@ main() {
   _deploy_panel_app;      ui_ok "Web UI deployed"
   _setup_cron;            ui_ok "Maintenance cron configured"
   _test_and_start_services
+  _provision_cloudflare_realip; ui_ok "Cloudflare real-IP foundation configured"
   ui_elapsed "$t"
 
   _health_check
