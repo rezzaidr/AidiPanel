@@ -44,6 +44,9 @@ $cfRanges = (int) ($cloudflareInfo['ranges_v4'] ?? 0) . ' IPv4 · '
     . (int) ($cloudflareInfo['ranges_v6'] ?? 0) . ' IPv6';
 $cfError = (string) ($cloudflareInfo['error'] ?? '');
 $cfStale = ($cloudflareInfo['warning'] ?? '') === 'stale';
+$cloudflareOnlyInfo = $cloudflareOnlyInfo ?? [];
+$cfoEnabled = ($cloudflareOnlyInfo['enabled'] ?? '0') === '1';
+$cfoError = (string) ($cloudflareOnlyInfo['error'] ?? '');
 
 $appIcon = static function (string $type): string {
     return match ($type) {
@@ -2005,6 +2008,20 @@ $tabs = [
       'status_unavailable'      => t('site.security.cloudflare.error.status_unavailable'),
       default                   => '',
   };
+  // Direct-origin rejection (Cloudflare-only) depends on a healthy, active global
+  // real-IP foundation. The CLI is the final guard; the panel mirrors it for UX.
+  $cfoDependencyOk = $cfErrorMessage === '' && $cfEnabled && !$cfStale;
+  $cfoErrorMessage = match ($cfoError) {
+      'busy'                 => t('site.security.cloudflare_only.error.busy'),
+      'dependency_unhealthy' => t('site.security.cloudflare_only.error.dependency'),
+      'sibling_drift'        => t('site.security.cloudflare_only.error.sibling_drift'),
+      'marker_drift', 'missing_marker', 'state_mismatch',
+      'missing_state', 'malformed_state'
+                             => t('site.security.cloudflare_only.error.drift'),
+      'status_unavailable'   => t('site.security.cloudflare_only.error.status_unavailable'),
+      ''                     => '',
+      default                => t('site.security.cloudflare_only.error.generic'),
+  };
   ?>
   <div class="space-y-4" x-data="{ enabled: <?= $baEnabled ? 'true' : 'false' ?>, scope: '<?= e($baScope) ?>' }">
     <?php if ($driftMessage !== ''): ?>
@@ -2204,7 +2221,11 @@ $tabs = [
         </div>
       </form>
 
-      <div class="card" data-security-card="cloudflare-protection">
+      <form method="POST" action="/sites/<?= e($domain) ?>/security/cloudflare-only"
+            class="card overflow-hidden" data-security-card="cloudflare-protection"
+            x-data="{ cfo: <?= $cfoEnabled ? 'true' : 'false' ?> }">
+        <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+        <input type="hidden" name="enabled" value="0">
         <div class="p-5 space-y-4">
           <div class="flex items-start justify-between gap-4">
             <div class="flex items-start gap-3">
@@ -2245,16 +2266,53 @@ $tabs = [
               <dt class="text-zinc-400"><?= e(t('site.security.cloudflare.ranges')) ?></dt>
               <dd class="mt-0.5 font-medium text-zinc-700"><?= e($cfRanges) ?></dd>
             </div>
-            <div>
-              <dt class="text-zinc-400"><?= e(t('site.security.cloudflare.direct_origin_later')) ?></dt>
-              <dd class="mt-0.5 font-medium text-zinc-500"><?= e(t('common.soon')) ?></dd>
-            </div>
           </dl>
           <?php endif; ?>
 
           <p class="text-[11px] leading-relaxed text-zinc-500"><?= e(t('site.security.cloudflare.identity_hint')) ?></p>
+
+          <?php $cfoCanToggle = $cfoDependencyOk || $cfoEnabled; ?>
+          <div class="border-t border-zinc-100 pt-4 space-y-3" data-security-row="cloudflare-only">
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <h4 class="text-sm font-semibold text-zinc-800">
+                  <?= e(t('site.security.cloudflare_only.label')) ?>
+                  <?php if ($cfoErrorMessage !== ''): ?>
+                  <span class="badge badge-muted"><span class="dot bg-red-500"></span><?= e(t('site.security.cloudflare.status_error')) ?></span>
+                  <?php endif; ?>
+                </h4>
+                <p class="text-xs text-zinc-500 mt-1"><?= e(t('site.security.cloudflare_only.desc')) ?></p>
+              </div>
+              <label class="inline-flex items-center gap-2 <?= $cfoCanToggle ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed' ?>" data-security-toggle="cloudflare-only">
+                <span class="text-[11px] font-medium text-zinc-500"
+                      x-text="cfo ? '<?= e(t('site.security.protection_on')) ?>' : '<?= e(t('site.security.protection_off')) ?>'"></span>
+                <input type="checkbox" name="enabled" value="1" x-model="cfo" class="sr-only" <?= $cfoCanToggle ? '' : 'disabled' ?>>
+                <span aria-hidden="true" :class="cfo ? 'sw-on' : 'sw-off'"><span></span></span>
+              </label>
+            </div>
+
+            <?php if ($cfoErrorMessage !== ''): ?>
+            <div class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"><?= e($cfoErrorMessage) ?></div>
+            <?php endif; ?>
+
+            <?php if (!$cfoDependencyOk): ?>
+            <div class="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200/70 px-3 py-2">
+              <i class="ti ti-alert-triangle text-amber-600 mt-0.5 text-sm"></i>
+              <p class="text-[11px] text-amber-800 leading-relaxed"><?= e(t('site.security.cloudflare_only.requires')) ?></p>
+            </div>
+            <?php endif; ?>
+
+            <p class="text-[11px] leading-relaxed text-zinc-500"><?= e(t('site.security.cloudflare_only.boundary')) ?></p>
+            <p class="text-[11px] leading-relaxed text-zinc-400"><i class="ti ti-info-circle"></i> <?= e(t('site.security.cloudflare_only.recovery')) ?></p>
+
+            <div class="flex justify-end">
+              <button type="submit" class="btn btn-primary" <?= $cfoCanToggle ? '' : 'disabled' ?>>
+                <i class="ti ti-device-floppy text-sm"></i> <?= e(t('site.security.save')) ?>
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+      </form>
 
       <div class="card opacity-70 md:col-span-2">
         <div class="p-5 flex items-start justify-between gap-4">

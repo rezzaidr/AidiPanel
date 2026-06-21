@@ -406,6 +406,7 @@ _usage() {
   echo -e "\n${BOLD}${BLUE}Site Security${RESET}"
   echo "  security:basic-auth  Manage per-site HTTP Basic Authentication"
   echo "  security:ip-block    Manage per-site IP deny list (--action status|get|set|disable)"
+  echo "  security:cloudflare-only  Reject direct-origin HTTPS requests (--action status|enable|disable)"
   echo "  cloudflare:realip    Manage global Cloudflare real-IP restoration (--action status|provision|enable|refresh|disable)"
 
   echo -e "\n${BOLD}${BLUE}Database Management${RESET}"
@@ -965,19 +966,27 @@ _site_delete() {
   force=$(_opt "force" "false"); expect_user=$(_opt "user" "")
   [[ "$force" == "true" ]] && yes="true"     # back-compat: --force == non-interactive (keep-home)
 
-  # Resolve site_user from the vhost root (works for ALL types incl static/proxy);
+  if [[ "$purge" == "true" ]]; then
+    [[ "$yes" == "true" ]] || die "Refusing purge without --yes (no interactive TTY through the web wrapper)."
+  elif [[ "$yes" != "true" ]]; then
+    echo -e "${RED}WARNING: removes vhost + PHP-FPM pool + databases for ${domain} (home kept).${RESET}"
+    _confirm "Delete site '${domain}'?" || { log "Cancelled."; return 0; }
+  fi
+
+  # Site deletion removes Cloudflare-only dependency state plus the shared vhost.
+  # Serialize it with global mutations first, then every per-site Security action.
+  _cloudflare_lock x || { echo "error=busy"; return 3; }
+  _security_lock "$domain" x || { echo "error=busy"; return 3; }
+
+  # Resolve site_user from the now-locked vhost root (all types incl static/proxy);
   # php_ver from the FPM socket if present (none for static/proxy -> no pool).
   local conf="${NGINX_CONF_DIR}/${domain}.conf"
   local site_user php_ver
   site_user=$(grep -oP '^\s*root\s+/home/\K[^/;]+' "$conf" 2>/dev/null | head -1 || echo "")
   php_ver=$(grep -oP 'php\K[0-9.]+(?=-fpm)' "$conf" 2>/dev/null | head -1 || echo "")
-
   if [[ "$purge" == "true" ]]; then
-    [[ "$yes" == "true" ]] || die "Refusing purge without --yes (no interactive TTY through the web wrapper)."
-    _site_purge_guard "$domain" "$site_user" "$expect_user" || die "Purge refused for ${domain} (marker validation failed)."
-  elif [[ "$yes" != "true" ]]; then
-    echo -e "${RED}WARNING: removes vhost + PHP-FPM pool + databases for ${domain} (home kept).${RESET}"
-    _confirm "Delete site '${domain}'?" || { log "Cancelled."; return 0; }
+    _site_purge_guard "$domain" "$site_user" "$expect_user" \
+      || die "Purge refused for ${domain} (marker validation failed)."
   fi
 
   # Teardown (both modes)
@@ -2777,6 +2786,110 @@ _security_ipblock_inc() {
   printf '/etc/nginx/conf.d/aidipanel-ipblock-%s.conf' "$(_security_id "$1")"
 }
 
+_security_cfonly_state() {
+  printf '%s/cloudflare-only.state' "$(_security_dir "$1")"
+}
+
+_security_cfonly_state_render() {
+  local target="$1" enabled="$2"
+  [[ "$enabled" == 0 || "$enabled" == 1 ]] || return 1
+  printf 'schema=1\nenabled=%s\n' "$enabled" > "$target" || return 1
+  chmod 0600 "$target"
+}
+
+_security_cfonly_state_get() {
+  local file="$1" wanted="$2" key value extra
+  local schema="" enabled="" schema_seen=0 enabled_seen=0 lines=0
+  [[ "$wanted" == schema || "$wanted" == enabled ]] || return 1
+  [[ -f "$file" ]] || return 1
+  while IFS='=' read -r key value extra || [[ -n "$key$value$extra" ]]; do
+    lines=$((lines + 1))
+    [[ -z "$extra" ]] || return 1
+    case "$key" in
+      schema)
+        schema_seen=$((schema_seen + 1)); schema="$value"
+        ;;
+      enabled)
+        enabled_seen=$((enabled_seen + 1)); enabled="$value"
+        ;;
+      *) return 1 ;;
+    esac
+  done < "$file"
+  [[ "$lines" -eq 2 && "$schema_seen" -eq 1 && "$enabled_seen" -eq 1 ]] || return 1
+  [[ "$schema" == 1 && ( "$enabled" == 0 || "$enabled" == 1 ) ]] || return 1
+  if [[ "$wanted" == schema ]]; then printf '%s' "$schema"; else printf '%s' "$enabled"; fi
+}
+
+_security_cfonly_render_marker() {
+  local target="$1"
+  {
+    printf '    # >>> AIDIPANEL_CLOUDFLARE_ONLY >>>\n'
+    printf '    if ($aidipanel_from_cloudflare = 0) { return 403; }\n'
+    printf '    # <<< AIDIPANEL_CLOUDFLARE_ONLY <<<\n'
+  } > "$target"
+}
+
+_security_cfonly_dependency_healthy() {
+  local body="$1" enabled error
+  enabled=$(printf '%s\n' "$body" | awk -F= '$1=="enabled"{print substr($0,9); n++} END{if(n!=1)exit 1}') \
+    || return 1
+  error=$(printf '%s\n' "$body" | awk -F= '$1=="error"{print substr($0,7); n++} END{if(n!=1)exit 1}') \
+    || return 1
+  [[ "$enabled" == 1 && -z "$error" ]]
+}
+
+# Return one marker-integrity code: ok, missing_marker, duplicate_marker,
+# misplaced_marker, or misordered_marker. It never rewrites the vhost.
+_security_cfonly_marker_status() {
+  local conf="$1" global_starts global_ends result
+  [[ -f "$conf" ]] || { printf 'missing_marker'; return 0; }
+  global_starts=$(grep -cF '# >>> AIDIPANEL_CLOUDFLARE_ONLY >>>' "$conf" 2>/dev/null || true)
+  global_ends=$(grep -cF '# <<< AIDIPANEL_CLOUDFLARE_ONLY <<<' "$conf" 2>/dev/null || true)
+  if [[ "$global_starts" -eq 0 && "$global_ends" -eq 0 ]]; then printf 'missing_marker'; return 0; fi
+  if [[ "$global_starts" -gt 1 || "$global_ends" -gt 1 ]]; then printf 'duplicate_marker'; return 0; fi
+  if [[ "$global_starts" -ne 1 || "$global_ends" -ne 1 ]]; then printf 'missing_marker'; return 0; fi
+  result=$(awk '
+    function delta(s, a,b,t){t=s;a=gsub(/\{/ ,"{",t);t=s;b=gsub(/\}/,"}",t);return a-b}
+    function flush( i,tok,idx,last,type,seen_name){
+      type="other"; last=0; seen_name=0
+      for(i=1;i<=n;i++){
+        if(buf[i] ~ /listen[[:space:]]+(\[::\]:)?443[[:space:]]+ssl([[:space:]]|;)/) type="tls"
+        else if(type=="other" && buf[i] ~ /listen[[:space:]]+(\[::\]:)?80[[:space:]]*;/) type="http"
+      }
+      if(type=="tls") tls_blocks++
+      for(i=1;i<=n;i++){
+        if(buf[i] ~ /^[[:space:]]*server_name[[:space:]]+[^;]+;[[:space:]]*$/) seen_name=1
+        if(buf[i] !~ /# >>> AIDIPANEL_[A-Z_]+ >>>/) continue
+        tok=buf[i]; sub(/.*# >>> /,"",tok); sub(/ >>>.*/,"",tok)
+        idx=0
+        if(tok=="AIDIPANEL_CLOUDFLARE_ONLY") idx=1
+        else if(tok=="AIDIPANEL_IP_BLOCK") idx=2
+        else if(tok=="AIDIPANEL_BASIC_AUTH") idx=3
+        if(tok=="AIDIPANEL_CLOUDFLARE_ONLY"){
+          starts++; if(type=="tls") in_tls++; else misplaced=1
+          if(type=="tls" && !seen_name) bad_anchor=1
+        }
+        if(type=="tls" && idx>0){if(last>idx) misordered=1; last=idx}
+      }
+      for(i=1;i<=n;i++) if(buf[i] ~ /# <<< AIDIPANEL_CLOUDFLARE_ONLY <<</) ends++
+      n=0
+    }
+    !inb && /^[[:space:]]*server[[:space:]]*\{/ {inb=1;n=0;buf[++n]=$0;depth=delta($0);if(depth<=0){flush();inb=0};next}
+    inb {buf[++n]=$0;depth+=delta($0);if(depth<=0){flush();inb=0};next}
+    END{
+      if(starts==0 && ends==0){print "missing_marker";exit}
+      if(starts>1 || ends>1){print "duplicate_marker";exit}
+      if(starts!=1 || ends!=1){print "missing_marker";exit}
+      if(tls_blocks!=1 || bad_anchor){print "marker_drift";exit}
+      if(misplaced || in_tls!=1){print "misplaced_marker";exit}
+      if(misordered){print "misordered_marker";exit}
+      print "ok"
+    }
+  ' "$conf") || return 1
+  [[ "$result" != missing_marker ]] || result=misplaced_marker
+  printf '%s' "$result"
+}
+
 _security_scope_valid() {
   [[ "$1" == "site" || "$1" == "wp-login" || "$1" == "custom" ]]
 }
@@ -3209,7 +3322,7 @@ _security_tx_exit_trap() {
   trap - EXIT
   set +e
   if [[ "$SECURITY_TX_ACTIVE" == 1 && "$SECURITY_TX_DIRTY" == 1 ]]; then
-    warn "Basic Auth transaction was interrupted; restoring the previous configuration."
+    warn "Security transaction was interrupted; restoring the previous configuration."
     _security_tx_restore || restore_rc=1
     if [[ "$restore_rc" -eq 0 ]]; then
       if nginx -t >> "$CLI_LOG" 2>&1; then
@@ -3219,7 +3332,7 @@ _security_tx_exit_trap() {
       fi
     fi
     if [[ "$restore_rc" -ne 0 || "$reload_rc" -ne 0 ]]; then
-      warn "Interrupted Basic Auth rollback was incomplete. Inspect nginx immediately."
+      warn "Interrupted Security rollback was incomplete. Inspect nginx immediately."
     fi
   fi
   _security_tx_cleanup
@@ -3283,7 +3396,7 @@ _security_reload_transaction() {
   if nginx -t >> "$CLI_LOG" 2>&1 && systemctl reload nginx >> "$CLI_LOG" 2>&1; then
     return 0
   fi
-  warn "Nginx rejected the Basic Auth change; restoring the previous configuration."
+  warn "Nginx rejected the Security change; restoring the previous configuration."
   _security_tx_restore || return 1
   nginx -t >> "$CLI_LOG" 2>&1 || return 1
   systemctl reload nginx >> "$CLI_LOG" 2>&1 || return 1
@@ -3599,9 +3712,9 @@ _security_lock() {
   return 0
 }
 
-# IP Blocking status (read lock). Keys: enabled, entry_count, list_sha256,
-# realip_active, error. Never echoes list content.
-_security_ipblock_status() {
+# IP Blocking status with the per-site lock already held. Keys: enabled,
+# entry_count, list_sha256, realip_active, error. Never echoes list content.
+_security_ipblock_status_locked() {
   local domain="$1"
   local conf="${NGINX_CONF_DIR}/${domain}.conf"
   local list state inc cf_state
@@ -3610,10 +3723,6 @@ _security_ipblock_status() {
   local stored_enabled enabled=0 entry_count=0 list_sha256="" error="" realip_active=0
   local starts ends actual_count actual_sha tmp
 
-  if ! _security_lock "$domain" s; then
-    printf 'enabled=0\nentry_count=0\nlist_sha256=\nrealip_active=0\nerror=busy\n'
-    return 0
-  fi
   grep -q '^enabled=1$' "$cf_state" 2>/dev/null && realip_active=1
 
   stored_enabled=$(_security_state_value "$state" enabled)
@@ -3653,6 +3762,15 @@ _security_ipblock_status() {
   printf 'list_sha256=%s\n' "$list_sha256"
   printf 'realip_active=%s\n' "$realip_active"
   printf 'error=%s\n' "$error"
+}
+
+_security_ipblock_status() {
+  local domain="$1"
+  if ! _security_lock "$domain" s; then
+    printf 'enabled=0\nentry_count=0\nlist_sha256=\nrealip_active=0\nerror=busy\n'
+    return 0
+  fi
+  _security_ipblock_status_locked "$domain"
 }
 
 # Read-only transport for the saved list (the panel textarea). stdout = canonical
@@ -3792,14 +3910,238 @@ _security_ipblock() {
   esac
 }
 
+_security_cfonly_siblings_valid() {
+  local domain="$1" basic ip basic_error ip_error
+  basic=$(_security_status "$domain") || return 1
+  basic_error=$(printf '%s\n' "$basic" \
+    | awk -F= '$1=="error"{print substr($0,7); n++} END{if(n!=1)exit 1}') || return 1
+  [[ -z "$basic_error" ]] || return 1
+  ip=$(_security_ipblock_status_locked "$domain") || return 1
+  ip_error=$(printf '%s\n' "$ip" \
+    | awk -F= '$1=="error"{print substr($0,7); n++} END{if(n!=1)exit 1}') || return 1
+  [[ -z "$ip_error" ]]
+}
+
+_security_cfonly_status() {
+  local domain="$1" global_status="${2:-}"
+  local conf="${NGINX_CONF_DIR}/${domain}.conf" state stored="" marker error="" enabled=0
+  state=$(_security_cfonly_state "$domain")
+  [[ -n "$global_status" ]] || global_status=$(_cloudflare_status)
+  marker=$(_security_cfonly_marker_status "$conf")
+
+  if [[ -f "$state" ]]; then
+    if ! stored=$(_security_cfonly_state_get "$state" enabled 2>/dev/null); then
+      error=malformed_state
+    fi
+  elif [[ "$marker" != missing_marker ]]; then
+    error=missing_state
+  fi
+
+  if [[ -z "$error" && "$stored" == 1 ]]; then
+    if [[ "$marker" != ok ]]; then
+      error="$marker"
+    elif [[ "$(grep -cF 'if ($aidipanel_from_cloudflare = 0) { return 403; }' "$conf" 2>/dev/null || true)" -ne 1 ]]; then
+      error=marker_drift
+    elif ! _security_cfonly_siblings_valid "$domain"; then
+      error=sibling_drift
+    elif ! _security_cfonly_dependency_healthy "$global_status"; then
+      error=dependency_unhealthy
+    else
+      enabled=1
+    fi
+  elif [[ -z "$error" && "$stored" == 0 ]]; then
+    [[ "$marker" == missing_marker ]] || error=state_mismatch
+  fi
+
+  printf 'enabled=%s\n' "$enabled"
+  printf 'realip_required=1\n'
+  printf 'error=%s\n' "$error"
+}
+
+_security_cfonly_enable_locked() {
+  local domain="$1" global_status="$2"
+  local conf="${NGINX_CONF_DIR}/${domain}.conf" state dir tmp status error enabled
+  local reload_rc install_restore_rc=0
+  state=$(_security_cfonly_state "$domain"); dir=$(_security_dir "$domain")
+
+  status=$(_security_cfonly_status "$domain" "$global_status") || return 1
+  error=$(printf '%s\n' "$status" | awk -F= '$1=="error"{print substr($0,7)}')
+  enabled=$(printf '%s\n' "$status" | awk -F= '$1=="enabled"{print $2}')
+  if [[ -n "$error" ]]; then echo "error=${error}"; return 1; fi
+  if [[ "$enabled" == 1 ]]; then printf 'enabled=1\n'; return 0; fi
+  _security_cfonly_dependency_healthy "$global_status" \
+    || { echo 'error=dependency_unhealthy'; return 1; }
+  _security_cfonly_siblings_valid "$domain" \
+    || { echo 'error=sibling_drift'; return 1; }
+
+  tmp=$(mktemp -d /tmp/aidipanel-cfonly-build.XXXXXX) || { echo 'error=tmp'; return 1; }
+  _security_cfonly_render_marker "${tmp}/marker"
+  if ! _security_vhost_edit "$conf" "${tmp}/vhost" enable "${tmp}/marker" cloudflare_only; then
+    rm -rf "$tmp"; echo 'error=vhost_edit'; return 1
+  fi
+  _security_cfonly_state_render "${tmp}/state" 1 \
+    || { rm -rf "$tmp"; echo 'error=state_render'; return 1; }
+
+  _security_tx_begin "$conf" "$state" \
+    || { rm -rf "$tmp"; _security_tx_cleanup; die "Could not snapshot Cloudflare-only state."; }
+  SECURITY_TX_DIRTY=1
+  if ! install -d -o root -g root -m 0755 /etc/nginx/aidipanel \
+    || ! install -d -o root -g www-data -m 0750 /etc/nginx/aidipanel/security "$dir" \
+    || ! _security_install_file "${tmp}/vhost" "$conf" root root 0644 \
+    || ! _security_install_file "${tmp}/state" "$state" root root 0600; then
+    _security_tx_restore || install_restore_rc=1
+    _security_tx_cleanup; rm -rf "$tmp"
+    [[ "$install_restore_rc" -eq 0 ]] \
+      && die "Could not install Cloudflare-only; the previous state was restored." \
+      || die "Could not install Cloudflare-only and rollback was incomplete. Inspect nginx immediately."
+  fi
+  rm -rf "$tmp"
+  if _security_reload_transaction; then reload_rc=0; else reload_rc=$?; fi
+  if [[ "$reload_rc" -ne 0 ]]; then
+    _security_tx_cleanup
+    [[ "$reload_rc" -eq 2 ]] \
+      && { echo 'error=nginx_rejected'; return 2; } \
+      || die "Cloudflare-only rollback could not reload the previous configuration. Inspect nginx immediately."
+  fi
+  _security_tx_cleanup
+  _cache_purge_domain "$domain" >/dev/null 2>&1 || true
+  printf 'enabled=1\n'
+  ok "Direct-origin rejection enabled for ${domain}."
+}
+
+_security_cfonly_disable_locked() {
+  local domain="$1"
+  local conf="${NGINX_CONF_DIR}/${domain}.conf" state stored="" marker dir tmp
+  local reload_rc install_restore_rc=0
+  state=$(_security_cfonly_state "$domain"); dir=$(_security_dir "$domain")
+  marker=$(_security_cfonly_marker_status "$conf")
+
+  if [[ ! -f "$state" && "$marker" == missing_marker ]]; then
+    printf 'enabled=0\n'; return 0
+  fi
+  if [[ ! -f "$state" ]]; then echo 'error=missing_state'; return 1; fi
+  if ! stored=$(_security_cfonly_state_get "$state" enabled 2>/dev/null); then
+    echo 'error=malformed_state'; return 1
+  fi
+  if [[ "$stored" == 0 ]]; then
+    [[ "$marker" == missing_marker ]] || { echo 'error=state_mismatch'; return 1; }
+    printf 'enabled=0\n'; return 0
+  fi
+  [[ "$marker" == ok ]] || { echo "error=${marker}"; return 1; }
+  [[ "$(grep -cF 'if ($aidipanel_from_cloudflare = 0) { return 403; }' "$conf" 2>/dev/null || true)" -eq 1 ]] \
+    || { echo 'error=marker_drift'; return 1; }
+  _security_cfonly_siblings_valid "$domain" \
+    || { echo 'error=sibling_drift'; return 1; }
+
+  tmp=$(mktemp -d /tmp/aidipanel-cfonly-build.XXXXXX) || { echo 'error=tmp'; return 1; }
+  if ! _security_vhost_edit "$conf" "${tmp}/vhost" disable /dev/null cloudflare_only; then
+    rm -rf "$tmp"; echo 'error=vhost_edit'; return 1
+  fi
+  _security_cfonly_state_render "${tmp}/state" 0 \
+    || { rm -rf "$tmp"; echo 'error=state_render'; return 1; }
+
+  _security_tx_begin "$conf" "$state" \
+    || { rm -rf "$tmp"; _security_tx_cleanup; die "Could not snapshot Cloudflare-only state."; }
+  SECURITY_TX_DIRTY=1
+  if ! install -d -o root -g root -m 0755 /etc/nginx/aidipanel \
+    || ! install -d -o root -g www-data -m 0750 /etc/nginx/aidipanel/security "$dir" \
+    || ! _security_install_file "${tmp}/vhost" "$conf" root root 0644 \
+    || ! _security_install_file "${tmp}/state" "$state" root root 0600; then
+    _security_tx_restore || install_restore_rc=1
+    _security_tx_cleanup; rm -rf "$tmp"
+    [[ "$install_restore_rc" -eq 0 ]] \
+      && die "Could not disable Cloudflare-only; the previous state was restored." \
+      || die "Could not disable Cloudflare-only and rollback was incomplete. Inspect nginx immediately."
+  fi
+  rm -rf "$tmp"
+  if _security_reload_transaction; then reload_rc=0; else reload_rc=$?; fi
+  if [[ "$reload_rc" -ne 0 ]]; then
+    _security_tx_cleanup
+    [[ "$reload_rc" -eq 2 ]] \
+      && { echo 'error=nginx_rejected'; return 2; } \
+      || die "Cloudflare-only rollback could not reload the previous configuration. Inspect nginx immediately."
+  fi
+  _security_tx_cleanup
+  _cache_purge_domain "$domain" >/dev/null 2>&1 || true
+  printf 'enabled=0\n'
+  ok "Direct-origin rejection disabled for ${domain}."
+}
+
+_security_cloudflare_only() {
+  _require_root "security:cloudflare-only"
+  local domain="" action="" domain_seen=0 action_seen=0 mode global_status
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --domain)
+        [[ "$domain_seen" == 0 && $# -ge 2 && -n "${2:-}" ]] \
+          || { die "Missing or duplicate required option: --domain"; return 1; }
+        domain_seen=1; domain="$2"; shift 2
+        ;;
+      --domain=*)
+        [[ "$domain_seen" == 0 && -n "${1#--domain=}" ]] \
+          || { die "Missing or duplicate required option: --domain"; return 1; }
+        domain_seen=1; domain="${1#--domain=}"; shift
+        ;;
+      --action)
+        [[ "$action_seen" == 0 && $# -ge 2 && -n "${2:-}" ]] \
+          || { die "Missing or duplicate required option: --action"; return 1; }
+        action_seen=1; action="$2"; shift 2
+        ;;
+      --action=*)
+        [[ "$action_seen" == 0 && -n "${1#--action=}" ]] \
+          || { die "Missing or duplicate required option: --action"; return 1; }
+        action_seen=1; action="${1#--action=}"; shift
+        ;;
+      *) die "Unknown option for security:cloudflare-only: $1"; return 1 ;;
+    esac
+  done
+  [[ "$domain_seen" == 1 ]] || { die "Missing required option: --domain"; return 1; }
+  [[ "$action_seen" == 1 ]] || { die "Missing required option: --action"; return 1; }
+  case "$action" in status) mode=s ;; enable|disable) mode=x ;; *) die "Unknown action: ${action}. Use status enable disable"; return 1 ;; esac
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
+
+  if ! _cloudflare_lock "$mode"; then
+    [[ "$action" == status ]] \
+      && printf 'enabled=0\nrealip_required=1\nerror=busy\n' \
+      || echo 'error=busy'
+    return 3
+  fi
+  if ! _security_lock "$domain" "$mode"; then
+    [[ "$action" == status ]] \
+      && printf 'enabled=0\nrealip_required=1\nerror=busy\n' \
+      || echo 'error=busy'
+    return 3
+  fi
+  _domain_exists "$domain" || die "Site not found: ${domain}"
+  global_status=$(_cloudflare_status_locked)
+  case "$action" in
+    status)  _security_cfonly_status "$domain" "$global_status" ;;
+    enable)  _security_cfonly_enable_locked "$domain" "$global_status" ;;
+    disable) _security_cfonly_disable_locked "$domain" ;;
+  esac
+}
+
 _security_basic_auth() {
   _require_root "security:basic-auth"
   _parse_opts "$@"
-  local domain action scope username path bypass_raw bypass_ips
+  local domain action scope username path bypass_raw bypass_ips lock_mode
   domain=$(_opt "domain")
   action=$(_opt "action" "status")
   _require_arg "domain" "$domain" "security:basic-auth --domain example.com --action status"
   _domain_valid "$domain" || die "Invalid domain name: ${domain}"
+  case "$action" in
+    status) lock_mode=s ;;
+    enable|disable) lock_mode=x ;;
+    *) die "Unknown Basic Auth action: ${action}. Use: status, enable, or disable." ;;
+  esac
+  if ! _security_lock "$domain" "$lock_mode"; then
+    if [[ "$action" == status ]]; then
+      printf 'enabled=0\nscope=\npath=\nusername=\nbypass_ips=\nhtpasswd_exists=0\nforce_https=0\nerror=busy\n'
+    else
+      echo 'error=busy'
+    fi
+    return 3
+  fi
   _domain_exists "$domain" || die "Site not found: ${domain}"
 
   case "$action" in
@@ -3832,9 +4174,6 @@ _security_basic_auth() {
       ;;
     disable)
       _security_disable "$domain" "$(_opt "purge" "false")"
-      ;;
-    *)
-      die "Unknown Basic Auth action: ${action}. Use: status, enable, or disable."
       ;;
   esac
 }
@@ -5861,15 +6200,27 @@ _cloudflare_cron_matches() {
   [[ "$actual" == "$expected" ]]
 }
 
-_cloudflare_cfonly_dependents() {
-  local root count=0 f
+_cloudflare_cfonly_dependent_domains() {
+  local root f domain enabled
   root="$(_cloudflare_security_root)"
   shopt -s nullglob
   for f in "$root"/*/cloudflare-only.state; do
-    grep -q '^enabled=1' "$f" 2>/dev/null && count=$((count + 1))
+    if ! enabled=$(_security_cfonly_state_get "$f" enabled 2>/dev/null); then
+      shopt -u nullglob
+      return 1
+    fi
+    if [[ "$enabled" == 1 ]]; then
+      domain=$(basename "$(dirname "$f")")
+      printf '%s\n' "$domain"
+    fi
   done
   shopt -u nullglob
-  printf '%s' "$count"
+}
+
+_cloudflare_cfonly_dependents() {
+  local domains
+  domains=$(_cloudflare_cfonly_dependent_domains) || return 1
+  if [[ -z "$domains" ]]; then printf '0'; else printf '%s\n' "$domains" | grep -c .; fi
 }
 
 # --- rollback transaction over the global artifacts (config + state share it) --
@@ -6197,10 +6548,14 @@ _cloudflare_refresh() {
 _cloudflare_disable() {
   _require_root "cloudflare:realip --action disable"
   _cloudflare_lock x || { echo "error=busy"; return 3; }
-  local deps live state source last tmp
-  deps=$(_cloudflare_cfonly_dependents)
-  if [[ "${deps:-0}" -gt 0 ]]; then
-    echo "error=cfonly_dependents:${deps}"
+  local deps deps_csv live state source last tmp
+  if ! deps=$(_cloudflare_cfonly_dependent_domains); then
+    echo "error=cfonly_dependency_drift"
+    return 1
+  fi
+  if [[ -n "$deps" ]]; then
+    deps_csv=$(printf '%s\n' "$deps" | paste -sd, -)
+    echo "error=cfonly_dependents:${deps_csv}"
     return 1
   fi
   live="$(_cloudflare_live_path)"; state="$(_cloudflare_state_path)"
@@ -6243,8 +6598,7 @@ _cloudflare_status_empty() {
   echo "error=${error}"
 }
 
-_cloudflare_status() {
-  _cloudflare_lock s || { _cloudflare_status_empty busy; return 0; }
+_cloudflare_status_locked() {
   local state live conf cron seed_path enabled source seed last v4 v6 sha
   state="$(_cloudflare_state_path)"; live="$(_cloudflare_live_path)"
   conf="$(_cloudflare_conf_path)"; cron="$(_cloudflare_cron_path)"
@@ -6312,7 +6666,10 @@ _cloudflare_status() {
   fi
   [[ -n "$tmp" ]] && rm -rf -- "$tmp"
 
-  deps=$(_cloudflare_cfonly_dependents)
+  if ! deps=$(_cloudflare_cfonly_dependents); then
+    deps=0
+    [[ -n "$error" ]] || error=cfonly_dependency_drift
+  fi
   echo "schema=1"
   echo "enabled=${enabled}"
   echo "source=${source}"
@@ -6327,6 +6684,11 @@ _cloudflare_status() {
   echo "sha256=${sha}"
   echo "cfonly_dependents=${deps}"
   echo "error=${error}"
+}
+
+_cloudflare_status() {
+  _cloudflare_lock s || { _cloudflare_status_empty busy; return 0; }
+  _cloudflare_status_locked
 }
 
 _cloudflare_realip() {
@@ -6410,6 +6772,7 @@ main() {
     # Site security
     security:basic-auth) _security_basic_auth "$@" ;;
     security:ip-block)   _security_ipblock "$@" ;;
+    security:cloudflare-only) _security_cloudflare_only "$@" ;;
 
     # Network rules (Slice 2)
     cloudflare:realip)   _cloudflare_realip "$@" ;;

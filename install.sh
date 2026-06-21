@@ -1663,6 +1663,24 @@ case "$cmd" in
         ;;
     esac
     ;;
+  security:cloudflare-only)
+    cfo_action=""; cfo_count=0; cfo_prev=""
+    for cfo_arg in "$@"; do
+      [[ "$cfo_prev" == "--action" ]] && { cfo_action="$cfo_arg"; cfo_count=$((cfo_count + 1)); }
+      cfo_prev="$cfo_arg"
+    done
+    if [[ "$cfo_count" -ne 1 ]]; then
+      echo "AidiPanel web command not allowed: security:cloudflare-only needs exactly one --action" >&2
+      exit 126
+    fi
+    case "$cfo_action" in
+      status|enable|disable) ;;
+      *)
+        echo "AidiPanel web command not allowed: security:cloudflare-only action '${cfo_action}'" >&2
+        exit 126
+        ;;
+    esac
+    ;;
   site:add|site:delete|site:list|vhost:save|\
   cache:page|cache:redis|cache:zone|cache:status|cache:purge|cache:enable|cache:disable|\
   cache:config|cache:redis-enable|cache:redis-disable|cache:redis-flush|cache:opcache-restart|\

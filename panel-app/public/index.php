@@ -78,6 +78,7 @@ $router->post('/sites/{domain}/ssl/use',     'SiteSslController@useCert');
 $router->get('/api/ssl/check',               'SiteSslController@check');
 $router->post('/sites/{domain}/security/basic-auth', 'SiteSecurityController@basicAuth');
 $router->post('/sites/{domain}/security/ip-block', 'SiteSecurityController@ipBlock');
+$router->post('/sites/{domain}/security/cloudflare-only', 'SiteSecurityController@cloudflareOnly');
 
 // Database tab (Manage Site → Database): site-scoped database + user actions.
 $router->post('/sites/{domain}/database/add',         'SiteDatabaseController@addDatabase');

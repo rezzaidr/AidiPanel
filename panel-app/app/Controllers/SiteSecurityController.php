@@ -147,6 +147,52 @@ class SiteSecurityController extends BaseController
         $this->success('IP Blocking updated.', $redirect);
     }
 
+    public function cloudflareOnly(array $params = []): void
+    {
+        $domain = strtolower(trim((string) ($params['domain'] ?? '')));
+        $this->requireSite($domain);
+        $redirect = $this->tab($domain);
+
+        $action = $this->checked('enabled') ? 'enable' : 'disable';
+        $result = run_cli('security:cloudflare-only', [
+            '--domain', $domain,
+            '--action', $action,
+        ]);
+
+        if (!$result['success']) {
+            $verb = $action === 'enable' ? 'enable' : 'disable';
+            $this->error(
+                "Could not {$verb} direct-origin rejection: " . $this->cloudflareOnlyError((string) $result['output']),
+                $redirect
+            );
+        }
+
+        \Core\DB::log('security:cloudflare-only', ucfirst($action) . "d direct-origin rejection for {$domain}");
+        $this->success(
+            $action === 'enable' ? 'Direct-origin rejection enabled.' : 'Direct-origin rejection disabled.',
+            $redirect
+        );
+    }
+
+    private function cloudflareOnlyError(string $output): string
+    {
+        if (preg_match('/^error=([^\s:]+)/m', $output, $m)) {
+            $map = [
+                'dependency_unhealthy' => 'Cloudflare real-IP restoration must be active and healthy before direct-origin rejection can be enabled.',
+                'sibling_drift'        => 'Another Security feature on this site has drifted; resolve it before changing direct-origin rejection.',
+                'marker_drift'         => 'The direct-origin configuration has drifted from its saved state. Try again to reconcile it.',
+                'state_mismatch'       => 'The direct-origin configuration has drifted from its saved state. Try again to reconcile it.',
+                'missing_state'        => 'The direct-origin configuration has drifted from its saved state. Try again to reconcile it.',
+                'malformed_state'      => 'The direct-origin configuration has drifted from its saved state. Try again to reconcile it.',
+                'nginx_rejected'       => 'The web server rejected the change; the previous configuration was restored.',
+                'busy'                 => 'Another change is in progress for this site; please try again.',
+                'vhost_edit'           => 'The site vhost could not be edited (it needs exactly one HTTP and one HTTPS server block).',
+            ];
+            return $map[$m[1]] ?? 'The change could not be applied.';
+        }
+        return 'The change could not be applied.';
+    }
+
     private function ipBlockError(string $output): string
     {
         if (preg_match('/^error=(\S+)/m', $output, $m)) {

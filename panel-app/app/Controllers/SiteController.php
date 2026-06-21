@@ -307,6 +307,11 @@ class SiteController extends BaseController
             'error' => '',
         ];
         $ipBlockList = '';
+        $cloudflareOnlyInfo = [
+            'enabled' => '0',
+            'realip_required' => '1',
+            'error' => '',
+        ];
 
         if ($activeTab === 'performance') {
             $pageCacheInfo   = $this->getPageCacheInfo($domain);
@@ -400,6 +405,22 @@ class SiteController extends BaseController
                     $ipBlockList = rtrim((string) $listResult['output'], "\r\n");
                 }
             }
+
+            $result = run_cli('security:cloudflare-only', ['--domain', $domain, '--action', 'status']);
+            if ($result['success']) {
+                $allowed = array_fill_keys(array_keys($cloudflareOnlyInfo), true);
+                foreach (preg_split('/\R/', trim((string) $result['output'])) ?: [] as $line) {
+                    if (!str_contains($line, '=')) {
+                        continue;
+                    }
+                    [$key, $value] = explode('=', $line, 2);
+                    if (isset($allowed[$key])) {
+                        $cloudflareOnlyInfo[$key] = $value;
+                    }
+                }
+            } else {
+                $cloudflareOnlyInfo['error'] = 'status_unavailable';
+            }
         }
 
         // Database tab data (scoped to this site by its name prefix).
@@ -426,7 +447,7 @@ class SiteController extends BaseController
             'pageCacheInfo', 'objectCacheInfo', 'opcacheInfo', 'protocolInfo',
             'cacheConfig', 'lastPurge', 'cacheZoneSize', 'httpsOptions', 'certs',
             'databases', 'dbUsers', 'dbHost', 'dbPort', 'dbPrefix', 'pmaInstalled', 'pmaUrl', 'wpDbInfo',
-            'basicAuthInfo', 'cloudflareInfo', 'ipBlockInfo', 'ipBlockList'
+            'basicAuthInfo', 'cloudflareInfo', 'ipBlockInfo', 'ipBlockList', 'cloudflareOnlyInfo'
         ) + ['_full_bleed' => true]);
     }
 
