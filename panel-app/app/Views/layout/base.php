@@ -63,9 +63,9 @@ if ($_ip === '') { $_ip = $_hostname; }
   </a>
 
   <nav class="flex items-center gap-1">
-    <a href="/dashboard" class="topnav <?= $navDashboard ?>"><?= icon('chart-line', 'text-base') ?> <?= e(t('nav.dashboard')) ?></a>
-    <a href="/sites" class="topnav <?= $navSites ?>"><?= icon('world', 'text-base') ?> <?= e(t('nav.sites')) ?></a>
-    <a href="/admin" class="topnav <?= $navAdmin ?>"><?= icon('server-cog', 'text-base') ?> <?= e(t('nav.admin')) ?></a>
+    <a href="/dashboard" class="topnav <?= $navDashboard ?>"<?= $navDashboard ? ' aria-current="page"' : '' ?>><?= icon('chart-line', 'text-base') ?> <?= e(t('nav.dashboard')) ?></a>
+    <a href="/sites" class="topnav <?= $navSites ?>"<?= $navSites ? ' aria-current="page"' : '' ?>><?= icon('world', 'text-base') ?> <?= e(t('nav.sites')) ?></a>
+    <a href="/admin" class="topnav <?= $navAdmin ?>"<?= $navAdmin ? ' aria-current="page"' : '' ?>><?= icon('server-cog', 'text-base') ?> <?= e(t('nav.admin')) ?></a>
   </nav>
 
   <div class="ml-auto flex items-center gap-2.5">
@@ -113,7 +113,7 @@ if ($_ip === '') { $_ip = $_hostname; }
 <?php endif; ?>
 
 <!-- ===== TOASTS (flash messages) ===== -->
-<div id="toast-stack" class="fixed top-4 right-4 z-[60] flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)]">
+<div id="toast-stack" aria-live="polite" class="fixed top-4 right-4 z-[60] flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)]">
   <?php if (!empty($_flash_success ?? '')): ?>
     <div x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 8000)" x-transition
          class="toast toast-ok">

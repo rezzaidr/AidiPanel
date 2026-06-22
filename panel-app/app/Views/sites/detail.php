@@ -123,7 +123,7 @@ $tabs = [
     <div class="flex items-center overflow-x-auto -mb-px">
       <?php foreach ($tabs as $key => $tab): ?>
       <a href="/sites/<?= e($domain) ?>?tab=<?= $key ?>"
-         class="tab <?= $activeTab === $key ? 'active' : '' ?>">
+         class="tab <?= $activeTab === $key ? 'active' : '' ?>"<?= $activeTab === $key ? ' aria-current="page"' : '' ?>>
         <?= icon($tab['icon'], 'text-[15px]') ?>
         <?= e($tab['label']) ?>
       </a>
@@ -2091,7 +2091,7 @@ $tabs = [
           <label class="inline-flex items-center gap-2 <?= $cfoCanToggle ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed' ?>" data-security-toggle="cloudflare-only">
             <span class="text-[11px] font-medium text-zinc-500"
                   x-text="cfo ? '<?= e(t('site.security.enabled')) ?>' : '<?= e(t('site.security.disabled')) ?>'"></span>
-            <input type="checkbox" name="enabled" value="1" x-model="cfo" class="sr-only" <?= $cfoCanToggle ? '' : 'disabled' ?>>
+            <input type="checkbox" name="enabled" value="1" x-model="cfo" class="sr-only" aria-label="<?= e(t('site.security.cloudflare_only.label')) ?>" <?= $cfoCanToggle ? '' : 'disabled' ?>>
             <span aria-hidden="true" :class="cfo ? 'sw-on' : 'sw-off'"><span></span></span>
           </label>
         </div>
@@ -2156,7 +2156,7 @@ $tabs = [
         <label class="inline-flex items-center gap-2 cursor-pointer" data-security-toggle="basic-auth">
           <span class="text-[11px] font-medium text-zinc-500"
                 x-text="enabled ? '<?= e(t('site.security.enabled')) ?>' : '<?= e(t('site.security.disabled')) ?>'"></span>
-          <input type="checkbox" name="enabled" value="1" x-model="enabled" class="sr-only">
+          <input type="checkbox" name="enabled" value="1" x-model="enabled" class="sr-only" aria-label="<?= e(t('site.security.access.title')) ?>">
           <span aria-hidden="true" :class="enabled ? 'sw-on' : 'sw-off'"><span></span></span>
         </label>
       </div>
@@ -2277,7 +2277,7 @@ $tabs = [
           <label class="inline-flex items-center gap-2 cursor-pointer" data-security-toggle="ip-blocking">
             <span class="text-[11px] font-medium text-zinc-500"
                   x-text="enabled ? '<?= e(t('site.security.enabled')) ?>' : '<?= e(t('site.security.disabled')) ?>'"></span>
-            <input type="checkbox" name="enabled" value="1" x-model="enabled" class="sr-only">
+            <input type="checkbox" name="enabled" value="1" x-model="enabled" class="sr-only" aria-label="<?= e(t('site.security.ip_blocking.title')) ?>">
             <span aria-hidden="true" :class="enabled ? 'sw-on' : 'sw-off'"><span></span></span>
           </label>
         </div>

@@ -68,7 +68,7 @@
     </form>
   </div>
 
-  <p class="text-center text-xs text-gray-400 mt-6">AidiPanel v<?= PANEL_VERSION ?> · Nginx + FastCGI Cache + Redis</p>
+  <p class="text-center text-xs text-gray-500 mt-6">AidiPanel v<?= PANEL_VERSION ?> · Nginx + FastCGI Cache + Redis</p>
 </div>
 
 </body>

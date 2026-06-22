@@ -93,7 +93,7 @@ $range = $history['range'] ?? '1h';
     </div>
     <div>
       <p class="eyebrow mb-1"><?= e(t('vps.cloud')) ?></p>
-      <p class="text-sm font-medium text-zinc-800"><?= $vps['provider'] ? icon('cloud', 'text-sky-500') . ' ' . e($vps['provider']) : '<span class="text-zinc-300">—</span>' ?></p>
+      <p class="text-sm font-medium text-zinc-800 flex items-center gap-1.5"><?php if ($vps['provider']): ?><?= icon('cloud', 'text-sky-500 text-base shrink-0') ?> <?= e($vps['provider']) ?><?php else: ?><span class="text-zinc-300">—</span><?php endif; ?></p>
     </div>
     <div>
       <p class="eyebrow mb-1"><?= e(t('vps.droplet')) ?></p>
@@ -339,7 +339,7 @@ $range = $history['range'] ?? '1h';
   function opts(colors, type, yMax, legend, suffix) {
     suffix = suffix || '';
     return {
-      chart: { type, height: 130, toolbar: { show: false }, parentHeightOffset: 0, fontFamily: '"Plus Jakarta Sans"', animations: { enabled: false } },
+      chart: { type, height: 160, toolbar: { show: false }, parentHeightOffset: 0, fontFamily: '"Plus Jakarta Sans"', animations: { enabled: false } },
       stroke: { curve: 'smooth', width: type === 'line' ? 2.5 : 2 },
       colors, fill: { type: 'solid', opacity: type === 'line' ? 1 : 0.12 },
       dataLabels: { enabled: false },

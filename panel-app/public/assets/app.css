@@ -42,6 +42,13 @@ html { scrollbar-gutter: stable; }
    the standalone login page, which does not load this file). */
 .icon { display: inline-block; vertical-align: -0.125em; flex: none; }
 
+/* --- Contrast: muted text meets WCAG AA (a11y) --------------------------- */
+/* zinc-400 (#a1a1aa, ~2.6:1 on white) failed AA. Map the muted text utility to
+   zinc-500 (~4.7:1) centrally so every `text-zinc-400` across the views passes
+   without editing each template. app.css loads after tailwind.css so this wins.
+   Decorative-only zinc-300 (dashes, disabled, off-state icons) is left as-is. */
+.text-zinc-400 { color: #71717a; }
+
 /* --- Keyboard focus ring (a11y) ------------------------------------------ */
 /* Visible focus indicator for keyboard users only (:focus-visible), so mouse
    clicks stay clean. Buttons, links, tabs and toggles had no focus style;
@@ -93,7 +100,7 @@ summary:focus-visible,
 }
 .eyebrow {
   font-size: 10px; font-weight: 600; letter-spacing: .05em;
-  text-transform: uppercase; color: #a1a1aa;
+  text-transform: uppercase; color: #71717a;
 }
 
 /* --- Buttons ------------------------------------------------------------- */
@@ -143,16 +150,20 @@ summary:focus-visible,
   border: 1px solid #e4e4e7; border-radius: 8px; padding: .5rem .625rem;
   outline: none; transition: .12s;
 }
+/* A leading-icon padding utility (pl-9) must beat .inp's own `padding` shorthand
+   — app.css loads after tailwind.css, so bump specificity to keep room for the
+   absolute search icon (otherwise the icon overlaps the placeholder text). */
+.inp.pl-9 { padding-left: 2.25rem; }
 .inp:focus       { border-color: rgba(50,44,122,.4); box-shadow: 0 0 0 2px rgba(50,44,122,.1); }
-.inp::placeholder{ color: #a1a1aa; }
-.inp-soon        { background: #fafafa; border-style: dashed; color: #a1a1aa; cursor: not-allowed; }
+.inp::placeholder{ color: #71717a; }
+.inp-soon        { background: #fafafa; border-style: dashed; color: #71717a; cursor: not-allowed; }
 select.inp {
   appearance: none; -webkit-appearance: none; padding-right: 2rem;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat; background-position: right 8px center;
 }
 .lbl  { display: block; font-size: .75rem; font-weight: 600; color: #3f3f46; margin-bottom: 5px; }
-.hint { font-size: .6875rem; color: #a1a1aa; margin-top: 4px; }
+.hint { font-size: .6875rem; color: #71717a; margin-top: 4px; }
 
 /* --- Toggle switch (visual; wire state with Alpine on the page) ---------- */
 .sw-on, .sw-off {
@@ -174,7 +185,7 @@ select.inp {
 .tbl { width: 100%; font-size: .875rem; border-collapse: collapse; }
 .tbl thead th {
   font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
-  color: #a1a1aa; font-weight: 600; text-align: left;
+  color: #71717a; font-weight: 600; text-align: left;
   padding: .75rem; border-bottom: 1px solid var(--line);
 }
 .tbl tbody tr      { border-top: 1px solid #fafafa; }
@@ -219,3 +230,20 @@ select.inp {
 .toast-ok    { color: #047857; border-color: #a7f3d0; background: #ecfdf5; }
 .toast-error { color: #dc2626; border-color: #fecaca; background: #fef2f2; }
 .toast-warn  { color: #b45309; border-color: #fde68a; background: #fffbeb; }
+
+/* --- Reduced motion (a11y) ----------------------------------------------- */
+/* Honour the OS "reduce motion" setting: drop the decorative loops (status
+   pulse, progress shimmer) and make transitions near-instant. Loading spinners
+   are kept (just gentler) so in-progress feedback is never lost. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .spin, .animate-spin {
+    animation-duration: 1.5s !important;
+    animation-iteration-count: infinite !important;
+  }
+}
