@@ -20,6 +20,10 @@ class Router
         '/logs',
         '/users',
         '/sites/{domain}/nginx',
+        '/sites/{domain}/files/list',
+        '/sites/{domain}/files/read',
+        '/sites/{domain}/files/download',
+        '/sites/{domain}/files/download-many',
     ];
 
     public function __construct(Request $request)

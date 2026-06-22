@@ -1691,6 +1691,9 @@ case "$cmd" in
   security:basic-auth|\
   service:status|service:start|service:stop|service:restart|service:reload|\
   cron:list|cron:add|cron:delete|cron:toggle|cron:wp|\
+  files:list|files:read|files:write|files:mkdir|files:delete|files:download|\
+  files:rename|files:copy|files:move|files:chmod|files:zip|files:unzip|\
+  files:download-many|files:upload-chunk|files:upload-cancel|\
   system:info)
     ;;
   *)

@@ -67,6 +67,21 @@ ensure(vendor);
 log.push(`vendor alpine.min.js      ${kb(copy(join(NM, 'alpinejs', 'dist', 'cdn.min.js'), join(vendor, 'alpine.min.js')))}`);
 log.push(`vendor apexcharts.min.js  ${kb(copy(join(NM, 'apexcharts', 'dist', 'apexcharts.min.js'), join(vendor, 'apexcharts.min.js')))}`);
 
+// CodeMirror 5 for the file-manager editor (syntax highlight + line numbers).
+// Bundled to ONE js (core + curated modes in dependency order) so the Files tab
+// fetches two static assets — no per-mode requests. Lazy-loaded on first edit.
+const cmDir   = join(NM, 'codemirror');
+const cmModes = ['xml', 'javascript', 'css', 'clike', 'htmlmixed', 'php',
+  'markdown', 'yaml', 'shell', 'python', 'sql', 'nginx', 'dockerfile', 'properties'];
+let cmBundle = readFileSync(join(cmDir, 'lib', 'codemirror.js'), 'utf8');
+for (const m of cmModes) cmBundle += '\n;' + readFileSync(join(cmDir, 'mode', m, m + '.js'), 'utf8');
+cmBundle += '\n;' + readFileSync(join(cmDir, 'mode', 'meta.js'), 'utf8');
+writeFileSync(join(vendor, 'codemirror.js'), cmBundle);
+log.push(`vendor codemirror.js      ${kb(Buffer.byteLength(cmBundle))} (core + ${cmModes.length} modes + meta)`);
+const cmCss = readFileSync(join(cmDir, 'lib', 'codemirror.css'), 'utf8') + '\n' + readFileSync(join(cmDir, 'theme', 'dracula.css'), 'utf8');
+writeFileSync(join(vendor, 'codemirror.css'), cmCss);
+log.push(`vendor codemirror.css     ${kb(Buffer.byteLength(cmCss))} (core + dracula theme)`);
+
 // Icons are no longer a webfont: the panel renders inline local SVGs via the
 // icon() helper, synced from @tabler/icons by build/sync-icons.mjs (`npm run icons`).
 

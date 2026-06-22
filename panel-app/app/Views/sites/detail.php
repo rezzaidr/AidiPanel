@@ -1135,6 +1135,9 @@ $tabs = [
     </div>
   </div>
 
+<?php elseif ($activeTab === 'files'): ?>
+<?php require __DIR__ . '/files.php'; ?>
+
 <?php elseif ($activeTab === 'settings'): ?>
 <!-- ─────────────────────────── SETTINGS ─────────────────────────────────── -->
 

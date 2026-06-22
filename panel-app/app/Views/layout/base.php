@@ -31,6 +31,10 @@ if ($_ip === '' || $_ip === '127.0.0.1' || $_ip === '::1') {
     $_ip = (string) (@gethostbyname($_hostname) ?: '');
 }
 if ($_ip === '') { $_ip = $_hostname; }
+
+// Cache-bust the built stylesheets by file mtime so a deploy is picked up on a
+// normal refresh (this layout is no-store, so the stamp is always current).
+$assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROOT . $p) ?: PANEL_VERSION);
 ?>
 <!DOCTYPE html>
 <html lang="<?= e(current_locale()) ?>" class="h-full">
@@ -48,8 +52,8 @@ if ($_ip === '') { $_ip = $_hostname; }
        body weight is preloaded. -->
   <link rel="preload" href="/assets/fonts/plus-jakarta-sans-400.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/assets/fonts.css">
-  <link rel="stylesheet" href="/assets/tailwind.css">
-  <link rel="stylesheet" href="/assets/app.css">
+  <link rel="stylesheet" href="<?= e($assetVer('/assets/tailwind.css')) ?>">
+  <link rel="stylesheet" href="<?= e($assetVer('/assets/app.css')) ?>">
 
   <script defer src="/assets/vendor/alpine.min.js"></script>
 </head>

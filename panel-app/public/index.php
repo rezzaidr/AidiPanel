@@ -96,6 +96,23 @@ $router->post('/sites/{domain}/cron/delete', 'SiteCronController@delete');
 $router->post('/sites/{domain}/cron/toggle', 'SiteCronController@toggle');
 $router->post('/sites/{domain}/cron/wp',     'SiteCronController@wpCron');
 
+// Per-site File Manager
+$router->get('/sites/{domain}/files/list',     'SiteFileController@list');
+$router->get('/sites/{domain}/files/read',     'SiteFileController@read');
+$router->get('/sites/{domain}/files/download', 'SiteFileController@download');
+$router->post('/sites/{domain}/files/save',    'SiteFileController@save');
+$router->post('/sites/{domain}/files/mkdir',   'SiteFileController@mkdir');
+$router->post('/sites/{domain}/files/delete',  'SiteFileController@delete');
+$router->post('/sites/{domain}/files/rename',  'SiteFileController@rename');
+$router->post('/sites/{domain}/files/copy',    'SiteFileController@copy');
+$router->post('/sites/{domain}/files/move',    'SiteFileController@move');
+$router->post('/sites/{domain}/files/chmod',   'SiteFileController@chmod');
+$router->post('/sites/{domain}/files/zip',     'SiteFileController@zip');
+$router->post('/sites/{domain}/files/unzip',   'SiteFileController@unzip');
+$router->get('/sites/{domain}/files/download-many', 'SiteFileController@downloadMany');
+$router->post('/sites/{domain}/files/upload-chunk', 'SiteFileController@uploadChunk');
+$router->post('/sites/{domain}/files/upload-cancel', 'SiteFileController@uploadCancel');
+
 // Cache
 $router->get('/cache',         'CacheController@index');
 $router->post('/cache/purge',  'CacheController@purge');

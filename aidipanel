@@ -412,6 +412,23 @@ _usage() {
   echo "  cron:wp              Toggle the WordPress real-cron preset (--domain --action enable|disable)"
   echo "  security:ip-block    Manage per-site IP deny list (--action status|get|set|disable)"
   echo "  security:cloudflare-only  Reject direct-origin HTTPS requests (--action status|enable|disable)"
+
+  echo -e "\n${BOLD}${BLUE}File Manager${RESET}"
+  echo "  files:list           List a directory as JSON (--domain; path on stdin)"
+  echo "  files:read           Read a text file as JSON (--domain; path on stdin)"
+  echo "  files:write          Write a file (--domain [--new] [--expect-sha256]; path+content on stdin)"
+  echo "  files:mkdir          Create a directory (--domain; path on stdin)"
+  echo "  files:delete         Delete paths (--domain; one path per line on stdin)"
+  echo "  files:download       Stream a file to stdout (--domain; path on stdin)"
+  echo "  files:rename         Rename an entry (--domain; path,newName on stdin)"
+  echo "  files:copy           Copy entries into a folder (--domain; destDir + paths on stdin)"
+  echo "  files:move           Move entries into a folder (--domain; destDir + paths on stdin)"
+  echo "  files:chmod          Change permissions (--domain --mode 0644 [--recursive]; paths on stdin)"
+  echo "  files:zip            Compress entries (--domain; dir,name,paths on stdin)"
+  echo "  files:unzip          Extract a .zip (--domain; archive[,dest] on stdin)"
+  echo "  files:download-many  Zip + stream a selection (--domain; one path per line on stdin)"
+  echo "  files:upload-chunk   Append one chunk of a large upload (--domain --id --offset [--total] [--final])"
+  echo "  files:upload-cancel  Remove a partial chunked upload (--domain --id; destDir on stdin)"
   echo "  cloudflare:realip    Manage global Cloudflare real-IP restoration (--action status|provision|enable|refresh|disable)"
 
   echo -e "\n${BOLD}${BLUE}Database Management${RESET}"
@@ -1273,6 +1290,518 @@ _cron_wp() {
     ok "WordPress cron disabled."
   fi
   echo "wp_cron=${action}d"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# File manager (per-site). Jail root = /home/<site_user>. The CLI resolves the
+# user from the domain (authoritative), drops to that user with `sudo -u` for all
+# I/O, and validates every path with realpath containment. Untrusted paths/names
+# arrive on STDIN (never argv) because the web wrapper filters argument content;
+# only --domain + safe flags (--mode/--new/--recursive/--expect-sha256) cross as
+# arguments. See _files_resolve / _files_resolve_existing / _files_resolve_new.
+# ---------------------------------------------------------------------------
+
+# Resolve a domain to its site user + jail root. Sets FILES_USER / FILES_HOME.
+_files_resolve() {
+  local domain="$1"
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
+  local conf="${NGINX_CONF_DIR}/${domain}.conf"
+  [[ -f "$conf" ]] || die "Site not found: ${domain}"
+  FILES_USER=$(grep -oP '^\s*root\s+/home/\K[^/;]+' "$conf" 2>/dev/null | head -1 || echo "")
+  [[ -n "$FILES_USER" ]] || die "Could not resolve the site user for ${domain}."
+  FILES_HOME="${HOME_BASE}/${FILES_USER}"
+  [[ -d "$FILES_HOME" ]] || die "Site home not found: ${FILES_HOME}"
+  return 0
+}
+
+# Normalize a jail-relative path string (strip a leading slash; reject newline).
+_files_clean_rel() {
+  local rel="$1"
+  rel="${rel#/}"
+  [[ "$rel" != *$'\n'* ]] || die "Invalid path."
+  printf '%s' "$rel"
+}
+
+# Resolve an EXISTING path; realpath must land inside the jail. Echoes abs path.
+_files_resolve_existing() {
+  local rel abs
+  rel=$(_files_clean_rel "$1")
+  abs=$(realpath -- "${FILES_HOME}/${rel}" 2>/dev/null) || die "No such file or directory."
+  [[ "$abs" == "$FILES_HOME" || "$abs" == "$FILES_HOME"/* ]] || die "Path is outside the site."
+  printf '%s' "$abs"
+}
+
+# Resolve a NEW path: parent must exist + be inside the jail; basename validated.
+_files_resolve_new() {
+  local rel parent base rparent
+  rel=$(_files_clean_rel "$1")
+  parent=$(dirname -- "${FILES_HOME}/${rel}")
+  base=$(basename -- "${FILES_HOME}/${rel}")
+  [[ -n "$base" && "$base" != "." && "$base" != ".." ]] || die "Invalid name."
+  [[ "${#base}" -le 255 ]] || die "Name too long."
+  rparent=$(realpath -- "$parent" 2>/dev/null) || die "Destination folder does not exist."
+  [[ "$rparent" == "$FILES_HOME" || "$rparent" == "$FILES_HOME"/* ]] || die "Path is outside the site."
+  printf '%s/%s' "$rparent" "$base"
+}
+
+# Validate a basename-only token (rename target / new name / archive name).
+_files_basename_only() {
+  local b="$1"
+  [[ -n "$b" && "$b" != *"/"* && "$b" != "." && "$b" != ".." && "$b" != *$'\n'* ]] || die "Invalid name."
+  [[ "${#b}" -le 255 ]] || die "Name too long."
+  printf '%s' "$b"
+}
+
+# Run a command as the resolved site user.
+_files_run() { sudo -u "$FILES_USER" -- "$@"; }
+
+# Resolve a path WITHOUT following a final symlink: parent canonicalized + inside
+# the jail, final component kept literal; the entry must exist. Used by delete/
+# rename/move/copy/zip so we act on the named entry, never its symlink target.
+_files_resolve_nofollow() {
+  local rel parent base rparent full
+  rel=$(_files_clean_rel "$1")
+  [[ -n "$rel" ]] || die "Path is required."
+  parent=$(dirname -- "${FILES_HOME}/${rel}")
+  base=$(basename -- "${FILES_HOME}/${rel}")
+  [[ -n "$base" && "$base" != "." && "$base" != ".." ]] || die "Invalid name."
+  rparent=$(realpath -- "$parent" 2>/dev/null) || die "No such file or directory."
+  [[ "$rparent" == "$FILES_HOME" || "$rparent" == "$FILES_HOME"/* ]] || die "Path is outside the site."
+  full="${rparent}/${base}"
+  [[ -e "$full" || -L "$full" ]] || die "No such file or directory."
+  printf '%s' "$full"
+}
+
+# files:list --domain X    (path on stdin; empty = jail root) -> JSON listing
+_files_list() {
+  _require_root "files:list"
+  _parse_opts "$@"
+  local domain rel dir
+  domain=$(_opt "domain"); _require_arg "domain" "$domain" "files:list --domain X (path on stdin)"
+  _files_resolve "$domain"
+  IFS= read -r rel || true
+  dir=$(_files_resolve_existing "$rel")
+  [[ -d "$dir" ]] || die "Not a directory."
+  _files_run python3 - "$dir" "$FILES_HOME" <<'PY'
+import json, os, sys, stat, pwd, grp
+d, jail = sys.argv[1], sys.argv[2]
+def within(p):
+    try: rp = os.path.realpath(p)
+    except OSError: return False
+    return rp == jail or rp.startswith(jail + os.sep)
+rel = os.path.relpath(d, jail); rel = "" if rel == "." else rel
+crumb, acc = [], ""
+for part in [p for p in rel.split(os.sep) if p]:
+    acc = f"{acc}/{part}" if acc else part
+    crumb.append({"name": part, "path": acc})
+out = []
+with os.scandir(d) as it:
+    for e in it:
+        nm = e.name
+        if (nm.startswith(".aidipanel-up-") and nm.endswith(".part")) or nm.startswith(".aidipanel-dl.") or nm.startswith(".aidipanel."):
+            continue  # hide only the panel's own transient temps (upload parts, download/write tmp)
+        try: st = e.stat(follow_symlinks=False)
+        except OSError: continue
+        is_link = e.is_symlink()
+        kind = "symlink" if is_link else ("dir" if e.is_dir(follow_symlinks=False) else "file")
+        try: owner = pwd.getpwuid(st.st_uid).pw_name
+        except KeyError: owner = str(st.st_uid)
+        try: group = grp.getgrgid(st.st_gid).gr_name
+        except KeyError: group = str(st.st_gid)
+        out.append({
+            "name": e.name, "type": kind,
+            "size": st.st_size, "mtime": int(st.st_mtime),
+            "perms_octal": oct(stat.S_IMODE(st.st_mode))[2:].zfill(4),
+            "perms_str": stat.filemode(st.st_mode),
+            "owner": owner, "group": group,
+            "blocked": bool(is_link and not within(e.path)),
+        })
+out.sort(key=lambda x: (x["type"] != "dir", x["name"].lower()))
+print(json.dumps({"path": rel, "breadcrumb": crumb, "entries": out}))
+PY
+  return 0
+}
+
+# files:read --domain X    (path on stdin) -> JSON {content,sha256,mtime,size} | {error}
+_files_read() {
+  _require_root "files:read"
+  _parse_opts "$@"
+  local domain rel file size max
+  domain=$(_opt "domain"); _require_arg "domain" "$domain" "files:read --domain X (path on stdin)"
+  _files_resolve "$domain"
+  IFS= read -r rel || true
+  [[ -n "$rel" ]] || die "Path is required."
+  file=$(_files_resolve_existing "$rel")
+  [[ -f "$file" ]] || die "Not a regular file."
+  max=${AIDIPANEL_FILES_EDIT_MAX:-2097152}
+  size=$(_files_run stat -c '%s' -- "$file")
+  if (( size > max )); then echo '{"error":"too_large"}'; return 0; fi
+  _files_run python3 - "$file" <<'PY'
+import json, sys, hashlib, os
+f = sys.argv[1]
+with open(f, "rb") as fh: data = fh.read()
+if b"\x00" in data:
+    print('{"error":"binary"}'); sys.exit(0)
+print(json.dumps({
+    "content": data.decode("utf-8", "replace"),
+    "sha256": hashlib.sha256(data).hexdigest(),
+    "mtime": int(os.path.getmtime(f)),
+    "size": len(data),
+}))
+PY
+  return 0
+}
+
+# files:write --domain X [--new] [--expect-sha256 HEX]   (line1=path, rest=content)
+_files_write() {
+  _require_root "files:write"
+  _parse_opts "$@"
+  local domain expect is_new rel dest tmp oldmode cur _a
+  domain=$(_opt "domain"); _require_arg "domain" "$domain" "files:write --domain X (path+content on stdin)"
+  _files_resolve "$domain"
+  expect=$(_opt "expect-sha256")
+  is_new=0; for _a in "$@"; do [[ "$_a" == "--new" ]] && is_new=1; done
+  IFS= read -r rel || true
+  [[ -n "$rel" ]] || die "Path is required."
+  if [[ "$is_new" == "1" ]]; then
+    dest=$(_files_resolve_new "$rel")
+    [[ ! -e "$dest" ]] || die "A file with that name already exists."
+    oldmode=0644
+  else
+    dest=$(_files_resolve_existing "$rel")
+    [[ -f "$dest" ]] || die "Not a regular file."
+    oldmode=$(_files_run stat -c '%a' -- "$dest")
+    if [[ -n "$expect" ]]; then
+      cur=$(_files_run sha256sum -- "$dest" | awk '{print $1}')
+      [[ "$cur" == "$expect" ]] || { echo '{"error":"conflict"}'; return 0; }
+    fi
+  fi
+  tmp=$(_files_run mktemp -- "$(dirname -- "$dest")/.aidipanel.XXXXXX") || die "Could not create a temp file."
+  _files_run tee -- "$tmp" >/dev/null
+  _files_run chmod "$oldmode" -- "$tmp" 2>/dev/null || true
+  _files_run mv -f -- "$tmp" "$dest" || { _files_run rm -f -- "$tmp"; die "Could not save the file."; }
+  ok "Saved."
+  return 0
+}
+
+# files:mkdir --domain X   (path on stdin)
+_files_mkdir() {
+  _require_root "files:mkdir"
+  _parse_opts "$@"
+  local domain rel dest
+  domain=$(_opt "domain"); _require_arg "domain" "$domain" "files:mkdir --domain X (path on stdin)"
+  _files_resolve "$domain"
+  IFS= read -r rel || true
+  [[ -n "$rel" ]] || die "Path is required."
+  dest=$(_files_resolve_new "$rel")
+  [[ ! -e "$dest" ]] || die "A file or folder with that name already exists."
+  _files_run mkdir -m 0755 -- "$dest" || die "Could not create the folder."
+  ok "Folder created."
+  return 0
+}
+
+# files:delete --domain X  (one path per line on stdin)
+_files_delete() {
+  _require_root "files:delete"
+  _parse_opts "$@"
+  local domain line abs n=0
+  domain=$(_opt "domain"); _require_arg "domain" "$domain" "files:delete --domain X (paths on stdin)"
+  _files_resolve "$domain"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -n "$line" ]] || continue
+    abs=$(_files_resolve_nofollow "$line")
+    [[ "$abs" != "$FILES_HOME" ]] || die "Refusing to delete the site root."
+    if [[ -L "$abs" ]]; then
+      _files_run rm -f -- "$abs"            # symlink: remove the link only
+    else
+      _files_run rm -rf -- "$abs"           # rm does not traverse symlinks it removes
+    fi
+    n=$((n + 1))
+  done
+  ok "Deleted ${n} item(s)."
+  return 0
+}
+
+# files:download --domain X  (path on stdin) -> raw bytes on stdout
+_files_download() {
+  _require_root "files:download"
+  _parse_opts "$@"
+  local domain rel file
+  domain=$(_opt "domain"); _require_arg "domain" "$domain" "files:download --domain X (path on stdin)"
+  _files_resolve "$domain"
+  IFS= read -r rel || true
+  [[ -n "$rel" ]] || die "Path is required."
+  file=$(_files_resolve_existing "$rel")
+  [[ -f "$file" ]] || die "Not a regular file."
+  _files_run cat -- "$file"
+  return 0
+}
+
+# files:rename --domain X   (line1=path, line2=newName)
+_files_rename() {
+  _require_root "files:rename"
+  _parse_opts "$@"
+  local domain rel to src parent dest
+  domain=$(_opt "domain"); _require_arg "domain" "$domain" "files:rename --domain X (path,newName on stdin)"
+  _files_resolve "$domain"
+  IFS= read -r rel || true
+  IFS= read -r to || true
+  [[ -n "$rel" ]] || die "Path is required."
+  to=$(_files_basename_only "$to")
+  src=$(_files_resolve_nofollow "$rel")
+  [[ "$src" != "$FILES_HOME" ]] || die "Cannot rename the site root."
+  parent=$(dirname -- "$src")
+  dest="${parent}/${to}"
+  [[ ! -e "$dest" ]] || die "A file with that name already exists."
+  _files_run mv -n -- "$src" "$dest" || die "Rename failed."
+  ok "Renamed."
+  return 0
+}
+
+# files:copy / files:move --domain X   (line1=destDir, then one source path per line)
+_files_copy() { _files_copy_or_move copy "$@"; }
+_files_move() { _files_copy_or_move move "$@"; }
+_files_copy_or_move() {
+  local mode="$1"; shift
+  _require_root "files:${mode}"
+  _parse_opts "$@"
+  local domain to destdir line src base dest n=0
+  domain=$(_opt "domain"); _require_arg "domain" "$domain" "files:${mode} --domain X (destDir + paths on stdin)"
+  _files_resolve "$domain"
+  IFS= read -r to || true; [[ "$to" == "." ]] && to=""
+  destdir=$(_files_resolve_existing "$to")
+  [[ -d "$destdir" ]] || die "Destination is not a folder."
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -n "$line" ]] || continue
+    src=$(_files_resolve_nofollow "$line")
+    base=$(basename -- "$src")
+    dest="${destdir}/${base}"
+    case "${dest}/" in "${src}/"*) die "Cannot copy or move a folder into itself." ;; esac
+    [[ ! -e "$dest" ]] || die "Already exists in destination: ${base}"
+    if [[ "$mode" == "copy" ]]; then
+      _files_run cp -a -- "$src" "$dest" || die "Copy failed for ${base}."
+    else
+      _files_run mv -n -- "$src" "$dest" || die "Move failed for ${base}."
+    fi
+    n=$((n + 1))
+  done
+  ok "${mode} done (${n})."
+  return 0
+}
+
+# files:chmod --domain X --mode 0644 [--recursive]   (one path per line on stdin)
+_files_chmod() {
+  _require_root "files:chmod"
+  _parse_opts "$@"
+  local domain mode rec line abs n=0 _a
+  domain=$(_opt "domain"); _require_arg "domain" "$domain" "files:chmod --domain X --mode 0644 (paths on stdin)"
+  _files_resolve "$domain"
+  mode=$(_opt "mode"); _require_arg "mode" "$mode" "files:chmod ... --mode 0644"
+  case "$mode" in 0644|0664|0600|0755|0775|0700) ;; *) die "Permission ${mode} is not allowed." ;; esac
+  rec=0; for _a in "$@"; do [[ "$_a" == "--recursive" ]] && rec=1; done
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -n "$line" ]] || continue
+    abs=$(_files_resolve_existing "$line")
+    if [[ "$rec" == "1" ]]; then
+      _files_run chmod -R "$mode" -- "$abs" || die "chmod failed."
+    else
+      _files_run chmod "$mode" -- "$abs" || die "chmod failed."
+    fi
+    n=$((n + 1))
+  done
+  ok "Permissions updated (${n})."
+  return 0
+}
+
+# files:zip --domain X   (line1=cwdDir, line2=archiveName.zip, then one source per line)
+_files_zip() {
+  _require_root "files:zip"
+  _parse_opts "$@"
+  local domain reldir name cwd dest line src n=0
+  local -a args=()
+  domain=$(_opt "domain"); _require_arg "domain" "$domain" "files:zip --domain X (dir,name,paths on stdin)"
+  _files_resolve "$domain"
+  IFS= read -r reldir || true; [[ "$reldir" == "." ]] && reldir=""
+  IFS= read -r name || true
+  name=$(_files_basename_only "$name")
+  [[ "$name" == *.zip ]] || die "Archive name must end in .zip"
+  cwd=$(_files_resolve_existing "$reldir"); [[ -d "$cwd" ]] || die "Not a folder."
+  dest="${cwd}/${name}"
+  [[ ! -e "$dest" ]] || die "An archive with that name already exists."
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -n "$line" ]] || continue
+    src=$(_files_resolve_nofollow "$line")
+    [[ "$(dirname -- "$src")" == "$cwd" ]] || die "Can only compress items in the current folder."
+    args+=("./$(basename -- "$src")")
+    n=$((n + 1))
+  done
+  [[ "$n" -gt 0 ]] || die "Nothing to compress."
+  # zip rejects `--`; prefix with ./ so leading-dash names aren't read as options
+  # (zip strips the ./ in stored entry names).
+  ( cd "$cwd" && _files_run zip -r -y -q "./${name}" "${args[@]}" ) || die "Compression failed."
+  ok "Created ${name}."
+  return 0
+}
+
+# files:unzip --domain X   (line1=archivePath, line2=destDir optional). Hardened.
+_files_unzip() {
+  _require_root "files:unzip"
+  _parse_opts "$@"
+  local domain relarc reldest archive destdir out
+  domain=$(_opt "domain"); _require_arg "domain" "$domain" "files:unzip --domain X (archive[,dest] on stdin)"
+  _files_resolve "$domain"
+  IFS= read -r relarc || true
+  IFS= read -r reldest || true
+  [[ -n "$relarc" ]] || die "Archive path is required."
+  archive=$(_files_resolve_existing "$relarc"); [[ -f "$archive" ]] || die "Not a file."
+  if [[ -n "$reldest" ]]; then destdir=$(_files_resolve_existing "$reldest"); else destdir=$(dirname -- "$archive"); fi
+  [[ -d "$destdir" ]] || die "Destination is not a folder."
+  out=$(_files_run python3 - "$archive" "$destdir" <<'PY'
+import os, sys, zipfile
+archive, dest = sys.argv[1], os.path.realpath(sys.argv[2])
+MAX_ENTRIES, MAX_TOTAL, MAX_RATIO = 10000, 1 << 30, 100
+try:
+    z = zipfile.ZipFile(archive)
+except Exception:
+    print("Not a valid zip archive."); sys.exit(1)
+infos = z.infolist()
+if len(infos) > MAX_ENTRIES:
+    print("Too many entries in the archive."); sys.exit(1)
+comp = sum(i.compress_size for i in infos) or 1
+total = sum(i.file_size for i in infos)
+if total > MAX_TOTAL or (total / comp) > MAX_RATIO:
+    print("Archive too large (possible zip bomb)."); sys.exit(1)
+for i in infos:
+    if (i.external_attr >> 16) & 0o170000 == 0o120000:
+        print("Symlink entries are not allowed."); sys.exit(1)
+    name = i.filename
+    if name.startswith("/") or ".." in name.replace("\\", "/").split("/"):
+        print("Unsafe path in archive."); sys.exit(1)
+    target = os.path.realpath(os.path.join(dest, name))
+    if target != dest and not target.startswith(dest + os.sep):
+        print("An entry escapes the destination."); sys.exit(1)
+for i in infos:
+    outp = os.path.join(dest, i.filename)
+    if i.is_dir():
+        os.makedirs(outp, mode=0o755, exist_ok=True); continue
+    os.makedirs(os.path.dirname(outp) or dest, mode=0o755, exist_ok=True)
+    with z.open(i) as src, open(outp, "wb") as dst:
+        while True:
+            chunk = src.read(1 << 20)
+            if not chunk: break
+            dst.write(chunk)
+    os.chmod(outp, 0o644)
+PY
+) || die "${out:-Extraction failed.}"
+  ok "Extracted."
+  return 0
+}
+
+# files:download-many --domain X   (one jail-relative path per line on stdin)
+# Zips the selection (all items must share one parent = the listing dir) into a
+# temp archive under the jail, streams it to stdout, then removes it.
+_files_download_many() {
+  _require_root "files:download-many"
+  _parse_opts "$@"
+  local domain line src parent cwd="" tmp n=0
+  local -a args=()
+  domain=$(_opt "domain"); _require_arg "domain" "$domain" "files:download-many --domain X (paths on stdin)"
+  _files_resolve "$domain"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -n "$line" ]] || continue
+    src=$(_files_resolve_nofollow "$line")
+    parent=$(dirname -- "$src")
+    if [[ -z "$cwd" ]]; then cwd="$parent"; elif [[ "$parent" != "$cwd" ]]; then die "All items must be in the same folder."; fi
+    args+=("./$(basename -- "$src")")
+    n=$((n + 1))
+  done
+  [[ "$n" -gt 0 ]] || die "Nothing to download."
+  tmp=$(_files_run mktemp -d -- "${FILES_HOME}/.aidipanel-dl.XXXXXX") || die "Could not create a temp archive."
+  # Always remove the temp archive — even if the client aborts mid-stream (cat gets
+  # SIGPIPE and the script exits) or compression fails.
+  trap '_files_run rm -rf -- "$tmp" 2>/dev/null || true' EXIT
+  ( cd "$cwd" && _files_run zip -r -y -q "${tmp}/archive.zip" "${args[@]}" ) || die "Compression failed."
+  _files_run cat -- "${tmp}/archive.zip"
+  trap - EXIT
+  _files_run rm -rf -- "$tmp"
+  return 0
+}
+
+# files:upload-chunk --domain X --id TOKEN --offset N [--total N] [--final]
+# stdin: line1=destDir, line2=name, then the raw bytes of THIS chunk.
+# Appends each chunk to <destDir>/.aidipanel-up-<id>.part at byte <offset> (so a
+# retried/partial chunk is idempotent), then --final verifies the size + moves it
+# into place. Lets the browser stream multi-GB migration archives in small
+# requests, sidestepping nginx/PHP body-size + timeout limits.
+_files_upload_chunk() {
+  _require_root "files:upload-chunk"
+  _parse_opts "$@"
+  local domain id is_final offset total reldir name dir part dest cur avail max _a
+  domain=$(_opt "domain"); _require_arg "domain" "$domain" "files:upload-chunk --domain X --id TOKEN [--final]"
+  _files_resolve "$domain"
+  id=$(_opt "id"); _require_arg "id" "$id" "files:upload-chunk ... --id TOKEN"
+  [[ "$id" =~ ^[A-Za-z0-9]{8,64}$ ]] || die "Invalid upload id."
+  offset=$(_opt "offset"); offset=${offset:-0}; [[ "$offset" =~ ^[0-9]+$ ]] || die "Invalid offset."
+  total=$(_opt "total");   total=${total:-0};   [[ "$total"  =~ ^[0-9]+$ ]] || die "Invalid total."
+  is_final=0; for _a in "$@"; do [[ "$_a" == "--final" ]] && is_final=1; done
+  IFS= read -r reldir || true
+  IFS= read -r name || true
+  name=$(_files_basename_only "$name")
+  dir=$(_files_resolve_existing "$reldir"); [[ -d "$dir" ]] || die "Destination is not a folder."
+  dest="${dir}/${name}"
+  case "$dest" in "$FILES_HOME"|"$FILES_HOME"/*) ;; *) die "Path is outside the site." ;; esac
+  [[ ! -e "$dest" ]] || die "A file with that name already exists."
+  part="${dir}/.aidipanel-up-${id}.part"
+  if [[ "$offset" == "0" ]]; then
+    _files_run rm -f -- "$part" 2>/dev/null || true                                                          # fresh start for this id
+    _files_run find "$dir" -maxdepth 1 -name '.aidipanel-up-*.part' -mmin +1440 -delete 2>/dev/null || true  # sweep abandoned parts (>24h)
+    if [[ "$total" != "0" ]]; then
+      avail=$(_files_run df -P -B1 -- "$dir" 2>/dev/null | awk 'NR==2{print $4}')
+      if [[ -n "$avail" ]] && (( total + 536870912 > avail )); then die "Not enough disk space for this upload."; fi
+    fi
+  fi
+  # Optional hard ceiling (default 0 = unlimited, for migration archives).
+  max=${AIDIPANEL_FILES_UPLOAD_MAX:-0}
+  if [[ "$max" != "0" ]] && (( total > max )); then die "Upload exceeds the maximum size."; fi
+  # Idempotent append: drop anything at/after this offset (a retried or partially
+  # written chunk), then append this chunk's bytes.
+  cur=$(_files_run stat -c '%s' -- "$part" 2>/dev/null || echo 0)
+  (( cur >= offset )) || die "Upload chunk out of order."
+  (( cur == offset )) || _files_run truncate -s "$offset" -- "$part"
+  _files_run tee -a -- "$part" >/dev/null || die "Could not write the upload chunk."
+  if [[ "$is_final" == "1" ]]; then
+    if [[ "$total" != "0" ]]; then
+      cur=$(_files_run stat -c '%s' -- "$part" 2>/dev/null || echo 0)
+      (( cur == total )) || { _files_run rm -f -- "$part"; die "Upload size mismatch — please retry."; }
+    fi
+    _files_run chmod 0644 -- "$part" 2>/dev/null || true
+    _files_run mv -n -- "$part" "$dest" 2>/dev/null || true
+    # mv -n is silent when the target already appeared (TOCTOU); confirm the part moved.
+    if _files_run test -e "$part"; then _files_run rm -f -- "$part"; die "A file with that name already exists."; fi
+    ok "Uploaded."
+  else
+    ok "Chunk received."
+  fi
+  return 0
+}
+
+# files:upload-cancel --domain X --id TOKEN   (stdin: destDir)
+# Removes a partial chunked-upload temp so an aborted/cancelled upload leaves
+# nothing behind.
+_files_upload_cancel() {
+  _require_root "files:upload-cancel"
+  _parse_opts "$@"
+  local domain id reldir dir part
+  domain=$(_opt "domain"); _require_arg "domain" "$domain" "files:upload-cancel --domain X --id TOKEN (destDir on stdin)"
+  _files_resolve "$domain"
+  id=$(_opt "id"); _require_arg "id" "$id" "files:upload-cancel ... --id TOKEN"
+  [[ "$id" =~ ^[A-Za-z0-9]{8,64}$ ]] || die "Invalid upload id."
+  IFS= read -r reldir || true
+  dir=$(_files_resolve_existing "$reldir"); [[ -d "$dir" ]] || die "Destination is not a folder."
+  part="${dir}/.aidipanel-up-${id}.part"
+  _files_run rm -f -- "$part" 2>/dev/null || true
+  ok "Upload cancelled."
   return 0
 }
 
@@ -6994,6 +7523,24 @@ main() {
     cron:delete) _cron_delete "$@" ;;
     cron:toggle) _cron_toggle "$@" ;;
     cron:wp)     _cron_wp "$@" ;;
+
+    # File manager (per-site)
+    files:list)     _files_list "$@" ;;
+    files:read)     _files_read "$@" ;;
+    files:write)    _files_write "$@" ;;
+    files:mkdir)    _files_mkdir "$@" ;;
+    files:delete)   _files_delete "$@" ;;
+    files:download) _files_download "$@" ;;
+    files:rename)   _files_rename "$@" ;;
+    files:copy)     _files_copy "$@" ;;
+    files:move)     _files_move "$@" ;;
+    files:chmod)    _files_chmod "$@" ;;
+    files:zip)      _files_zip "$@" ;;
+    files:unzip)    _files_unzip "$@" ;;
+    files:download-many) _files_download_many "$@" ;;
+    files:upload-chunk)  _files_upload_chunk "$@" ;;
+    files:upload-cancel) _files_upload_cancel "$@" ;;
+
     security:ip-block)   _security_ipblock "$@" ;;
     security:cloudflare-only) _security_cloudflare_only "$@" ;;
 
@@ -7064,4 +7611,5 @@ main() {
   esac
 }
 
-main "$@"
+# Allow tests to source helper functions without running the dispatcher.
+[[ -n "${AIDIPANEL_LIB_ONLY:-}" ]] || main "$@"

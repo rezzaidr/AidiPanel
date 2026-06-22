@@ -297,6 +297,9 @@ function web_cli_allowed_commands(): array
         'security:basic-auth', 'cloudflare:realip', 'security:ip-block', 'security:cloudflare-only',
         'service:status', 'service:start', 'service:stop', 'service:restart', 'service:reload',
         'cron:list', 'cron:add', 'cron:delete', 'cron:toggle', 'cron:wp',
+        'files:list', 'files:read', 'files:write', 'files:mkdir', 'files:delete', 'files:download',
+        'files:rename', 'files:copy', 'files:move', 'files:chmod', 'files:zip', 'files:unzip',
+        'files:download-many', 'files:upload-chunk', 'files:upload-cancel',
         'system:info',
     ];
 }
@@ -591,6 +594,98 @@ function run_cli_stdin(string $command, array $args, string $stdin): array
         'output' => $cleanOutput,
         'code' => $exitCode,
     ];
+}
+
+/**
+ * File-manager upload runner. Writes a small text header (e.g. "destDir\nname\n")
+ * then streams an open file handle to the CLI's stdin in chunks — never loads the
+ * whole upload into PHP memory. Same return shape as run_cli_stdin.
+ */
+function run_cli_upload(string $command, array $args, string $header, $srcHandle): array
+{
+    $binary = '/usr/local/bin/aidipanel';
+    if (!file_exists($binary)) {
+        return ['success' => false, 'output' => 'AidiPanel CLI not found: ' . $binary, 'code' => 1];
+    }
+    if (!is_web_cli_invocation_allowed($command, $args)) {
+        return ['success' => false, 'output' => 'Command not allowed from web panel.', 'code' => 126];
+    }
+
+    $safeArgs = array_map('escapeshellarg', $args);
+    $cmd = 'NO_COLOR=1 ' . escapeshellcmd($binary) . ' ' . escapeshellarg($command) . ' ' . implode(' ', $safeArgs);
+    $currentUser = trim((string)(shell_exec('whoami 2>/dev/null') ?: ''));
+    if ($currentUser !== 'root' && file_exists('/usr/bin/sudo')) {
+        $runner = file_exists('/usr/local/sbin/aidipanel-web-run')
+            ? '/usr/local/sbin/aidipanel-web-run'
+            : $binary;
+        $cmd = '/usr/bin/sudo ' . escapeshellcmd($runner) . ' '
+            . escapeshellarg($command) . ' ' . implode(' ', $safeArgs);
+    }
+
+    $spec = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+    $process = proc_open($cmd, $spec, $pipes);
+    if (!is_resource($process)) {
+        return ['success' => false, 'output' => 'Could not start AidiPanel CLI.', 'code' => 1];
+    }
+
+    fwrite($pipes[0], $header);
+    while (!feof($srcHandle)) {
+        $chunk = fread($srcHandle, 1 << 20);
+        if ($chunk === false) { break; }
+        fwrite($pipes[0], $chunk);
+    }
+    fclose($pipes[0]);
+    $stdout = stream_get_contents($pipes[1]);
+    $stderr = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $exitCode = proc_close($process);
+
+    $output = trim($stdout . ($stderr !== '' ? "\n" . $stderr : ''));
+    return [
+        'success' => $exitCode === 0,
+        'output' => (string) preg_replace('/\x1B\[[0-9;]*[A-Za-z]/', '', $output),
+        'code' => $exitCode,
+    ];
+}
+
+/**
+ * File-manager download runner. Sends $stdin (e.g. the requested path) to the CLI,
+ * then streams the CLI's raw stdout straight to the browser in chunks. Caller must
+ * have already sent Content-Type/Content-Disposition headers. Returns the exit code;
+ * nothing useful was streamed on a non-zero exit.
+ */
+function run_cli_download_stdin(string $command, array $args, string $stdin): int
+{
+    $binary = '/usr/local/bin/aidipanel';
+    if (!file_exists($binary)) { return 1; }
+    if (!is_web_cli_invocation_allowed($command, $args)) { return 126; }
+
+    $safeArgs = array_map('escapeshellarg', $args);
+    $cmd = 'NO_COLOR=1 ' . escapeshellcmd($binary) . ' ' . escapeshellarg($command) . ' ' . implode(' ', $safeArgs);
+    $currentUser = trim((string)(shell_exec('whoami 2>/dev/null') ?: ''));
+    if ($currentUser !== 'root' && file_exists('/usr/bin/sudo')) {
+        $runner = file_exists('/usr/local/sbin/aidipanel-web-run')
+            ? '/usr/local/sbin/aidipanel-web-run'
+            : $binary;
+        $cmd = '/usr/bin/sudo ' . escapeshellcmd($runner) . ' '
+            . escapeshellarg($command) . ' ' . implode(' ', $safeArgs);
+    }
+
+    $spec = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+    $process = proc_open($cmd, $spec, $pipes);
+    if (!is_resource($process)) { return 1; }
+
+    fwrite($pipes[0], $stdin);
+    fclose($pipes[0]);
+    while (!feof($pipes[1])) {
+        echo fread($pipes[1], 1 << 20);
+        @ob_flush();
+        @flush();
+    }
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    return proc_close($process);
 }
 
 /**
