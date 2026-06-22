@@ -89,10 +89,10 @@ $tabs = [
     <div class="flex items-center justify-between mb-4">
       <div class="flex items-center gap-3">
         <a href="/sites" class="text-zinc-400 hover:text-ink flex items-center text-sm" title="<?= e(t('site.back')) ?>">
-          <i class="ti ti-arrow-left" aria-hidden="true"></i>
+          <?= icon('arrow-left') ?>
         </a>
         <span class="w-10 h-10 rounded-lg <?= $iconBg ?> flex items-center justify-center shrink-0">
-          <i class="ti <?= e($appIcon($type)) ?> <?= $iconColor ?> text-xl" aria-hidden="true"></i>
+          <?= icon($appIcon($type), $iconColor . ' text-xl') ?>
         </span>
         <div>
           <div class="flex items-center gap-2">
@@ -114,7 +114,7 @@ $tabs = [
       <div class="flex items-center gap-2">
         <a href="<?= e($visitUrl) ?>" target="_blank" rel="noopener"
            class="btn btn-secondary text-xs flex items-center gap-1.5">
-          <i class="ti ti-external-link text-sm" aria-hidden="true"></i> <?= e(t('site.visit')) ?>
+          <?= icon('external-link', 'text-sm') ?> <?= e(t('site.visit')) ?>
         </a>
       </div>
     </div>
@@ -124,7 +124,7 @@ $tabs = [
       <?php foreach ($tabs as $key => $tab): ?>
       <a href="/sites/<?= e($domain) ?>?tab=<?= $key ?>"
          class="tab <?= $activeTab === $key ? 'active' : '' ?>">
-        <i class="ti <?= $tab['icon'] ?> text-[15px]" aria-hidden="true"></i>
+        <?= icon($tab['icon'], 'text-[15px]') ?>
         <?= e($tab['label']) ?>
       </a>
       <?php endforeach; ?>
@@ -146,7 +146,7 @@ $tabs = [
     <div class="card p-4">
       <div class="flex items-center justify-between mb-2">
         <span class="eyebrow"><?= e(t('site.ov.ssl_label')) ?></span>
-        <i class="ti <?= $hasTrustedSsl ? 'ti-lock-check text-emerald-500' : 'ti-lock text-zinc-400' ?>" aria-hidden="true"></i>
+        <?= icon($hasTrustedSsl ? 'lock-check' : 'lock', $hasTrustedSsl ? 'text-emerald-500' : 'text-zinc-400') ?>
       </div>
       <p class="text-sm font-semibold text-zinc-900">
         <?= e($hasTrustedSsl ? t('site.ov.ssl_active') : t('site.ov.ssl_self')) ?>
@@ -165,7 +165,7 @@ $tabs = [
     <div class="card p-4">
       <div class="flex items-center justify-between mb-2">
         <span class="eyebrow"><?= e(t('site.ov.cache_label')) ?></span>
-        <i class="ti ti-bolt <?= $hasCache ? 'text-speed' : 'text-zinc-300' ?>" aria-hidden="true"></i>
+        <?= icon('bolt', $hasCache ? 'text-speed' : 'text-zinc-300') ?>
       </div>
       <p class="text-sm font-semibold text-zinc-900">
         <?= e($hasCache ? t('site.ov.cache_on') : t('site.ov.cache_off')) ?>
@@ -177,7 +177,7 @@ $tabs = [
     <div class="card p-4">
       <div class="flex items-center justify-between mb-2">
         <span class="eyebrow"><?= e(t('site.ov.php_label')) ?></span>
-        <i class="ti ti-brand-php text-ink" aria-hidden="true"></i>
+        <?= icon('brand-php', 'text-ink') ?>
       </div>
       <p class="text-sm font-semibold text-zinc-900 mono">
         <?= $phpVer ? e($phpVer) : '—' ?>
@@ -189,7 +189,7 @@ $tabs = [
     <div class="card p-4">
       <div class="flex items-center justify-between mb-2">
         <span class="eyebrow"><?= e(t('site.ov.disk_label')) ?></span>
-        <i class="ti ti-folder text-amber-500" aria-hidden="true"></i>
+        <?= icon('folder', 'text-amber-500') ?>
       </div>
       <p class="text-sm font-semibold text-zinc-900 mono"><?= e($diskSize) ?></p>
       <p class="text-[11px] text-zinc-400 mt-0.5"><?= e(t('site.ov.files_uploads')) ?></p>
@@ -252,7 +252,7 @@ $tabs = [
         <div class="card-head">
           <h2 class="card-title"><?= e(t('site.activity.title')) ?></h2>
           <a href="/logs" class="text-xs text-ink font-medium hover:text-ink-light flex items-center gap-1">
-            <?= e(t('site.activity.view_all')) ?> <i class="ti ti-arrow-right text-sm" aria-hidden="true"></i>
+            <?= e(t('site.activity.view_all')) ?> <?= icon('arrow-right', 'text-sm') ?>
           </a>
         </div>
         <?php if (empty($logs)): ?>
@@ -281,7 +281,7 @@ $tabs = [
 
         <a href="<?= e($visitUrl) ?>" target="_blank" rel="noopener"
            class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-zinc-50 text-sm text-zinc-700 transition-colors">
-          <i class="ti ti-external-link text-[18px] text-zinc-400" aria-hidden="true"></i>
+          <?= icon('external-link', 'text-[18px] text-zinc-400') ?>
           <?= e(t('site.qa.visit')) ?>
         </a>
 
@@ -291,7 +291,7 @@ $tabs = [
           <input type="hidden" name="domain" value="<?= e($domain) ?>">
           <button type="submit"
                   class="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-zinc-50 text-sm text-zinc-700 transition-colors text-left">
-            <i class="ti ti-bolt text-[18px] text-speed" aria-hidden="true"></i>
+            <?= icon('bolt', 'text-[18px] text-speed') ?>
             <?= e(t('site.qa.clear_cache')) ?>
           </button>
         </form>
@@ -301,7 +301,7 @@ $tabs = [
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
           <button type="submit"
                   class="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-zinc-50 text-sm text-zinc-700 transition-colors text-left">
-            <i class="ti ti-refresh text-[18px] text-zinc-400" aria-hidden="true"></i>
+            <?= icon('refresh', 'text-[18px] text-zinc-400') ?>
             <?= e(t('site.qa.restart_php')) ?>
           </button>
         </form>
@@ -372,7 +372,7 @@ $tabs = [
     <!-- Card head -->
     <div class="card-head">
       <div class="flex items-center gap-2.5">
-        <i class="ti ti-bolt <?= $pcActive ? 'text-speed' : 'text-zinc-300' ?> text-lg" aria-hidden="true"></i>
+        <?= icon('bolt', ($pcActive ? 'text-speed' : 'text-zinc-300') . ' text-lg') ?>
         <div>
           <h2 class="card-title">
             <?= e(t('perf.page_cache')) ?>
@@ -394,7 +394,7 @@ $tabs = [
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
           <input type="hidden" name="domain" value="<?= e($domain) ?>">
           <button type="submit" class="btn btn-secondary btn-sm">
-            <i class="ti ti-refresh text-sm" aria-hidden="true"></i> <?= e(t('perf.purge')) ?>
+            <?= icon('refresh', 'text-sm') ?> <?= e(t('perf.purge')) ?>
           </button>
         </form>
         <span class="w-px h-4 bg-zinc-200 mx-1"></span>
@@ -415,7 +415,7 @@ $tabs = [
     <!-- UNSUPPORTED STATE -->
     <div class="px-5 py-5">
       <div class="flex items-start gap-3">
-        <i class="ti ti-info-circle text-zinc-400 text-lg flex-none mt-0.5" aria-hidden="true"></i>
+        <?= icon('info-circle', 'text-zinc-400 text-lg flex-none mt-0.5') ?>
         <div>
           <p class="text-sm font-medium text-zinc-700 mb-0.5">Page cache is not supported for this site type.</p>
           <p class="text-[11px] text-zinc-400">FastCGI page cache applies to PHP sites only. Static and reverse-proxy sites are served directly by Nginx without a cache layer.</p>
@@ -428,7 +428,7 @@ $tabs = [
     <div class="px-5 py-6">
       <?php if (!$pcEngineOk && !empty($pageCacheInfo)): ?>
       <div class="flex items-start gap-3 mb-5 bg-amber-50 border border-amber-200/70 rounded-lg px-4 py-3">
-        <i class="ti ti-alert-triangle text-amber-500 text-sm shrink-0 mt-0.5" aria-hidden="true"></i>
+        <?= icon('alert-triangle', 'text-amber-500 text-sm shrink-0 mt-0.5') ?>
         <div>
           <p class="text-xs font-semibold text-amber-800 mb-0.5">FastCGI cache engine not configured</p>
           <p class="text-[11px] text-amber-700 leading-relaxed">The server-level cache zone is not active. Go to <a href="/admin" class="underline">Admin Area</a> to configure it first.</p>
@@ -437,7 +437,7 @@ $tabs = [
       <?php endif; ?>
       <div class="flex items-start gap-3 mb-5">
         <span class="flex-none w-9 h-9 rounded-lg bg-speed-pale flex items-center justify-center shrink-0">
-          <i class="ti ti-bolt text-speed text-lg" aria-hidden="true"></i>
+          <?= icon('bolt', 'text-speed text-lg') ?>
         </span>
         <div>
           <p class="text-sm font-semibold text-zinc-800 mb-0.5">Start caching this site</p>
@@ -446,15 +446,15 @@ $tabs = [
       </div>
       <div class="space-y-2.5 mb-5">
         <div class="flex items-center gap-2.5">
-          <i class="ti ti-check text-emerald-500 text-sm flex-none" aria-hidden="true"></i>
+          <?= icon('check', 'text-emerald-500 text-sm flex-none') ?>
           <span class="text-sm text-zinc-600"><?= e(t('perf.setup.checklist.1')) ?></span>
         </div>
         <div class="flex items-center gap-2.5">
-          <i class="ti ti-check text-emerald-500 text-sm flex-none" aria-hidden="true"></i>
+          <?= icon('check', 'text-emerald-500 text-sm flex-none') ?>
           <span class="text-sm text-zinc-600"><?= e(t('perf.setup.checklist.2')) ?></span>
         </div>
         <div class="flex items-center gap-2.5">
-          <i class="ti ti-check text-emerald-500 text-sm flex-none" aria-hidden="true"></i>
+          <?= icon('check', 'text-emerald-500 text-sm flex-none') ?>
           <span class="text-sm text-zinc-600"><?= e(t('perf.setup.checklist.3')) ?></span>
         </div>
       </div>
@@ -479,7 +479,7 @@ $tabs = [
           <div class="pt-4 border-t border-zinc-100 flex items-center justify-between">
             <p class="text-[11px] text-zinc-400">Safe defaults applied automatically.</p>
             <button type="<?= $type === 'php' ? 'button' : 'submit' ?>"<?php if ($type === 'php'): ?> @click="confirm = true"<?php endif; ?> class="btn btn-primary" <?= (!$pcEngineOk && !empty($pageCacheInfo)) ? 'disabled' : '' ?>>
-              <i class="ti ti-bolt text-sm" aria-hidden="true"></i> <?= e(t('perf.enable')) ?>
+              <?= icon('bolt', 'text-sm') ?> <?= e(t('perf.enable')) ?>
             </button>
           </div>
         </div>
@@ -492,17 +492,17 @@ $tabs = [
             <div class="card-head flex items-center justify-between gap-3">
               <div class="flex items-center gap-2">
                 <span class="w-8 h-8 rounded-lg bg-amber-50 flex items-center justify-center shrink-0">
-                  <i class="ti ti-alert-triangle text-amber-500" aria-hidden="true"></i>
+                  <?= icon('alert-triangle', 'text-amber-500') ?>
                 </span>
                 <h3 class="card-title"><?= e(t('perf.cache.dynamic_modal_title')) ?></h3>
               </div>
-              <button type="button" @click="confirm=false" :disabled="submitting" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><i class="ti ti-x" aria-hidden="true"></i></button>
+              <button type="button" @click="confirm=false" :disabled="submitting" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><?= icon('x') ?></button>
             </div>
             <div class="p-5 space-y-4">
               <p class="text-sm text-zinc-600 leading-relaxed"><?= e(t('perf.cache.dynamic_modal_body')) ?></p>
               <div class="flex justify-end gap-2 pt-1">
                 <button type="button" @click="confirm=false" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
-                <button type="submit" @click="confirm = false" class="btn btn-primary"><i class="ti ti-bolt text-sm" aria-hidden="true"></i> <?= e(t('perf.cache.dynamic_modal_confirm')) ?></button>
+                <button type="submit" @click="confirm = false" class="btn btn-primary"><?= icon('bolt', 'text-sm') ?> <?= e(t('perf.cache.dynamic_modal_confirm')) ?></button>
               </div>
             </div>
           </div>
@@ -515,7 +515,7 @@ $tabs = [
     <!-- ENABLED STATE: metric tiles + single-column config form -->
     <?php if ($type === 'wordpress' && $wpHelper === 'not_installed'): ?>
     <div class="flex items-center gap-2 bg-sky-50 border-b border-sky-100 px-5 py-2.5">
-      <i class="ti ti-info-circle text-sky-500 text-sm shrink-0" aria-hidden="true"></i>
+      <?= icon('info-circle', 'text-sky-500 text-sm shrink-0') ?>
       <p class="text-[11px] text-sky-800">
         Install <strong>Nginx Helper</strong> in WordPress to auto-purge the page cache on publish and updates.
       </p>
@@ -557,7 +557,7 @@ $tabs = [
           <input type="url" data-check-url class="inp flex-1 font-mono text-xs"
                  value="https://<?= e($domain) ?>/" placeholder="https://<?= e($domain) ?>/path">
           <button type="button" data-check-btn class="btn btn-secondary btn-sm shrink-0">
-            <i class="ti ti-search text-sm" aria-hidden="true"></i> Check
+            <?= icon('search', 'text-sm') ?> Check
           </button>
         </div>
         <p data-check-result class="hidden mt-2 text-xs"></p>
@@ -572,7 +572,7 @@ $tabs = [
         <div class="flex items-center justify-between mt-1">
           <p class="hint">One URL per line.</p>
           <button type="submit" class="btn btn-secondary btn-sm">
-            <i class="ti ti-trash text-sm" aria-hidden="true"></i> Purge URLs
+            <?= icon('trash', 'text-sm') ?> Purge URLs
           </button>
         </div>
       </form>
@@ -633,7 +633,7 @@ $tabs = [
           <div class="flex flex-wrap gap-1.5 mb-2">
             <?php foreach ($baselineExcludeUrls as $bu): ?>
               <span class="tag tag-muted" title="<?= e(t('perf.cache.exclude.baseline_hint')) ?>">
-                <i class="ti ti-lock" aria-hidden="true"></i><?= e($bu) ?>
+                <?= icon('lock') ?><?= e($bu) ?>
               </span>
             <?php endforeach; ?>
           </div>
@@ -648,7 +648,7 @@ $tabs = [
           <div class="flex flex-wrap gap-1.5 mb-2">
             <?php foreach ($baselineCookies as $bc): ?>
               <span class="tag tag-muted" title="<?= e(t('perf.cache.cookies.baseline_hint')) ?>">
-                <i class="ti ti-lock" aria-hidden="true"></i><?= e($bc) ?>
+                <?= icon('lock') ?><?= e($bc) ?>
               </span>
             <?php endforeach; ?>
           </div>
@@ -674,14 +674,14 @@ $tabs = [
 
         <!-- Always-on cache policy (display only; enforced server-side) -->
         <div class="rounded-lg border border-zinc-200 bg-zinc-50/60 px-3 py-2.5 space-y-1.5">
-          <p class="hint flex items-start gap-1.5"><i class="ti ti-info-circle mt-0.5 flex-none" aria-hidden="true"></i><span><?= e(t('perf.cache.policy.always_bypass')) ?></span></p>
-          <p class="hint flex items-start gap-1.5"><i class="ti ti-info-circle mt-0.5 flex-none" aria-hidden="true"></i><span><?= e(t('perf.cache.policy.status_codes')) ?></span></p>
+          <p class="hint flex items-start gap-1.5"><?= icon('info-circle', 'mt-0.5 flex-none') ?><span><?= e(t('perf.cache.policy.always_bypass')) ?></span></p>
+          <p class="hint flex items-start gap-1.5"><?= icon('info-circle', 'mt-0.5 flex-none') ?><span><?= e(t('perf.cache.policy.status_codes')) ?></span></p>
         </div>
       </div>
 
       <!-- Footer -->
       <div class="px-5 py-3.5 bg-zinc-50/60 border-t border-zinc-100 flex items-center justify-end">
-        <button type="submit" class="btn btn-primary"><i class="ti ti-device-floppy text-sm" aria-hidden="true"></i> <?= e(t('perf.cache.save')) ?></button>
+        <button type="submit" class="btn btn-primary"><?= icon('device-floppy', 'text-sm') ?> <?= e(t('perf.cache.save')) ?></button>
       </div>
     </form>
     <?php endif; ?>
@@ -772,7 +772,7 @@ $tabs = [
   <div class="card overflow-hidden mb-5">
     <div class="card-head">
       <div class="flex items-center gap-2.5">
-        <i class="ti ti-database <?= $ocActive ? 'text-speed' : 'text-zinc-300' ?> text-lg" aria-hidden="true"></i>
+        <?= icon('database', ($ocActive ? 'text-speed' : 'text-zinc-300') . ' text-lg') ?>
         <div>
           <h2 class="card-title">
             <?= e(t('perf.object_cache')) ?>
@@ -800,7 +800,7 @@ $tabs = [
           <input type="hidden" name="domain" value="<?= e($domain) ?>">
           <input type="hidden" name="action" value="flush">
           <button type="submit" class="btn btn-secondary btn-sm" title="Clear this site's object cache">
-            <i class="ti ti-refresh text-sm" aria-hidden="true"></i> Flush
+            <?= icon('refresh', 'text-sm') ?> Flush
           </button>
         </form>
         <span class="w-px h-4 bg-zinc-200 mx-1"></span>
@@ -825,7 +825,7 @@ $tabs = [
     <?php elseif ($ocUnsup): ?>
     <div class="px-5 py-5">
       <div class="flex items-start gap-3">
-        <i class="ti ti-info-circle text-zinc-400 text-lg flex-none mt-0.5" aria-hidden="true"></i>
+        <?= icon('info-circle', 'text-zinc-400 text-lg flex-none mt-0.5') ?>
         <div>
           <p class="text-sm font-medium text-zinc-700 mb-0.5">WordPress only</p>
           <p class="text-[11px] text-zinc-400 leading-relaxed">Redis object cache integration is available for WordPress sites. WP stores queries, transients, and object data in memory for faster page generation.</p>
@@ -836,7 +836,7 @@ $tabs = [
     <?php elseif ($ocSvcDown): ?>
     <div class="px-5 py-5">
       <div class="flex items-start gap-3 bg-amber-50 border border-amber-200/70 rounded-lg px-4 py-3.5">
-        <i class="ti ti-alert-triangle text-amber-500 text-sm shrink-0 mt-0.5" aria-hidden="true"></i>
+        <?= icon('alert-triangle', 'text-amber-500 text-sm shrink-0 mt-0.5') ?>
         <div>
           <p class="text-xs font-semibold text-amber-800 mb-0.5">Redis service is not running</p>
           <p class="text-[11px] text-amber-700 leading-relaxed">
@@ -887,7 +887,7 @@ $tabs = [
     </div>
     <?php else: ?>
     <div class="flex items-center gap-2 bg-amber-50 border-b border-amber-100 px-5 py-2.5">
-      <i class="ti ti-info-circle text-amber-500 text-sm shrink-0" aria-hidden="true"></i>
+      <?= icon('info-circle', 'text-amber-500 text-sm shrink-0') ?>
       <p class="text-[11px] text-amber-800">This site's Redis prefix was not set by AidiPanel, so cache actions are hidden to avoid affecting manually-configured data.</p>
     </div>
     <?php endif; ?>
@@ -918,7 +918,7 @@ $tabs = [
       </div>
       <?php if ($ocWpCli): ?>
       <div class="flex items-start gap-2 bg-amber-50 border border-amber-200/70 rounded-lg px-3 py-2.5">
-        <i class="ti ti-alert-triangle text-amber-500 mt-0.5 text-sm shrink-0" aria-hidden="true"></i>
+        <?= icon('alert-triangle', 'text-amber-500 mt-0.5 text-sm shrink-0') ?>
         <p class="text-[11px] text-amber-800 leading-relaxed">WP-CLI is not installed on this server. It is required for safe object cache management.</p>
       </div>
       <?php endif; ?>
@@ -926,7 +926,7 @@ $tabs = [
       <div class="pt-1 border-t border-zinc-100 flex items-center justify-between">
         <p class="text-[11px] text-zinc-400">WP-CLI is required to manage object cache.</p>
         <button type="button" disabled class="btn btn-primary opacity-50 cursor-not-allowed">
-          <i class="ti ti-bolt text-sm" aria-hidden="true"></i> Enable Object Cache
+          <?= icon('bolt', 'text-sm') ?> Enable Object Cache
         </button>
       </div>
       <?php else: ?>
@@ -937,7 +937,7 @@ $tabs = [
         <div data-op-fields class="flex items-center justify-between">
           <p class="text-[11px] text-zinc-400">Installs the Redis Object Cache plugin and connects this site (~30–60s).</p>
           <button type="submit" class="btn btn-primary shrink-0">
-            <i class="ti ti-bolt text-sm" aria-hidden="true"></i> Enable Object Cache
+            <?= icon('bolt', 'text-sm') ?> Enable Object Cache
           </button>
         </div>
         <?php include APP_ROOT . '/Views/partials/op-progress.php'; ?>
@@ -953,7 +953,7 @@ $tabs = [
        x-init="load()">
     <div class="card-head">
       <div class="flex items-center gap-2.5">
-        <i class="ti ti-stack-2 <?= $pcActive ? 'text-speed' : 'text-zinc-300' ?> text-lg" aria-hidden="true"></i>
+        <?= icon('stack-2', ($pcActive ? 'text-speed' : 'text-zinc-300') . ' text-lg') ?>
         <div>
           <h2 class="card-title">
             <?= e(t('perf.cache.zone_title')) ?>
@@ -974,7 +974,7 @@ $tabs = [
     <!-- NEEDS PAGE CACHE -->
     <div class="px-5 py-5">
       <div class="flex items-start gap-3 bg-amber-50 border border-amber-200/70 rounded-lg px-4 py-3.5">
-        <i class="ti ti-info-circle text-amber-500 text-sm shrink-0 mt-0.5" aria-hidden="true"></i>
+        <?= icon('info-circle', 'text-amber-500 text-sm shrink-0 mt-0.5') ?>
         <p class="text-[11px] text-amber-800 leading-relaxed"><?= e(t('perf.cache.zone_need_cache')) ?></p>
       </div>
     </div>
@@ -1008,7 +1008,7 @@ $tabs = [
           <div data-op-fields class="flex items-center justify-between gap-3">
             <p class="text-[11px] text-zinc-400 leading-relaxed">This site has its own cache budget. Revert it to share the default zone.</p>
             <button type="submit" class="btn btn-secondary shrink-0">
-              <i class="ti ti-arrow-back-up text-sm" aria-hidden="true"></i> <?= e(t('perf.cache.zone_disable')) ?>
+              <?= icon('arrow-back-up', 'text-sm') ?> <?= e(t('perf.cache.zone_disable')) ?>
             </button>
           </div>
           <?php include APP_ROOT . '/Views/partials/op-progress.php'; ?>
@@ -1045,7 +1045,7 @@ $tabs = [
             <p class="hint"><?= e(t('perf.cache.zone_max_hint')) ?></p>
           </div>
           <button type="submit" class="btn btn-primary shrink-0 mt-[23px]">
-            <i class="ti ti-stack-push text-sm" aria-hidden="true"></i> <?= e(t('perf.cache.zone_enable')) ?>
+            <?= icon('stack-push', 'text-sm') ?> <?= e(t('perf.cache.zone_enable')) ?>
           </button>
         </div>
         <?php include APP_ROOT . '/Views/partials/op-progress.php'; ?>
@@ -1058,7 +1058,7 @@ $tabs = [
   <div class="card overflow-hidden mb-5">
     <div class="card-head">
       <div class="flex items-center gap-2.5">
-        <i class="ti ti-cpu <?= $opcEnabled ? 'text-speed' : 'text-zinc-300' ?> text-lg" aria-hidden="true"></i>
+        <?= icon('cpu', ($opcEnabled ? 'text-speed' : 'text-zinc-300') . ' text-lg') ?>
         <div>
           <h2 class="card-title">
             <?= e(t('perf.opcache')) ?>
@@ -1079,7 +1079,7 @@ $tabs = [
         </div>
       </div>
       <a href="/php" class="btn btn-ghost btn-sm shrink-0">
-        <i class="ti ti-settings text-sm" aria-hidden="true"></i> Manage in PHP Settings
+        <?= icon('settings', 'text-sm') ?> Manage in PHP Settings
       </a>
     </div>
     <?php if ($opcEnabled): ?>
@@ -1109,7 +1109,7 @@ $tabs = [
     <div class="flex items-center justify-between">
       <div>
         <h2 class="font-head font-semibold text-sm text-zinc-700 flex items-center gap-2">
-          <i class="ti ti-rocket text-zinc-400" aria-hidden="true"></i>
+          <?= icon('rocket', 'text-zinc-400') ?>
           <?= e(t('perf.delivery')) ?>
           <span class="tag tag-muted"><?= e(t('perf.server_default')) ?></span>
         </h2>
@@ -1117,7 +1117,7 @@ $tabs = [
       </div>
       <a href="/admin"
          class="text-xs font-semibold text-ink hover:underline flex items-center gap-1 whitespace-nowrap shrink-0">
-        <?= e(t('perf.server_tuning')) ?> <i class="ti ti-arrow-right text-sm" aria-hidden="true"></i>
+        <?= e(t('perf.server_tuning')) ?> <?= icon('arrow-right', 'text-sm') ?>
       </a>
     </div>
     <div class="flex flex-wrap items-center gap-2 mt-3">
@@ -1125,7 +1125,7 @@ $tabs = [
         <?php foreach ($protoLabels as $key => $label): ?>
           <?php $protoActive = ($protocolInfo[$key] ?? '') === 'on'; ?>
           <span class="text-[11px] font-medium <?= $protoActive ? 'text-emerald-700 bg-emerald-50' : 'text-zinc-400 bg-zinc-100' ?> px-2.5 py-1 rounded-full flex items-center gap-1">
-            <i class="ti <?= $protoActive ? 'ti-check' : 'ti-minus' ?> text-xs" aria-hidden="true"></i>
+            <?= icon($protoActive ? 'check' : 'minus', 'text-xs') ?>
             <?= e($label) ?>
           </span>
         <?php endforeach; ?>
@@ -1162,7 +1162,7 @@ $tabs = [
           </div>
           <button type="submit" class="btn btn-primary" :disabled="submitting">
             <span x-show="!submitting"><?= e(t('site.set.php_apply')) ?></span>
-            <span x-show="submitting" x-cloak><i class="ti ti-loader-2 text-sm spin" aria-hidden="true"></i> <?= e(t('site.set.php_applying')) ?></span>
+            <span x-show="submitting" x-cloak><?= icon('loader-2', 'text-sm spin') ?> <?= e(t('site.set.php_applying')) ?></span>
           </button>
         </div>
         <?php include APP_ROOT . '/Views/partials/op-progress.php'; ?>
@@ -1174,27 +1174,27 @@ $tabs = [
             <div class="card-head flex items-center justify-between gap-3">
               <div class="flex items-center gap-2">
                 <span class="w-8 h-8 rounded-lg bg-ink-pale flex items-center justify-center shrink-0">
-                  <i class="ti ti-download text-ink" aria-hidden="true"></i>
+                  <?= icon('download', 'text-ink') ?>
                 </span>
                 <h3 class="card-title"><span x-text="'PHP ' + confirmVer"></span> <?= e(t('site.add.php_modal_title')) ?></h3>
               </div>
-              <button type="button" @click="confirmVer=null" :disabled="submitting" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><i class="ti ti-x" aria-hidden="true"></i></button>
+              <button type="button" @click="confirmVer=null" :disabled="submitting" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><?= icon('x') ?></button>
             </div>
             <div class="p-5 space-y-4">
               <p class="text-sm text-zinc-600"><?= e(t('site.add.php_modal_body')) ?></p>
               <div class="flex items-start gap-2 bg-amber-50 border border-amber-200/70 rounded-lg px-3 py-2">
-                <i class="ti ti-clock text-amber-500 mt-0.5 text-sm" aria-hidden="true"></i>
+                <?= icon('clock', 'text-amber-500 mt-0.5 text-sm') ?>
                 <p class="text-[11px] text-amber-800 leading-relaxed"><?= e(t('site.add.php_modal_eta')) ?></p>
               </div>
               <div x-show="submitting" x-cloak class="flex items-start gap-2 bg-ink-pale border border-ink/15 rounded-lg px-3 py-2">
-                <i class="ti ti-loader-2 text-ink mt-0.5 text-sm spin" aria-hidden="true"></i>
+                <?= icon('loader-2', 'text-ink mt-0.5 text-sm spin') ?>
                 <p class="text-[11px] text-ink leading-relaxed"><?= e(t('site.add.php_installing_note')) ?></p>
               </div>
               <div class="flex justify-end gap-2 pt-1">
                 <button type="button" @click="confirmVer=null" :disabled="submitting" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
                 <button type="button" @click="proceed()" :disabled="submitting" class="btn btn-primary">
-                  <span x-show="!submitting"><i class="ti ti-check text-sm" aria-hidden="true"></i> <?= e(t('site.set.php_modal_confirm')) ?></span>
-                  <span x-show="submitting" x-cloak><i class="ti ti-loader-2 text-sm spin" aria-hidden="true"></i> <?= e(t('site.set.php_applying')) ?></span>
+                  <span x-show="!submitting"><?= icon('check', 'text-sm') ?> <?= e(t('site.set.php_modal_confirm')) ?></span>
+                  <span x-show="submitting" x-cloak><?= icon('loader-2', 'text-sm spin') ?> <?= e(t('site.set.php_applying')) ?></span>
                 </button>
               </div>
             </div>
@@ -1208,11 +1208,11 @@ $tabs = [
     <div class="card overflow-hidden">
       <div class="card-head">
         <div>
-          <h2 class="card-title"><i class="ti ti-code text-zinc-400" aria-hidden="true"></i> <?= e(t('site.set.nginx_title')) ?></h2>
+          <h2 class="card-title"><?= icon('code', 'text-zinc-400') ?> <?= e(t('site.set.nginx_title')) ?></h2>
           <p class="text-[11px] text-zinc-400 mt-0.5"><?= e(t('site.set.nginx_hint')) ?></p>
         </div>
         <a href="/sites/<?= e($domain) ?>/nginx" class="btn btn-sm btn-secondary">
-          <i class="ti ti-edit text-sm" aria-hidden="true"></i> <?= e(t('site.set.nginx_edit')) ?>
+          <?= icon('edit', 'text-sm') ?> <?= e(t('site.set.nginx_edit')) ?>
         </a>
       </div>
       <?php if ($nginxConf): ?>
@@ -1232,7 +1232,7 @@ $tabs = [
         <p class="text-sm text-zinc-600 mb-1 font-medium"><?= e(t('site.set.delete_site')) ?></p>
         <p class="text-xs text-zinc-400 mb-4"><?= e(t('site.set.delete_hint')) ?></p>
         <button type="button" @click="open=true; typed=''" class="btn btn-danger">
-          <i class="ti ti-trash text-sm" aria-hidden="true"></i>
+          <?= icon('trash', 'text-sm') ?>
           <?= e(t('site.set.delete_btn', ['domain' => $domain])) ?>
         </button>
       </div>
@@ -1242,8 +1242,8 @@ $tabs = [
         <div class="absolute inset-0 bg-zinc-900/40"></div>
         <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl">
           <div class="card-head flex items-center justify-between bg-red-50/50">
-            <h3 class="card-title text-red-700"><i class="ti ti-alert-triangle" aria-hidden="true"></i> <?= e(t('site.set.delete_modal_title', ['domain' => $domain])) ?></h3>
-            <button type="button" @click="open=false" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x" aria-hidden="true"></i></button>
+            <h3 class="card-title text-red-700"><?= icon('alert-triangle') ?> <?= e(t('site.set.delete_modal_title', ['domain' => $domain])) ?></h3>
+            <button type="button" @click="open=false" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700"><?= icon('x') ?></button>
           </div>
           <div class="p-5 space-y-3">
             <p class="text-sm text-zinc-600"><?= e(t('site.set.delete_modal_warning')) ?></p>
@@ -1256,7 +1256,7 @@ $tabs = [
               <button type="submit" class="btn btn-danger"
                       :disabled="typed !== '<?= e($domain) ?>'"
                       :class="{ 'opacity-50 cursor-not-allowed': typed !== '<?= e($domain) ?>' }">
-                <i class="ti ti-trash text-sm" aria-hidden="true"></i> <?= e(t('site.set.delete_modal_confirm_btn')) ?>
+                <?= icon('trash', 'text-sm') ?> <?= e(t('site.set.delete_modal_confirm_btn')) ?>
               </button>
             </form>
           </div>
@@ -1283,7 +1283,7 @@ $tabs = [
       <!-- header + Manage SSL -->
       <div class="card-head">
         <div class="flex items-center gap-2.5">
-          <i class="ti <?= $hasTrustedSsl ? 'ti-lock-check text-emerald-500' : 'ti-lock-open text-amber-500' ?> text-lg" aria-hidden="true"></i>
+          <?= icon($hasTrustedSsl ? 'lock-check' : 'lock-open', ($hasTrustedSsl ? 'text-emerald-500' : 'text-amber-500') . ' text-lg') ?>
           <div>
             <h2 class="card-title">
               <?= e(t('site.ssl.title')) ?>
@@ -1295,20 +1295,20 @@ $tabs = [
 
         <div class="relative" @click.outside="manage=false">
           <button type="button" @click="manage=!manage" class="btn btn-secondary btn-sm">
-            <i class="ti ti-settings text-sm" aria-hidden="true"></i> <?= e(t('site.ssl.manage')) ?>
-            <i class="ti ti-chevron-down text-xs" aria-hidden="true"></i>
+            <?= icon('settings', 'text-sm') ?> <?= e(t('site.ssl.manage')) ?>
+            <?= icon('chevron-down', 'text-xs') ?>
           </button>
           <div x-show="manage" x-cloak x-transition.opacity
                class="absolute right-0 mt-1 w-56 bg-white border border-zinc-200 rounded-lg shadow-lg py-1 z-30">
             <?php if ($sslState === 'letsencrypt'): ?>
-            <button type="button" @click="manage=false; modal='renew'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-refresh text-zinc-400" aria-hidden="true"></i> <?= e(t('site.ssl.renew_cert')) ?></button>
-            <button type="button" @click="manage=false; modal='le'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-rosette-discount-check text-zinc-400" aria-hidden="true"></i> <?= e(t('site.ssl.reissue')) ?></button>
+            <button type="button" @click="manage=false; modal='renew'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><?= icon('refresh', 'text-zinc-400') ?> <?= e(t('site.ssl.renew_cert')) ?></button>
+            <button type="button" @click="manage=false; modal='le'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><?= icon('rosette-discount-check', 'text-zinc-400') ?> <?= e(t('site.ssl.reissue')) ?></button>
             <?php else: ?>
-            <button type="button" @click="manage=false; modal='le'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-lock-check text-zinc-400" aria-hidden="true"></i> <?= e(t('site.ssl.issue_le')) ?></button>
+            <button type="button" @click="manage=false; modal='le'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><?= icon('lock-check', 'text-zinc-400') ?> <?= e(t('site.ssl.issue_le')) ?></button>
             <?php endif; ?>
-            <button type="button" @click="manage=false; modal='import'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-certificate text-zinc-400" aria-hidden="true"></i> <?= e(t('site.ssl.import')) ?></button>
+            <button type="button" @click="manage=false; modal='import'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><?= icon('certificate', 'text-zinc-400') ?> <?= e(t('site.ssl.import')) ?></button>
             <div class="h-px bg-zinc-100 my-1"></div>
-            <button type="button" @click="manage=false; runCheck()" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-shield-search text-zinc-400" aria-hidden="true"></i> <?= e(t('site.ssl.run_check')) ?></button>
+            <button type="button" @click="manage=false; runCheck()" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><?= icon('shield-search', 'text-zinc-400') ?> <?= e(t('site.ssl.run_check')) ?></button>
           </div>
         </div>
       </div>
@@ -1316,7 +1316,7 @@ $tabs = [
       <?php if (!$hasTrustedSsl): ?>
       <div class="px-5 pt-4">
         <div class="flex items-start gap-2.5 bg-amber-50 border border-amber-200/70 rounded-lg px-4 py-3">
-          <i class="ti ti-alert-triangle text-amber-500 mt-0.5 shrink-0" aria-hidden="true"></i>
+          <?= icon('alert-triangle', 'text-amber-500 mt-0.5 shrink-0') ?>
           <div>
             <?php if ($sslReason !== null): ?>
             <p class="text-xs font-semibold text-amber-900 mb-0.5"><?= e(t('site.ssl.not_secure_because', ['reason' => $sslReason])) ?></p>
@@ -1386,12 +1386,12 @@ $tabs = [
             <td class="text-center">
               <?php if (empty($c['active'])): ?>
               <div class="relative inline-block text-left" x-data="{ row:false }" @click.outside="row=false">
-                <button type="button" @click="row=!row" class="w-7 h-7 grid place-items-center rounded-md hover:bg-zinc-100 text-zinc-400" title="<?= e(t('site.ssl.use_cert')) ?>"><i class="ti ti-dots-vertical" aria-hidden="true"></i></button>
+                <button type="button" @click="row=!row" class="w-7 h-7 grid place-items-center rounded-md hover:bg-zinc-100 text-zinc-400" title="<?= e(t('site.ssl.use_cert')) ?>"><?= icon('dots-vertical') ?></button>
                 <div x-show="row" x-cloak class="absolute right-0 mt-1 w-44 bg-white border border-zinc-200 rounded-lg shadow-lg py-1 z-30">
                   <form method="POST" action="/sites/<?= e($domain) ?>/ssl/use">
                     <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
                     <input type="hidden" name="type" value="<?= e($c['state']) ?>">
-                    <button type="submit" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-check text-zinc-400" aria-hidden="true"></i> <?= e(t('site.ssl.use_cert')) ?></button>
+                    <button type="submit" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><?= icon('check', 'text-zinc-400') ?> <?= e(t('site.ssl.use_cert')) ?></button>
                   </form>
                 </div>
               </div>
@@ -1466,15 +1466,15 @@ $tabs = [
       <div class="absolute inset-0 bg-zinc-900/40"></div>
       <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl">
         <div class="card-head">
-          <h3 class="card-title"><i class="ti ti-rosette-discount-check text-speed" aria-hidden="true"></i> <?= e(t('site.ssl.le_modal_title')) ?></h3>
-          <button type="button" @click="modal=null" :disabled="submitting" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><i class="ti ti-x" aria-hidden="true"></i></button>
+          <h3 class="card-title"><?= icon('rosette-discount-check', 'text-speed') ?> <?= e(t('site.ssl.le_modal_title')) ?></h3>
+          <button type="button" @click="modal=null" :disabled="submitting" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><?= icon('x') ?></button>
         </div>
         <form method="POST" action="/sites/<?= e($domain) ?>/ssl/install" data-op-stream>
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
           <div data-op-fields>
           <div class="p-5">
             <div class="flex items-start gap-2.5 bg-speed-pale border border-speed/20 rounded-lg px-4 py-3 mb-4">
-              <i class="ti ti-info-circle text-speed mt-0.5 shrink-0" aria-hidden="true"></i>
+              <?= icon('info-circle', 'text-speed mt-0.5 shrink-0') ?>
               <p class="text-xs text-zinc-600 leading-relaxed"><?= e(t('site.ssl.le_prereq', ['domain' => $domain])) ?></p>
             </div>
 
@@ -1485,12 +1485,12 @@ $tabs = [
                        class="inp mono text-sm flex-1" placeholder="example.com" autocomplete="off" spellcheck="false">
                 <button type="button" @click="domains.splice(i, 1)" x-show="domains.length > 1"
                         class="shrink-0 w-9 h-9 grid place-items-center rounded-lg border border-zinc-200 text-zinc-400 hover:text-red-500 hover:border-red-200 transition"
-                        title="<?= e(t('common.remove')) ?>"><i class="ti ti-x text-sm" aria-hidden="true"></i></button>
+                        title="<?= e(t('common.remove')) ?>"><?= icon('x', 'text-sm') ?></button>
               </div>
             </template>
             <button type="button" @click="domains.push('')"
                     class="inline-flex items-center gap-1 text-xs font-semibold text-speed hover:underline">
-              <i class="ti ti-plus text-xs" aria-hidden="true"></i> <?= e(t('site.ssl.add_domain')) ?>
+              <?= icon('plus', 'text-xs') ?> <?= e(t('site.ssl.add_domain')) ?>
             </button>
             <p class="hint mt-1"><?= e(t('site.ssl.domains_hint')) ?></p>
 
@@ -1501,8 +1501,8 @@ $tabs = [
           <div class="flex items-center justify-end gap-2 px-5 py-3.5 border-t border-zinc-100">
             <button type="button" @click="modal=null" class="btn btn-ghost" :disabled="submitting"><?= e(t('common.cancel')) ?></button>
             <button type="submit" class="btn btn-primary" :disabled="submitting">
-              <i class="ti ti-lock-check text-sm" x-show="!submitting"></i>
-              <i class="ti ti-loader-2 text-sm animate-spin" x-show="submitting" x-cloak></i>
+              <?= icon('lock-check', 'text-sm', ['x-show' => '!submitting']) ?>
+              <?= icon('loader-2', 'text-sm animate-spin', ['x-show' => 'submitting', 'x-cloak' => true]) ?>
               <span x-show="!submitting"><?= e(t('site.ssl.install_btn')) ?></span>
               <span x-show="submitting" x-cloak><?= e(t('site.ssl.processing')) ?></span>
             </button>
@@ -1518,8 +1518,8 @@ $tabs = [
       <div class="absolute inset-0 bg-zinc-900/40"></div>
       <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-lg card shadow-2xl max-h-[90vh] overflow-y-auto">
         <div class="card-head">
-          <h3 class="card-title"><i class="ti ti-certificate text-speed" aria-hidden="true"></i> <?= e(t('site.ssl.import_modal_title')) ?></h3>
-          <button type="button" @click="modal=null" :disabled="submitting" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><i class="ti ti-x" aria-hidden="true"></i></button>
+          <h3 class="card-title"><?= icon('certificate', 'text-speed') ?> <?= e(t('site.ssl.import_modal_title')) ?></h3>
+          <button type="button" @click="modal=null" :disabled="submitting" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><?= icon('x') ?></button>
         </div>
         <form method="POST" action="/sites/<?= e($domain) ?>/ssl/import" @submit="submitting = true; window.opGuard.start()">
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
@@ -1543,8 +1543,8 @@ $tabs = [
           <div class="flex items-center justify-end gap-2 px-5 py-3.5 border-t border-zinc-100">
             <button type="button" @click="modal=null" class="btn btn-ghost" :disabled="submitting"><?= e(t('common.cancel')) ?></button>
             <button type="submit" class="btn btn-primary" :disabled="submitting">
-              <i class="ti ti-upload text-sm" x-show="!submitting"></i>
-              <i class="ti ti-loader-2 text-sm animate-spin" x-show="submitting" x-cloak></i>
+              <?= icon('upload', 'text-sm', ['x-show' => '!submitting']) ?>
+              <?= icon('loader-2', 'text-sm animate-spin', ['x-show' => 'submitting', 'x-cloak' => true]) ?>
               <span x-show="!submitting"><?= e(t('site.ssl.import_btn')) ?></span>
               <span x-show="submitting" x-cloak><?= e(t('site.ssl.processing')) ?></span>
             </button>
@@ -1558,8 +1558,8 @@ $tabs = [
       <div class="absolute inset-0 bg-zinc-900/40"></div>
       <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl">
         <div class="card-head">
-          <h3 class="card-title"><i class="ti ti-refresh text-speed" aria-hidden="true"></i> <?= e(t('site.ssl.renew_cert')) ?></h3>
-          <button type="button" @click="modal=null" :disabled="submitting" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><i class="ti ti-x" aria-hidden="true"></i></button>
+          <h3 class="card-title"><?= icon('refresh', 'text-speed') ?> <?= e(t('site.ssl.renew_cert')) ?></h3>
+          <button type="button" @click="modal=null" :disabled="submitting" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><?= icon('x') ?></button>
         </div>
         <form method="POST" action="/sites/<?= e($domain) ?>/ssl/renew" data-op-stream>
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
@@ -1567,7 +1567,7 @@ $tabs = [
             <p class="text-sm text-zinc-600 leading-relaxed mb-4"><?= e(t('site.ssl.renew')) ?> · <span class="mono"><?= e($domain) ?></span></p>
             <div class="flex justify-end gap-2">
               <button type="button" @click="modal=null" :disabled="submitting" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
-              <button type="submit" :disabled="submitting" class="btn btn-primary"><i class="ti ti-refresh text-sm" aria-hidden="true"></i> <?= e(t('site.ssl.renew_cert')) ?></button>
+              <button type="submit" :disabled="submitting" class="btn btn-primary"><?= icon('refresh', 'text-sm') ?> <?= e(t('site.ssl.renew_cert')) ?></button>
             </div>
           </div>
           <div class="px-5 pb-5"><?php include APP_ROOT . '/Views/partials/op-progress.php'; ?></div>
@@ -1623,7 +1623,7 @@ $tabs = [
     <!-- Show-once credentials -->
     <div class="card mb-5 border-emerald-200" x-data="{ copied:false }">
       <div class="px-5 py-4 flex items-start gap-2.5">
-        <i class="ti ti-circle-check text-emerald-500 text-lg mt-0.5 shrink-0" aria-hidden="true"></i>
+        <?= icon('circle-check', 'text-emerald-500 text-lg mt-0.5 shrink-0') ?>
         <div class="min-w-0 flex-1">
           <p class="text-sm font-semibold text-emerald-800 mb-0.5"><?= e(t('site.database.created_title')) ?></p>
           <p class="text-[11px] text-zinc-500 mb-3"><?= e(t('site.database.created_once')) ?></p>
@@ -1648,7 +1648,7 @@ $tabs = [
     <!-- WordPress detection -->
     <div class="bg-ink-pale border border-ink/15 rounded-lg px-5 py-3 mb-5">
       <div class="flex items-center gap-2.5">
-        <i class="ti ti-brand-wordpress text-ink text-lg shrink-0" aria-hidden="true"></i>
+        <?= icon('brand-wordpress', 'text-ink text-lg shrink-0') ?>
         <div class="min-w-0">
           <h2 class="card-title"><?= e(t('site.database.wp_detected')) ?></h2>
           <p class="text-[11px] text-zinc-500 mono break-all mt-0.5"><?= e(t('site.database.f.database')) ?>: <?= e($wpDbInfo['db']) ?> · <?= e(t('site.database.f.user')) ?>: <?= e($wpDbInfo['user']) ?> · <?= e(t('site.database.wp_prefix')) ?>: <?= e($wpDbInfo['prefix']) ?></p>
@@ -1661,14 +1661,14 @@ $tabs = [
     <div class="card mb-5">
       <div class="card-head">
         <div class="flex items-center gap-2.5">
-          <i class="ti ti-database text-zinc-400 text-lg" aria-hidden="true"></i>
+          <?= icon('database', 'text-zinc-400 text-lg') ?>
           <div>
             <h2 class="card-title"><?= e(t('site.database.databases')) ?></h2>
             <p class="text-[11px] text-zinc-400 mt-0.5"><?= e(t('site.database.host_meta', ['host' => $dbHost, 'port' => $dbPort])) ?></p>
           </div>
         </div>
         <button type="button" @click="modal='addDb'; createUser=true" class="btn btn-primary btn-sm">
-          <i class="ti ti-plus text-sm" aria-hidden="true"></i> <?= e(t('site.database.add_db')) ?>
+          <?= icon('plus', 'text-sm') ?> <?= e(t('site.database.add_db')) ?>
         </button>
       </div>
 
@@ -1705,9 +1705,9 @@ $tabs = [
             <td><span class="badge <?= $active ? 'badge-ok' : 'badge-muted' ?>"><?php if ($active): ?><span class="dot bg-emerald-500"></span> <?php endif; ?><?= e($active ? t('site.database.status.active') : t('site.database.status.empty')) ?></span></td>
             <td class="text-center">
               <div class="relative inline-block text-left" x-data="{ row:false }" @click.outside="row=false">
-                <button type="button" @click="row=!row" aria-label="<?= e(t('common.actions')) ?>" class="w-8 h-8 rounded-lg hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700"><i class="ti ti-dots-vertical" aria-hidden="true"></i></button>
+                <button type="button" @click="row=!row" aria-label="<?= e(t('common.actions')) ?>" class="w-8 h-8 rounded-lg hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700"><?= icon('dots-vertical') ?></button>
                 <div x-show="row" x-cloak x-transition.opacity class="absolute right-0 mt-1 w-44 bg-white border border-zinc-200 rounded-lg shadow-lg py-1 z-30 text-left">
-                  <button type="button" @click="row=false; delName='<?= e($db['name'] ?? '') ?>'; delKind='db'; typed=''; modal='delDb'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 text-left"><i class="ti ti-trash text-sm" aria-hidden="true"></i> <?= e(t('site.database.delete_db')) ?></button>
+                  <button type="button" @click="row=false; delName='<?= e($db['name'] ?? '') ?>'; delKind='db'; typed=''; modal='delDb'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 text-left"><?= icon('trash', 'text-sm') ?> <?= e(t('site.database.delete_db')) ?></button>
                 </div>
               </div>
             </td>
@@ -1722,10 +1722,10 @@ $tabs = [
     <div class="card mb-5">
       <div class="card-head">
         <div>
-          <h2 class="card-title"><i class="ti ti-users text-zinc-400" aria-hidden="true"></i> <?= e(t('site.database.users')) ?></h2>
+          <h2 class="card-title"><?= icon('users', 'text-zinc-400') ?> <?= e(t('site.database.users')) ?></h2>
         </div>
         <button type="button" @click="modal='addUser'" class="btn btn-primary btn-sm"<?= empty($databases) ? ' disabled' : '' ?>>
-          <i class="ti ti-plus text-sm" aria-hidden="true"></i> <?= e(t('site.database.add_user')) ?>
+          <?= icon('plus', 'text-sm') ?> <?= e(t('site.database.add_user')) ?>
         </button>
       </div>
 
@@ -1764,7 +1764,7 @@ $tabs = [
                 <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
                 <input type="hidden" name="user" value="<?= e($u['user'] ?? '') ?>">
                 <input type="hidden" name="database" value="<?= e($u['database'] ?? '') ?>">
-                <button type="submit" class="text-ink hover:underline text-sm"><i class="ti ti-external-link text-xs" aria-hidden="true"></i> <?= e(t('site.database.pma_manage')) ?></button>
+                <button type="submit" class="text-ink hover:underline text-sm"><?= icon('external-link', 'text-xs') ?> <?= e(t('site.database.pma_manage')) ?></button>
               </form>
               <?php else: ?>
               <span class="badge badge-muted"><?= e(t('site.database.pma_not_installed')) ?></span>
@@ -1773,20 +1773,20 @@ $tabs = [
             <td><span class="badge <?= $rw ? 'badge-ok' : 'badge-muted' ?>"><?= e($rw ? t('site.database.perm.rw') : t('site.database.perm.ro')) ?></span></td>
             <td class="text-center">
               <div class="relative inline-block text-left" x-data="{ row:false }" @click.outside="row=false">
-                <button type="button" @click="row=!row" aria-label="<?= e(t('common.actions')) ?>" class="w-8 h-8 rounded-lg hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700"><i class="ti ti-dots-vertical" aria-hidden="true"></i></button>
+                <button type="button" @click="row=!row" aria-label="<?= e(t('common.actions')) ?>" class="w-8 h-8 rounded-lg hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700"><?= icon('dots-vertical') ?></button>
                 <div x-show="row" x-cloak x-transition.opacity class="absolute right-0 mt-1 w-48 bg-white border border-zinc-200 rounded-lg shadow-lg py-1 z-30 text-left">
                   <?php if ($pmaInstalled && !empty($pmaUrl)): ?>
                   <form method="POST" action="/sites/<?= e($domain) ?>/database/phpmyadmin/open" target="_blank">
                     <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
                     <input type="hidden" name="user" value="<?= e($u['user'] ?? '') ?>">
                     <input type="hidden" name="database" value="<?= e($u['database'] ?? '') ?>">
-                    <button type="submit" @click="row=false" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-external-link text-sm text-zinc-400" aria-hidden="true"></i> <?= e(t('site.database.open_pma')) ?></button>
+                    <button type="submit" @click="row=false" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><?= icon('external-link', 'text-sm text-zinc-400') ?> <?= e(t('site.database.open_pma')) ?></button>
                   </form>
                   <?php else: ?>
-                  <button type="button" @click="row=false; modal='installPma'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-download text-sm text-zinc-400" aria-hidden="true"></i> <?= e(t('site.database.pma_install')) ?></button>
+                  <button type="button" @click="row=false; modal='installPma'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><?= icon('download', 'text-sm text-zinc-400') ?> <?= e(t('site.database.pma_install')) ?></button>
                   <?php endif; ?>
-                  <button type="button" @click="row=false; editName='<?= e($u['user'] ?? '') ?>'; editDb='<?= e($u['database'] ?? '') ?>'; editPerm='<?= e($u['permission'] ?? 'rw') ?>'; editRegen=false; modal='editUser'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-edit text-sm text-zinc-400" aria-hidden="true"></i> <?= e(t('site.database.edit_user')) ?></button>
-                  <button type="button" @click="row=false; delName='<?= e($u['user'] ?? '') ?>'; delKind='user'; typed=''; modal='delUser'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 text-left"><i class="ti ti-trash text-sm" aria-hidden="true"></i> <?= e(t('site.database.delete_user')) ?></button>
+                  <button type="button" @click="row=false; editName='<?= e($u['user'] ?? '') ?>'; editDb='<?= e($u['database'] ?? '') ?>'; editPerm='<?= e($u['permission'] ?? 'rw') ?>'; editRegen=false; modal='editUser'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><?= icon('edit', 'text-sm text-zinc-400') ?> <?= e(t('site.database.edit_user')) ?></button>
+                  <button type="button" @click="row=false; delName='<?= e($u['user'] ?? '') ?>'; delKind='user'; typed=''; modal='delUser'" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 text-left"><?= icon('trash', 'text-sm') ?> <?= e(t('site.database.delete_user')) ?></button>
                 </div>
               </div>
             </td>
@@ -1802,8 +1802,8 @@ $tabs = [
       <div class="absolute inset-0 bg-zinc-900/40"></div>
       <div x-data="{ submitting:false }" class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl">
         <div class="card-head flex items-center justify-between">
-          <h3 class="card-title"><i class="ti ti-brand-mysql text-zinc-400" aria-hidden="true"></i> <?= e(t('site.database.pma_install')) ?></h3>
-          <button type="button" @click="modal=null" :disabled="submitting" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><i class="ti ti-x" aria-hidden="true"></i></button>
+          <h3 class="card-title"><?= icon('brand-mysql', 'text-zinc-400') ?> <?= e(t('site.database.pma_install')) ?></h3>
+          <button type="button" @click="modal=null" :disabled="submitting" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><?= icon('x') ?></button>
         </div>
         <form method="POST" action="/sites/<?= e($domain) ?>/database/phpmyadmin/install" data-op-stream class="p-5 space-y-3">
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
@@ -1811,7 +1811,7 @@ $tabs = [
             <p class="text-sm text-zinc-600"><?= e(t('site.database.pma_install_hint')) ?></p>
             <div class="flex justify-end gap-2 pt-1">
               <button type="button" @click="modal=null" :disabled="submitting" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
-              <button type="submit" :disabled="submitting" class="btn btn-primary"><i class="ti ti-download text-sm" aria-hidden="true"></i> <?= e(t('site.database.pma_install')) ?></button>
+              <button type="submit" :disabled="submitting" class="btn btn-primary"><?= icon('download', 'text-sm') ?> <?= e(t('site.database.pma_install')) ?></button>
             </div>
           </div>
           <?php include APP_ROOT . '/Views/partials/op-progress.php'; ?>
@@ -1824,8 +1824,8 @@ $tabs = [
       <div class="absolute inset-0 bg-zinc-900/40"></div>
       <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl">
         <div class="card-head flex items-center justify-between">
-          <h3 class="card-title"><i class="ti ti-database text-zinc-400" aria-hidden="true"></i> <?= e(t('site.database.add_db')) ?></h3>
-          <button type="button" @click="modal=null" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x" aria-hidden="true"></i></button>
+          <h3 class="card-title"><?= icon('database', 'text-zinc-400') ?> <?= e(t('site.database.add_db')) ?></h3>
+          <button type="button" @click="modal=null" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700"><?= icon('x') ?></button>
         </div>
         <form method="POST" action="/sites/<?= e($domain) ?>/database/add" class="p-5 space-y-3">
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
@@ -1856,7 +1856,7 @@ $tabs = [
           </div>
           <div class="flex justify-end gap-2 pt-1">
             <button type="button" @click="modal=null" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
-            <button type="submit" class="btn btn-primary"><i class="ti ti-plus text-sm" aria-hidden="true"></i> <?= e(t('site.database.create_db_btn')) ?></button>
+            <button type="submit" class="btn btn-primary"><?= icon('plus', 'text-sm') ?> <?= e(t('site.database.create_db_btn')) ?></button>
           </div>
         </form>
       </div>
@@ -1867,8 +1867,8 @@ $tabs = [
       <div class="absolute inset-0 bg-zinc-900/40"></div>
       <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl">
         <div class="card-head flex items-center justify-between">
-          <h3 class="card-title"><i class="ti ti-user-plus text-zinc-400" aria-hidden="true"></i> <?= e(t('site.database.add_user')) ?></h3>
-          <button type="button" @click="modal=null" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x" aria-hidden="true"></i></button>
+          <h3 class="card-title"><?= icon('user-plus', 'text-zinc-400') ?> <?= e(t('site.database.add_user')) ?></h3>
+          <button type="button" @click="modal=null" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700"><?= icon('x') ?></button>
         </div>
         <form method="POST" action="/sites/<?= e($domain) ?>/database/user/add" class="p-5 space-y-3">
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
@@ -1897,7 +1897,7 @@ $tabs = [
           </div>
           <div class="flex justify-end gap-2 pt-1">
             <button type="button" @click="modal=null" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
-            <button type="submit" class="btn btn-primary"><i class="ti ti-plus text-sm" aria-hidden="true"></i> <?= e(t('site.database.create_user_btn')) ?></button>
+            <button type="submit" class="btn btn-primary"><?= icon('plus', 'text-sm') ?> <?= e(t('site.database.create_user_btn')) ?></button>
           </div>
         </form>
       </div>
@@ -1908,8 +1908,8 @@ $tabs = [
       <div class="absolute inset-0 bg-zinc-900/40"></div>
       <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl">
         <div class="card-head flex items-center justify-between">
-          <h3 class="card-title"><i class="ti ti-edit text-zinc-400" aria-hidden="true"></i> <?= e(t('site.database.edit_user')) ?></h3>
-          <button type="button" @click="modal=null" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x" aria-hidden="true"></i></button>
+          <h3 class="card-title"><?= icon('edit', 'text-zinc-400') ?> <?= e(t('site.database.edit_user')) ?></h3>
+          <button type="button" @click="modal=null" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700"><?= icon('x') ?></button>
         </div>
         <form method="POST" action="/sites/<?= e($domain) ?>/database/user/edit" class="p-5 space-y-3">
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
@@ -1938,12 +1938,12 @@ $tabs = [
             </label>
           </div>
           <div class="flex items-start gap-2 bg-amber-50 border border-amber-200/70 rounded-lg px-3 py-2">
-            <i class="ti ti-alert-triangle text-amber-500 mt-0.5 text-sm shrink-0" aria-hidden="true"></i>
+            <?= icon('alert-triangle', 'text-amber-500 mt-0.5 text-sm shrink-0') ?>
             <p class="text-[11px] text-amber-800 leading-relaxed"><?= e(t('site.database.pass_warning')) ?></p>
           </div>
           <div class="flex justify-end gap-2 pt-1">
             <button type="button" @click="modal=null" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
-            <button type="submit" class="btn btn-primary"><i class="ti ti-device-floppy text-sm" aria-hidden="true"></i> <?= e(t('site.database.save_btn')) ?></button>
+            <button type="submit" class="btn btn-primary"><?= icon('device-floppy', 'text-sm') ?> <?= e(t('site.database.save_btn')) ?></button>
           </div>
         </form>
       </div>
@@ -1954,8 +1954,8 @@ $tabs = [
       <div class="absolute inset-0 bg-zinc-900/40"></div>
       <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl">
         <div class="card-head flex items-center justify-between bg-red-50/50">
-          <h3 class="card-title text-red-700"><i class="ti ti-alert-triangle" aria-hidden="true"></i> <span x-show="modal==='delDb'"><?= e(t('site.database.delete_db')) ?></span><span x-show="modal==='delUser'" x-cloak><?= e(t('site.database.delete_user')) ?></span></h3>
-          <button type="button" @click="modal=null" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x" aria-hidden="true"></i></button>
+          <h3 class="card-title text-red-700"><?= icon('alert-triangle') ?> <span x-show="modal==='delDb'"><?= e(t('site.database.delete_db')) ?></span><span x-show="modal==='delUser'" x-cloak><?= e(t('site.database.delete_user')) ?></span></h3>
+          <button type="button" @click="modal=null" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700"><?= icon('x') ?></button>
         </div>
         <div class="p-5 space-y-3">
           <p class="text-sm text-zinc-600"><span x-show="modal==='delDb'"><?= e(t('site.database.delete_db_warn')) ?></span><span x-show="modal==='delUser'" x-cloak><?= e(t('site.database.delete_user_warn')) ?></span></p>
@@ -1967,7 +1967,7 @@ $tabs = [
             <input type="hidden" name="confirm" :value="typed">
             <button type="button" @click="modal=null" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
             <button type="submit" class="btn btn-danger" :disabled="typed !== delName" :class="{ 'opacity-50 cursor-not-allowed': typed !== delName }">
-              <i class="ti ti-trash text-sm" aria-hidden="true"></i> <span x-show="modal==='delDb'"><?= e(t('site.database.delete_db_btn')) ?></span><span x-show="modal==='delUser'" x-cloak><?= e(t('site.database.delete_user_btn')) ?></span>
+              <?= icon('trash', 'text-sm') ?> <span x-show="modal==='delDb'"><?= e(t('site.database.delete_db_btn')) ?></span><span x-show="modal==='delUser'" x-cloak><?= e(t('site.database.delete_user_btn')) ?></span>
             </button>
           </form>
         </div>
@@ -2032,8 +2032,8 @@ $tabs = [
       <input type="hidden" name="enabled" value="0">
       <div class="p-5 space-y-4">
         <div class="flex items-start justify-between gap-4">
-          <div class="flex items-start gap-3">
-            <i class="ti ti-cloud-lock <?= $cfErrorMessage === '' && $cfEnabled ? 'text-emerald-500' : 'text-zinc-400' ?> text-lg mt-0.5" aria-hidden="true"></i>
+          <div class="flex items-center gap-3">
+            <?= icon('cloud-lock', ($cfErrorMessage === '' && $cfEnabled ? 'text-emerald-500' : 'text-zinc-400') . ' text-lg') ?>
             <div>
               <h3 class="text-sm font-semibold text-zinc-800"><?= e(t('site.security.cloudflare.title')) ?></h3>
               <p class="text-xs text-zinc-500 mt-1"><?= e(t('site.security.cloudflare.desc')) ?></p>
@@ -2102,16 +2102,16 @@ $tabs = [
 
         <?php if (!$cfoDependencyOk): ?>
         <div class="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200/70 px-3 py-2">
-          <i class="ti ti-alert-triangle text-amber-600 mt-0.5 text-sm" aria-hidden="true"></i>
+          <?= icon('alert-triangle', 'text-amber-600 mt-0.5 text-sm') ?>
           <p class="text-[11px] text-amber-800 leading-relaxed"><?= e(t('site.security.cloudflare_only.requires')) ?></p>
         </div>
         <?php endif; ?>
 
-        <p class="text-[11px] leading-relaxed text-zinc-400"><i class="ti ti-info-circle" aria-hidden="true"></i> <?= e(t('site.security.cloudflare_only.recovery')) ?></p>
+        <p class="text-[11px] leading-relaxed text-zinc-400"><?= icon('info-circle') ?> <?= e(t('site.security.cloudflare_only.recovery')) ?></p>
 
         <div class="flex justify-end">
           <button type="submit" class="btn btn-primary" <?= $cfoCanToggle ? '' : 'disabled' ?>>
-            <i class="ti ti-device-floppy text-sm" aria-hidden="true"></i> <?= e(t('site.security.save')) ?>
+            <?= icon('device-floppy', 'text-sm') ?> <?= e(t('site.security.save')) ?>
           </button>
         </div>
       </div>
@@ -2119,7 +2119,7 @@ $tabs = [
 
     <?php if ($driftMessage !== ''): ?>
     <div class="flex items-start gap-3 rounded-lg border <?= $driftCritical ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50' ?> px-4 py-3">
-      <i class="ti ti-alert-triangle <?= $driftCritical ? 'text-red-600' : 'text-amber-600' ?> mt-0.5" aria-hidden="true"></i>
+      <?= icon('alert-triangle', ($driftCritical ? 'text-red-600' : 'text-amber-600') . ' mt-0.5') ?>
       <div>
         <p class="text-sm font-semibold <?= $driftCritical ? 'text-red-800' : 'text-amber-800' ?>"><?= e(t('site.security.drift.title')) ?></p>
         <p class="text-xs <?= $driftCritical ? 'text-red-700' : 'text-amber-700' ?> mt-0.5"><?= e($driftMessage) ?></p>
@@ -2129,7 +2129,7 @@ $tabs = [
 
     <?php if (!$baForceHttps && $baError !== 'force_https_drift'): ?>
     <div class="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
-      <i class="ti ti-lock-off text-amber-600 mt-0.5" aria-hidden="true"></i>
+      <?= icon('lock-off', 'text-amber-600 mt-0.5') ?>
       <p class="text-xs text-amber-800 leading-relaxed"><?= e(t('site.security.https_required')) ?></p>
     </div>
     <?php endif; ?>
@@ -2141,7 +2141,7 @@ $tabs = [
 
       <div class="card-head">
         <div class="flex items-center gap-2.5">
-          <i class="ti ti-shield-lock text-lg" :class="enabled ? 'text-speed' : 'text-zinc-300'"></i>
+          <?= icon('shield-lock', 'text-lg', [':class' => "enabled ? 'text-speed' : 'text-zinc-300'"]) ?>
           <div>
             <h2 class="card-title">
               <?= e(t('site.security.access.title')) ?>
@@ -2209,7 +2209,7 @@ $tabs = [
 
         <div x-show="enabled" x-cloak class="space-y-2">
           <div class="flex items-start gap-2 rounded-lg bg-zinc-50 border border-zinc-200 px-3 py-2">
-            <i class="ti ti-database-off text-zinc-500 mt-0.5 text-sm" aria-hidden="true"></i>
+            <?= icon('database-off', 'text-zinc-500 mt-0.5 text-sm') ?>
             <p class="text-[11px] text-zinc-600 leading-relaxed">
               <span x-show="scope === 'site'"><?= e(t('site.security.cache_site_warning')) ?></span>
               <span x-show="scope !== 'site'" x-cloak><?= e(t('site.security.cache_scoped_warning')) ?></span>
@@ -2217,7 +2217,7 @@ $tabs = [
           </div>
           <?php if (!$hasTrustedSsl): ?>
           <div class="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200/70 px-3 py-2">
-            <i class="ti ti-certificate-off text-amber-600 mt-0.5 text-sm" aria-hidden="true"></i>
+            <?= icon('certificate-off', 'text-amber-600 mt-0.5 text-sm') ?>
             <p class="text-[11px] text-amber-800 leading-relaxed"><?= e(t('site.security.trusted_cert_warning')) ?></p>
           </div>
           <?php endif; ?>
@@ -2225,7 +2225,7 @@ $tabs = [
 
         <div class="flex justify-end border-t border-zinc-100 pt-4">
           <button type="submit" class="btn btn-primary">
-            <i class="ti ti-device-floppy text-sm" aria-hidden="true"></i> <?= e(t('site.security.save')) ?>
+            <?= icon('device-floppy', 'text-sm') ?> <?= e(t('site.security.save')) ?>
           </button>
         </div>
       </div>
@@ -2258,7 +2258,7 @@ $tabs = [
 
         <div class="card-head">
           <div class="flex items-center gap-2.5">
-            <i class="ti ti-ban text-lg" :class="enabled ? 'text-speed' : 'text-zinc-300'"></i>
+            <?= icon('ban', 'text-lg', [':class' => "enabled ? 'text-speed' : 'text-zinc-300'"]) ?>
             <div>
               <h2 class="card-title">
                 <?= e(t('site.security.ip_blocking.title')) ?>
@@ -2289,7 +2289,7 @@ $tabs = [
 
           <?php if (!$ibRealip): ?>
           <div class="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200/70 px-3 py-2">
-            <i class="ti ti-alert-triangle text-amber-600 mt-0.5 text-sm" aria-hidden="true"></i>
+            <?= icon('alert-triangle', 'text-amber-600 mt-0.5 text-sm') ?>
             <p class="text-[11px] text-amber-800 leading-relaxed"><?= e(t('site.security.ipblock.realip_warning')) ?></p>
           </div>
           <?php endif; ?>
@@ -2299,7 +2299,7 @@ $tabs = [
             <textarea name="ips" rows="6" class="inp w-full mono resize-y"
                       placeholder="203.0.113.10&#10;198.51.100.0/24&#10;2001:db8::/32"><?= e($ibList) ?></textarea>
             <p class="text-[11px] text-zinc-400"><?= e(t('site.security.ipblock.list_hint')) ?></p>
-            <p class="text-[11px] text-zinc-400"><i class="ti ti-info-circle" aria-hidden="true"></i> <?= e(t('site.security.ipblock.acme_note')) ?></p>
+            <p class="text-[11px] text-zinc-400"><?= icon('info-circle') ?> <?= e(t('site.security.ipblock.acme_note')) ?></p>
             <?php if ($ibEnabled && $ibErrorMessage === ''): ?>
             <p class="text-[11px] text-zinc-500"><?= e(sprintf(t('site.security.ipblock.count'), $ibCount)) ?></p>
             <?php endif; ?>
@@ -2307,7 +2307,7 @@ $tabs = [
 
           <div class="flex justify-end border-t border-zinc-100 pt-4">
             <button type="submit" class="btn btn-primary">
-              <i class="ti ti-device-floppy text-sm" aria-hidden="true"></i> <?= e(t('site.security.save')) ?>
+              <?= icon('device-floppy', 'text-sm') ?> <?= e(t('site.security.save')) ?>
             </button>
           </div>
         </div>
@@ -2338,7 +2338,7 @@ $tabs = [
     <div class="bg-ink-pale border border-ink/15 rounded-lg px-5 py-3">
       <div class="flex items-center justify-between gap-4">
         <div class="flex items-center gap-2.5 min-w-0">
-          <i class="ti ti-brand-wordpress text-ink text-lg shrink-0" aria-hidden="true"></i>
+          <?= icon('brand-wordpress', 'text-ink text-lg shrink-0') ?>
           <div class="min-w-0">
             <h2 class="card-title">
               <?= e(t('site.cron.wp_title')) ?>
@@ -2351,13 +2351,13 @@ $tabs = [
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
           <?php if ($wpActive): ?>
             <input type="hidden" name="action" value="disable">
-            <button type="submit" class="btn btn-danger btn-sm"><i class="ti ti-player-stop text-sm" aria-hidden="true"></i> <?= e(t('site.cron.wp_disable')) ?></button>
+            <button type="submit" class="btn btn-danger btn-sm"><?= icon('player-stop', 'text-sm') ?> <?= e(t('site.cron.wp_disable')) ?></button>
           <?php else: ?>
             <input type="hidden" name="action" value="enable">
             <select name="interval" class="inp text-sm py-1.5">
               <option value="1">1 min</option><option value="5" selected>5 min</option><option value="15">15 min</option><option value="30">30 min</option>
             </select>
-            <button type="submit" class="btn btn-primary btn-sm"><i class="ti ti-bolt text-sm" aria-hidden="true"></i> <?= e(t('site.cron.wp_enable')) ?></button>
+            <button type="submit" class="btn btn-primary btn-sm"><?= icon('bolt', 'text-sm') ?> <?= e(t('site.cron.wp_enable')) ?></button>
           <?php endif; ?>
         </form>
       </div>
@@ -2368,14 +2368,14 @@ $tabs = [
     <div class="card">
       <div class="card-head">
         <div class="flex items-center gap-2.5 min-w-0">
-          <i class="ti ti-clock-hour-4 text-zinc-400 text-lg" aria-hidden="true"></i>
+          <?= icon('clock-hour-4', 'text-zinc-400 text-lg') ?>
           <div class="min-w-0">
             <h2 class="card-title"><?= e(t('site.cron.title')) ?></h2>
-            <p class="text-[11px] text-zinc-400 mt-0.5 truncate"><i class="ti ti-user" aria-hidden="true"></i> <?= e($cronRunsAs) ?></p>
+            <p class="text-[11px] text-zinc-400 mt-0.5 truncate"><?= icon('user') ?> <?= e($cronRunsAs) ?></p>
           </div>
         </div>
         <button type="button" @click="openAdd()" class="btn btn-primary btn-sm">
-          <i class="ti ti-plus text-sm" aria-hidden="true"></i> <?= e(t('site.cron.add')) ?>
+          <?= icon('plus', 'text-sm') ?> <?= e(t('site.cron.add')) ?>
         </button>
       </div>
 
@@ -2421,10 +2421,10 @@ $tabs = [
             </td>
             <td class="pr-5 text-center">
               <div class="relative inline-block text-left" x-data="{ row:false }" @click.outside="row=false">
-                <button type="button" @click="row=!row" aria-label="<?= e(t('common.actions')) ?>" class="w-8 h-8 rounded-lg hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700"><i class="ti ti-dots-vertical" aria-hidden="true"></i></button>
+                <button type="button" @click="row=!row" aria-label="<?= e(t('common.actions')) ?>" class="w-8 h-8 rounded-lg hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700"><?= icon('dots-vertical') ?></button>
                 <div x-show="row" x-cloak x-transition.opacity class="absolute right-0 mt-1 w-44 bg-white border border-zinc-200 rounded-lg shadow-lg py-1 z-30 text-left">
-                  <button type="button" @click="row=false; openEdit(<?= $jjson ?>)" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><i class="ti ti-edit text-sm text-zinc-400" aria-hidden="true"></i> <?= e(t('site.cron.edit')) ?></button>
-                  <button type="button" @click="row=false; openDel(<?= $jjson ?>)" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 text-left"><i class="ti ti-trash text-sm" aria-hidden="true"></i> <?= e(t('site.cron.delete')) ?></button>
+                  <button type="button" @click="row=false; openEdit(<?= $jjson ?>)" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><?= icon('edit', 'text-sm text-zinc-400') ?> <?= e(t('site.cron.edit')) ?></button>
+                  <button type="button" @click="row=false; openDel(<?= $jjson ?>)" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 text-left"><?= icon('trash', 'text-sm') ?> <?= e(t('site.cron.delete')) ?></button>
                 </div>
               </div>
             </td>
@@ -2435,7 +2435,7 @@ $tabs = [
       <?php endif; ?>
 
       <?php if ($cronManualCount > 0): ?>
-      <p class="px-5 py-2 text-[11px] text-zinc-400 border-t border-zinc-100"><i class="ti ti-info-circle" aria-hidden="true"></i> <?= e(sprintf(t('site.cron.manual_note'), $cronManualCount)) ?></p>
+      <p class="px-5 py-2 text-[11px] text-zinc-400 border-t border-zinc-100"><?= icon('info-circle') ?> <?= e(sprintf(t('site.cron.manual_note'), $cronManualCount)) ?></p>
       <?php endif; ?>
     </div>
 
@@ -2445,8 +2445,8 @@ $tabs = [
       <div class="absolute inset-0 bg-zinc-900/40"></div>
       <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl">
         <div class="card-head flex items-center justify-between">
-          <h3 class="card-title"><i class="ti ti-clock-hour-4 text-zinc-400" aria-hidden="true"></i> <span x-text="editId ? <?= htmlspecialchars(json_encode(t('site.cron.edit')), ENT_QUOTES) ?> : <?= htmlspecialchars(json_encode(t('site.cron.add')), ENT_QUOTES) ?>"></span></h3>
-          <button type="button" @click="modal=null" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x" aria-hidden="true"></i></button>
+          <h3 class="card-title"><?= icon('clock-hour-4', 'text-zinc-400') ?> <span x-text="editId ? <?= htmlspecialchars(json_encode(t('site.cron.edit')), ENT_QUOTES) ?> : <?= htmlspecialchars(json_encode(t('site.cron.add')), ENT_QUOTES) ?>"></span></h3>
+          <button type="button" @click="modal=null" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700"><?= icon('x') ?></button>
         </div>
         <form method="POST" :action="'/sites/<?= e($site['domain']) ?>/cron/' + (editId ? 'update' : 'add')" class="p-5 space-y-3">
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
@@ -2472,7 +2472,7 @@ $tabs = [
             </div>
             <?php endforeach; ?>
           </div>
-          <p class="text-[11px] text-zinc-500"><i class="ti ti-clock" aria-hidden="true"></i> <?= e(t('site.cron.preview')) ?>: <span class="font-medium text-zinc-700" x-text="cronText(m+' '+h+' '+dom+' '+mon+' '+dow)"></span></p>
+          <p class="text-[11px] text-zinc-500"><?= icon('clock') ?> <?= e(t('site.cron.preview')) ?>: <span class="font-medium text-zinc-700" x-text="cronText(m+' '+h+' '+dom+' '+mon+' '+dow)"></span></p>
           <div>
             <label class="lbl"><?= e(t('site.cron.command_label')) ?> <span class="text-red-500">*</span></label>
             <input type="text" name="command" x-model="command" required class="inp w-full mono" autocomplete="off" spellcheck="false" placeholder="<?= e($cronPrefill) ?>your-script.sh">
@@ -2480,7 +2480,7 @@ $tabs = [
           </div>
           <div class="flex justify-end gap-2 pt-1">
             <button type="button" @click="modal=null" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
-            <button type="submit" class="btn btn-primary"><i class="ti ti-device-floppy text-sm" aria-hidden="true"></i> <?= e(t('site.cron.save')) ?></button>
+            <button type="submit" class="btn btn-primary"><?= icon('device-floppy', 'text-sm') ?> <?= e(t('site.cron.save')) ?></button>
           </div>
         </form>
       </div>
@@ -2493,8 +2493,8 @@ $tabs = [
       <div class="absolute inset-0 bg-zinc-900/40"></div>
       <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl">
         <div class="card-head flex items-center justify-between">
-          <h3 class="card-title"><i class="ti ti-trash text-red-500" aria-hidden="true"></i> <?= e(t('site.cron.delete')) ?></h3>
-          <button type="button" @click="modal=null" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700"><i class="ti ti-x" aria-hidden="true"></i></button>
+          <h3 class="card-title"><?= icon('trash', 'text-red-500') ?> <?= e(t('site.cron.delete')) ?></h3>
+          <button type="button" @click="modal=null" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700"><?= icon('x') ?></button>
         </div>
         <form method="POST" action="/sites/<?= e($site['domain']) ?>/cron/delete" class="p-5 space-y-3">
           <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
@@ -2503,7 +2503,7 @@ $tabs = [
           <p class="text-[11px] text-zinc-500 mono break-all bg-zinc-50 border border-zinc-100 rounded px-3 py-2" x-text="delCmd"></p>
           <div class="flex justify-end gap-2 pt-1">
             <button type="button" @click="modal=null" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
-            <button type="submit" class="btn btn-danger"><i class="ti ti-trash text-sm" aria-hidden="true"></i> <?= e(t('site.cron.delete')) ?></button>
+            <button type="submit" class="btn btn-danger"><?= icon('trash', 'text-sm') ?> <?= e(t('site.cron.delete')) ?></button>
           </div>
         </form>
       </div>
@@ -2561,7 +2561,7 @@ $tabs = [
                  'cron' => 'ti-clock-hour-4', 'files' => 'ti-folder'];
     $tabIcon = $tabIcons[$activeTab] ?? 'ti-tool';
     ?>
-    <i class="ti <?= $tabIcon ?> text-5xl text-zinc-200 block mb-3" aria-hidden="true"></i>
+    <?= icon($tabIcon, 'text-5xl text-zinc-200 block mb-3') ?>
     <p class="text-sm font-semibold text-zinc-700 mb-1"><?= e($tabs[$activeTab]['label'] ?? '') ?></p>
     <p class="text-xs text-zinc-400"><?= e(t('site.tab.soon')) ?></p>
   </div>

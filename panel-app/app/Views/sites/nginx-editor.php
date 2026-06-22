@@ -4,7 +4,7 @@
 <div class="mb-5">
   <a href="/sites/<?= e($site['domain']) ?>"
      class="text-xs text-zinc-400 hover:text-ink flex items-center gap-1 mb-2">
-    <i class="ti ti-arrow-left text-sm" aria-hidden="true"></i> <?= e($site['domain']) ?>
+    <?= icon('arrow-left', 'text-sm') ?> <?= e($site['domain']) ?>
   </a>
   <h1 class="font-head font-bold text-[22px] text-zinc-900 leading-none"><?= e(t('nginx.editor.title')) ?></h1>
 </div>
@@ -15,12 +15,12 @@
   <div class="card-head">
     <div>
       <h2 class="card-title">
-        <i class="ti ti-code text-zinc-400" aria-hidden="true"></i>
+        <?= icon('code', 'text-zinc-400') ?>
         /etc/nginx/sites-available/<span class="text-ink"><?= e($site['domain']) ?></span>.conf
       </h2>
     </div>
     <span class="badge badge-warn">
-      <i class="ti ti-alert-triangle text-xs" aria-hidden="true"></i>
+      <?= icon('alert-triangle', 'text-xs') ?>
       <?= e(t('nginx.editor.caution')) ?>
     </span>
   </div>
@@ -36,7 +36,7 @@
 
     <div class="flex items-center gap-3 px-5 py-3.5 border-t border-zinc-100">
       <button type="submit" class="btn btn-primary">
-        <i class="ti ti-device-floppy text-sm" aria-hidden="true"></i> <?= e(t('nginx.editor.save')) ?>
+        <?= icon('device-floppy', 'text-sm') ?> <?= e(t('nginx.editor.save')) ?>
       </button>
       <a href="/sites/<?= e($site['domain']) ?>" class="btn btn-ghost"><?= e(t('common.cancel')) ?></a>
       <span class="ml-auto text-[11px] text-zinc-400"><?= e(t('nginx.editor.note')) ?></span>

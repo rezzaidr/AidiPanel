@@ -67,20 +67,7 @@ ensure(vendor);
 log.push(`vendor alpine.min.js      ${kb(copy(join(NM, 'alpinejs', 'dist', 'cdn.min.js'), join(vendor, 'alpine.min.js')))}`);
 log.push(`vendor apexcharts.min.js  ${kb(copy(join(NM, 'apexcharts', 'dist', 'apexcharts.min.js'), join(vendor, 'apexcharts.min.js')))}`);
 
-// ── 3. Tabler icon webfont (default set) ───────────────────────────────────
-// Ship woff2 + woff only; drop the multi-megabyte ttf and svg fallbacks (woff2
-// is fetched by every current browser, woff covers the long tail). The CSS keeps
-// Tabler's own relative ./fonts/ paths, so the copied font files resolve as-is.
-const tDist  = join(NM, '@tabler', 'icons-webfont', 'dist');
-const tOut   = join(vendor, 'tabler');
-const tFonts = join(tOut, 'fonts');
-ensure(tFonts);
-log.push(`tabler woff2  ${kb(copy(join(tDist, 'fonts', 'tabler-icons.woff2'), join(tFonts, 'tabler-icons.woff2')))}`);
-log.push(`tabler woff   ${kb(copy(join(tDist, 'fonts', 'tabler-icons.woff'),  join(tFonts, 'tabler-icons.woff')))}`);
-let tcss = readFileSync(join(tDist, 'tabler-icons.min.css'), 'utf8');
-tcss = tcss.replace(/,url\("\.\/fonts\/tabler-icons\.ttf[^)]*"\) format\("truetype"\)/, '');
-if (tcss.includes('truetype')) throw new Error('failed to strip ttf fallback from Tabler CSS');
-writeFileSync(join(tOut, 'tabler-icons.css'), tcss);
-log.push('write   tabler-icons.css (ttf/svg fallbacks removed)');
+// Icons are no longer a webfont: the panel renders inline local SVGs via the
+// icon() helper, synced from @tabler/icons by build/sync-icons.mjs (`npm run icons`).
 
 console.log('Vendored frontend assets:\n' + log.map((l) => '  ' + l).join('\n'));

@@ -35,6 +35,13 @@ html { scrollbar-gutter: stable; }
 /* Monospace signature for numbers, IDs, paths, technical values */
 .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
 
+/* --- Inline SVG icons (Tabler subset; replaces the icon webfont) ---------- */
+/* The icon() helper inlines each SVG at 1em via an inline style, so existing
+   text-* classes keep driving size/colour (strokes use currentColor). This rule
+   only adds the in-text/flex niceties; sizing still works without it (e.g. on
+   the standalone login page, which does not load this file). */
+.icon { display: inline-block; vertical-align: -0.125em; flex: none; }
+
 /* --- Keyboard focus ring (a11y) ------------------------------------------ */
 /* Visible focus indicator for keyboard users only (:focus-visible), so mouse
    clicks stay clean. Buttons, links, tabs and toggles had no focus style;

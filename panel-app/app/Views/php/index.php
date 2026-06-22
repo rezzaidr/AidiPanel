@@ -4,7 +4,7 @@
 <div class="flex items-center justify-between mb-5">
   <div>
     <a href="/admin" class="text-xs text-zinc-400 hover:text-ink flex items-center gap-1 mb-2">
-      <i class="ti ti-arrow-left text-sm" aria-hidden="true"></i> <?= e(t('admin.title')) ?>
+      <?= icon('arrow-left', 'text-sm') ?> <?= e(t('admin.title')) ?>
     </a>
     <h1 class="font-head font-bold text-[22px] text-zinc-900 leading-none"><?= e(t('admin.php.title')) ?></h1>
     <p class="text-sm text-zinc-400 mt-1.5"><?= e(t('admin.php.desc')) ?></p>
@@ -13,7 +13,7 @@
     <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
     <input type="hidden" name="version" value="all">
     <button type="submit" class="btn btn-secondary">
-      <i class="ti ti-refresh text-sm" aria-hidden="true"></i> <?= e(t('php.restart_all')) ?>
+      <?= icon('refresh', 'text-sm') ?> <?= e(t('php.restart_all')) ?>
     </button>
   </form>
 </div>
@@ -25,7 +25,7 @@
     <div class="flex items-center justify-between mb-3">
       <div class="flex items-center gap-2.5">
         <div class="w-9 h-9 bg-ink-pale rounded-lg flex items-center justify-center">
-          <i class="ti ti-brand-php text-ink text-lg" aria-hidden="true"></i>
+          <?= icon('brand-php', 'text-ink text-lg') ?>
         </div>
         <div>
           <p class="text-sm font-semibold text-zinc-900">
@@ -57,7 +57,7 @@
       <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
       <input type="hidden" name="version" value="<?= e($ver) ?>">
       <button type="submit" class="btn btn-ghost btn-sm w-full">
-        <i class="ti ti-refresh text-sm" aria-hidden="true"></i> Restart PHP <?= e($ver) ?>-FPM
+        <?= icon('refresh', 'text-sm') ?> Restart PHP <?= e($ver) ?>-FPM
       </button>
     </form>
     <?php else: ?>
@@ -66,7 +66,7 @@
       <input type="hidden" name="version" value="<?= e($ver) ?>">
       <div data-op-fields>
         <button type="submit" class="btn btn-primary btn-sm w-full">
-          <i class="ti ti-download text-sm" aria-hidden="true"></i> <?= e(t('php.install_btn')) ?> <?= e($ver) ?>
+          <?= icon('download', 'text-sm') ?> <?= e(t('php.install_btn')) ?> <?= e($ver) ?>
         </button>
       </div>
       <?php include APP_ROOT . '/Views/partials/op-progress.php'; ?>
@@ -79,7 +79,7 @@
 <!-- PHP version per site -->
 <div class="card overflow-hidden">
   <div class="card-head">
-    <h2 class="card-title"><i class="ti ti-world text-zinc-400" aria-hidden="true"></i> <?= e(t('php.per_site_title')) ?></h2>
+    <h2 class="card-title"><?= icon('world', 'text-zinc-400') ?> <?= e(t('php.per_site_title')) ?></h2>
   </div>
   <?php if (empty($sites)): ?>
     <div class="px-5 py-10 text-center text-sm text-zinc-400"><?= e(t('sites.empty')) ?></div>

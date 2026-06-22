@@ -3,7 +3,7 @@
 <!-- page header -->
 <div class="mb-5">
   <a href="/admin" class="text-xs text-zinc-400 hover:text-ink flex items-center gap-1 mb-2">
-    <i class="ti ti-arrow-left text-sm" aria-hidden="true"></i> <?= e(t('admin.title')) ?>
+    <?= icon('arrow-left', 'text-sm') ?> <?= e(t('admin.title')) ?>
   </a>
   <h1 class="font-head font-bold text-[22px] text-zinc-900 leading-none"><?= e(t('admin.cache.title')) ?></h1>
   <p class="text-sm text-zinc-400 mt-1.5"><?= e(t('admin.cache.desc')) ?></p>
@@ -16,7 +16,7 @@
   <div class="card p-5">
     <div class="flex items-center gap-2.5 mb-4">
       <div class="w-8 h-8 bg-speed-pale rounded-lg flex items-center justify-center">
-        <i class="ti ti-bolt text-speed text-base" aria-hidden="true"></i>
+        <?= icon('bolt', 'text-speed text-base') ?>
       </div>
       <span class="font-head font-semibold text-sm text-zinc-900">FastCGI Cache</span>
     </div>
@@ -35,7 +35,7 @@
       <button type="submit"
               onclick="return confirm('<?= e(t('cache.purge_all_confirm')) ?>')"
               class="btn btn-danger btn-sm w-full">
-        <i class="ti ti-trash text-sm" aria-hidden="true"></i> <?= e(t('cache.purge_all')) ?>
+        <?= icon('trash', 'text-sm') ?> <?= e(t('cache.purge_all')) ?>
       </button>
     </form>
   </div>
@@ -44,7 +44,7 @@
   <div class="card p-5">
     <div class="flex items-center gap-2.5 mb-4">
       <div class="w-8 h-8 bg-ink-pale rounded-lg flex items-center justify-center">
-        <i class="ti ti-brand-redis text-ink text-base" aria-hidden="true"></i>
+        <?= icon('brand-redis', 'text-ink text-base') ?>
       </div>
       <span class="font-head font-semibold text-sm text-zinc-900"><?= e(t('cache.redis_title')) ?></span>
     </div>
@@ -76,7 +76,7 @@
   <div class="card p-5">
     <div class="flex items-center gap-2.5 mb-4">
       <div class="w-8 h-8 bg-amber-50 rounded-lg flex items-center justify-center">
-        <i class="ti ti-link text-amber-500 text-base" aria-hidden="true"></i>
+        <?= icon('link', 'text-amber-500 text-base') ?>
       </div>
       <span class="font-head font-semibold text-sm text-zinc-900"><?= e(t('cache.purge_url_title')) ?></span>
     </div>
@@ -86,7 +86,7 @@
              placeholder="<?= e(t('cache.purge_url_ph')) ?>"
              class="inp">
       <button type="submit" class="btn btn-secondary btn-sm w-full">
-        <i class="ti ti-refresh text-sm" aria-hidden="true"></i> Purge URL
+        <?= icon('refresh', 'text-sm') ?> Purge URL
       </button>
     </form>
   </div>
@@ -96,7 +96,7 @@
 <!-- Cache per site -->
 <div class="card overflow-hidden">
   <div class="card-head">
-    <h2 class="card-title"><i class="ti ti-bolt text-speed" aria-hidden="true"></i> <?= e(t('cache.per_site_title')) ?></h2>
+    <h2 class="card-title"><?= icon('bolt', 'text-speed') ?> <?= e(t('cache.per_site_title')) ?></h2>
   </div>
   <?php if (empty($sites)): ?>
     <div class="px-5 py-10 text-center text-sm text-zinc-400"><?= e(t('sites.empty')) ?></div>
@@ -120,7 +120,7 @@
           <input type="hidden" name="domain" value="<?= e($site['domain']) ?>">
           <button type="submit"
                   class="text-xs font-semibold text-amber-600 hover:bg-amber-50 px-2.5 py-1.5 rounded-md flex items-center gap-1">
-            <i class="ti ti-refresh text-sm" aria-hidden="true"></i> <?= e(t('perf.purge')) ?>
+            <?= icon('refresh', 'text-sm') ?> <?= e(t('perf.purge')) ?>
           </button>
         </form>
         <?php endif; ?>
@@ -148,7 +148,7 @@
                   class="<?= $cacheOn
                     ? 'badge badge-info cursor-pointer hover:bg-red-50 hover:text-red-600 hover:border-red-200'
                     : 'badge badge-muted cursor-pointer hover:bg-speed-pale hover:text-speed hover:border-speed/30' ?>">
-            <i class="ti <?= $cacheOn ? 'ti-bolt' : 'ti-bolt-off' ?> text-xs" aria-hidden="true"></i>
+            <?= icon($cacheOn ? 'ti-bolt' : 'ti-bolt-off', 'text-xs') ?>
             <?= e($cacheOn ? t('cache.on') : t('cache.off')) ?>
           </button>
         </form>

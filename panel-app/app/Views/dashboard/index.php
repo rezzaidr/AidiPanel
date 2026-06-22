@@ -66,7 +66,7 @@ $range = $history['range'] ?? '1h';
 <!-- VPS status -->
 <div class="card p-5 mb-5">
   <div class="flex items-center justify-between mb-4">
-    <h2 class="card-title"><i class="ti ti-server-2 text-ink" aria-hidden="true"></i> <?= e(t('vps.title')) ?></h2>
+    <h2 class="card-title"><?= icon('server-2', 'text-ink') ?> <?= e(t('vps.title')) ?></h2>
     <div class="flex items-center gap-3">
       <?php if (!empty($vps['uptime'])): ?>
         <span class="text-[11px] text-zinc-400"><?= e(t('vps.uptime')) ?> <span class="mono text-zinc-600"><?= e($vps['uptime']) ?></span></span>
@@ -77,7 +77,7 @@ $range = $history['range'] ?? '1h';
   <div class="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-4">
     <div>
       <p class="eyebrow mb-1"><?= e(t('vps.os')) ?></p>
-      <p class="text-sm font-medium text-zinc-800 flex items-center gap-1.5"><i class="ti <?= e($osIcon) ?> text-zinc-400 text-base shrink-0" aria-hidden="true"></i> <?= e($vps['os']) ?></p>
+      <p class="text-sm font-medium text-zinc-800 flex items-center gap-1.5"><?= icon($osIcon, 'text-zinc-400 text-base shrink-0') ?> <?= e($vps['os']) ?></p>
     </div>
     <div>
       <p class="eyebrow mb-1"><?= e(t('vps.hostname')) ?></p>
@@ -93,7 +93,7 @@ $range = $history['range'] ?? '1h';
     </div>
     <div>
       <p class="eyebrow mb-1"><?= e(t('vps.cloud')) ?></p>
-      <p class="text-sm font-medium text-zinc-800"><?= $vps['provider'] ? '<i class="ti ti-cloud text-sky-500" aria-hidden="true"></i> ' . e($vps['provider']) : '<span class="text-zinc-300">—</span>' ?></p>
+      <p class="text-sm font-medium text-zinc-800"><?= $vps['provider'] ? icon('cloud', 'text-sky-500') . ' ' . e($vps['provider']) : '<span class="text-zinc-300">—</span>' ?></p>
     </div>
     <div>
       <p class="eyebrow mb-1"><?= e(t('vps.droplet')) ?></p>
@@ -108,8 +108,8 @@ $range = $history['range'] ?? '1h';
       <?php if ($vps['ipv4']): ?>
       <div class="flex items-center gap-1.5">
         <p class="text-sm font-medium text-zinc-800 mono"><?= e($vps['ipv4']) ?></p>
-        <button onclick="navigator.clipboard.writeText('<?= e($vps['ipv4']) ?>');this.innerHTML='<i class=\'ti ti-check text-emerald-500 text-sm\'></i>';setTimeout(()=>this.innerHTML='<i class=\'ti ti-copy text-sm\'></i>',1500)"
-                title="Copy IP" class="text-zinc-300 hover:text-zinc-500 transition-colors p-0.5 rounded"><i class="ti ti-copy text-sm" aria-hidden="true"></i></button>
+        <button onclick="navigator.clipboard.writeText('<?= e($vps['ipv4']) ?>');this.innerHTML=window.AidiIcons.copyDone;setTimeout(()=>this.innerHTML=window.AidiIcons.copyIdle,1500)"
+                title="Copy IP" class="text-zinc-300 hover:text-zinc-500 transition-colors p-0.5 rounded"><?= icon('copy', 'text-sm') ?></button>
       </div>
       <?php else: ?>
       <span class="text-zinc-300">—</span>
@@ -123,7 +123,7 @@ $range = $history['range'] ?? '1h';
   <!-- Requests -->
   <div class="card p-4">
     <div class="flex items-center justify-between">
-      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-arrow-bounce text-ink" aria-hidden="true"></i> <?= e(t('dash.kpi.requests')) ?> <span class="text-zinc-300 font-normal">· <?= e(t('dash.kpi.requests_hint')) ?></span></span>
+      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('arrow-bounce', 'text-ink') ?> <?= e(t('dash.kpi.requests')) ?> <span class="text-zinc-300 font-normal">· <?= e(t('dash.kpi.requests_hint')) ?></span></span>
     </div>
     <div class="mono font-bold text-[26px] text-zinc-900 leading-none mt-2"><?= e($compact($analytics['req_today'] ?? 0)) ?></div>
     <div id="spkReq" class="mt-1 -mb-1"></div>
@@ -131,7 +131,7 @@ $range = $history['range'] ?? '1h';
   <!-- Cache hit ratio -->
   <div class="card p-4">
     <div class="flex items-center justify-between">
-      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-bolt text-speed" aria-hidden="true"></i> <?= e(t('dash.kpi.hit_ratio')) ?></span>
+      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('bolt', 'text-speed') ?> <?= e(t('dash.kpi.hit_ratio')) ?></span>
       <span class="badge badge-info text-[10px] px-1.5 py-0.5">FastCGI</span>
     </div>
     <div class="mono font-bold text-[26px] text-speed leading-none mt-2">
@@ -146,7 +146,7 @@ $range = $history['range'] ?? '1h';
   <!-- Bandwidth saved -->
   <div class="card p-4">
     <div class="flex items-center justify-between">
-      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-arrow-down-circle text-emerald-500" aria-hidden="true"></i> <?= e(t('dash.kpi.bw_saved')) ?></span>
+      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('arrow-down-circle', 'text-emerald-500') ?> <?= e(t('dash.kpi.bw_saved')) ?></span>
     </div>
     <div class="mono font-bold text-[26px] text-zinc-900 leading-none mt-2"><?= e(format_bytes((int) ($analytics['bw_saved'] ?? 0))) ?></div>
     <p class="text-[11px] text-zinc-400 mt-2"><?= e(t('dash.kpi.bw_saved_hint')) ?></p>
@@ -154,7 +154,7 @@ $range = $history['range'] ?? '1h';
   <!-- Data cached -->
   <div class="card p-4">
     <div class="flex items-center justify-between">
-      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-database text-ink" aria-hidden="true"></i> <?= e(t('dash.kpi.data_cached')) ?></span>
+      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('database', 'text-ink') ?> <?= e(t('dash.kpi.data_cached')) ?></span>
     </div>
     <div class="mono font-bold text-[26px] text-zinc-900 leading-none mt-2"><?= e($analytics['cache_size'] ?? '—') ?></div>
     <p class="text-[11px] text-zinc-400 mt-2"><?= e(t('dash.kpi.data_cached_hint')) ?></p>
@@ -165,7 +165,7 @@ $range = $history['range'] ?? '1h';
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">
   <div class="card lg:col-span-2 overflow-hidden">
     <div class="card-head">
-      <h2 class="card-title"><i class="ti ti-chart-area-line text-ink" aria-hidden="true"></i> <?= e(t('dash.traffic.title')) ?> <span class="text-zinc-300 font-sans font-normal text-xs">· <?= e(t('dash.traffic.window')) ?></span></h2>
+      <h2 class="card-title"><?= icon('chart-area-line', 'text-ink') ?> <?= e(t('dash.traffic.title')) ?> <span class="text-zinc-300 font-sans font-normal text-xs">· <?= e(t('dash.traffic.window')) ?></span></h2>
       <?php if ($hasSeries): ?>
       <div class="flex items-center gap-4">
         <span class="flex items-center gap-1.5 text-[11px] text-zinc-500"><span class="w-2.5 h-2.5 rounded-sm bg-speed"></span> <?= e(t('dash.traffic.cached')) ?></span>
@@ -177,24 +177,24 @@ $range = $history['range'] ?? '1h';
       <div class="px-3 pt-3"><div id="chartTraffic"></div></div>
     <?php else: ?>
       <div class="flex flex-col items-center justify-center text-center px-4 py-16">
-        <i class="ti ti-chart-area-line text-4xl text-zinc-200 mb-2" aria-hidden="true"></i>
+        <?= icon('chart-area-line', 'text-4xl text-zinc-200 mb-2') ?>
         <p class="text-sm text-zinc-400"><?= e(t('dash.traffic.empty')) ?></p>
       </div>
     <?php endif; ?>
   </div>
 
   <div class="card overflow-hidden flex flex-col">
-    <div class="card-head"><h2 class="card-title"><i class="ti ti-rocket text-speed" aria-hidden="true"></i> <?= e(t('dash.cacheperf.title')) ?></h2></div>
+    <div class="card-head"><h2 class="card-title"><?= icon('rocket', 'text-speed') ?> <?= e(t('dash.cacheperf.title')) ?></h2></div>
     <?php if ($cacheable > 0): ?>
       <div class="px-4 pt-2"><div id="chartHit"></div></div>
       <div class="px-4 pb-4 mt-1 space-y-2 text-xs">
         <div class="flex items-center justify-between"><span class="flex items-center gap-2 text-zinc-500"><span class="w-2 h-2 rounded-full bg-speed"></span> <?= e(t('dash.cacheperf.served')) ?></span><span class="mono font-semibold text-zinc-800"><?= e($compact($analytics['cached'])) ?></span></div>
         <div class="flex items-center justify-between"><span class="flex items-center gap-2 text-zinc-500"><span class="w-2 h-2 rounded-full bg-ink"></span> <?= e(t('dash.cacheperf.origin')) ?></span><span class="mono font-semibold text-zinc-800"><?= e($compact($analytics['origin'])) ?></span></div>
-        <div class="flex items-center justify-between pt-2 border-t border-zinc-100"><span class="flex items-center gap-2 text-zinc-500"><i class="ti ti-arrow-down-circle text-emerald-500" aria-hidden="true"></i> <?= e(t('dash.cacheperf.saved')) ?></span><span class="mono font-semibold text-emerald-600"><?= e(format_bytes((int) $analytics['bw_saved'])) ?></span></div>
+        <div class="flex items-center justify-between pt-2 border-t border-zinc-100"><span class="flex items-center gap-2 text-zinc-500"><?= icon('arrow-down-circle', 'text-emerald-500') ?> <?= e(t('dash.cacheperf.saved')) ?></span><span class="mono font-semibold text-emerald-600"><?= e(format_bytes((int) $analytics['bw_saved'])) ?></span></div>
       </div>
     <?php else: ?>
       <div class="flex-1 flex flex-col items-center justify-center text-center px-4 py-12">
-        <span class="w-10 h-10 rounded-full bg-speed-pale flex items-center justify-center mb-2"><i class="ti ti-rocket text-speed text-xl" aria-hidden="true"></i></span>
+        <span class="w-10 h-10 rounded-full bg-speed-pale flex items-center justify-center mb-2"><?= icon('rocket', 'text-speed text-xl') ?></span>
         <p class="text-sm text-zinc-400"><?= e(t('dash.cacheperf.empty')) ?></p>
       </div>
     <?php endif; ?>
@@ -203,7 +203,7 @@ $range = $history['range'] ?? '1h';
 
 <!-- monitoring (real history per selected range) -->
 <div class="flex items-center justify-between mb-2.5 mt-1">
-  <h2 class="font-head font-semibold text-sm text-zinc-700 flex items-center gap-2"><i class="ti ti-chart-line text-ink" aria-hidden="true"></i> <?= e(t('dash.system.title')) ?></h2>
+  <h2 class="font-head font-semibold text-sm text-zinc-700 flex items-center gap-2"><?= icon('chart-line', 'text-ink') ?> <?= e(t('dash.system.title')) ?></h2>
   <select id="rangeSelect" onchange="location.href='/dashboard?range=' + encodeURIComponent(this.value)"
           class="text-xs font-medium text-zinc-700 bg-white border border-zinc-200 hover:border-zinc-300 rounded-lg pl-3 pr-2.5 py-2 cursor-pointer focus:outline-none focus:border-ink">
     <?php foreach ($ranges as $val => $key): ?>
@@ -214,42 +214,42 @@ $range = $history['range'] ?? '1h';
 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-5">
   <div class="card p-4">
     <div class="flex items-center justify-between mb-1">
-      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-cpu text-ink" aria-hidden="true"></i> <?= e(t('chart.cpu')) ?></span>
+      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('cpu', 'text-ink') ?> <?= e(t('chart.cpu')) ?></span>
       <span class="mono text-sm font-semibold text-zinc-500"><?= $vps['cores'] ? e(t('vps.cores', ['n' => $vps['cores']])) : '—' ?></span>
     </div>
     <div id="chartCpu"></div>
   </div>
   <div class="card p-4">
     <div class="flex items-center justify-between mb-1">
-      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-cpu-2 text-speed" aria-hidden="true"></i> <?= e(t('chart.memory')) ?></span>
+      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('cpu-2', 'text-speed') ?> <?= e(t('chart.memory')) ?></span>
       <span class="mono text-sm font-semibold text-zinc-500"><?= e($memTotal) ?></span>
     </div>
     <div id="chartMem"></div>
   </div>
   <div class="card p-4">
     <div class="flex items-center justify-between mb-1">
-      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-activity text-amber-500" aria-hidden="true"></i> <?= e(t('chart.load')) ?></span>
+      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('activity', 'text-amber-500') ?> <?= e(t('chart.load')) ?></span>
       <span class="mono text-sm font-semibold text-zinc-500"><?= e($coreLabel) ?></span>
     </div>
     <div id="chartLoad"></div>
   </div>
   <div class="card p-4">
     <div class="flex items-center justify-between mb-1">
-      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-device-floppy text-amber-500" aria-hidden="true"></i> <?= e(t('chart.disk')) ?></span>
+      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('device-floppy', 'text-amber-500') ?> <?= e(t('chart.disk')) ?></span>
       <span class="mono text-sm font-semibold text-zinc-500"><?= e($diskTotal) ?></span>
     </div>
     <div id="chartDisk"></div>
   </div>
   <div class="card p-4">
     <div class="flex items-center justify-between mb-1">
-      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-arrows-up-down text-emerald-500" aria-hidden="true"></i> <?= e(t('chart.network')) ?></span>
+      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('arrows-up-down', 'text-emerald-500') ?> <?= e(t('chart.network')) ?></span>
       <span class="mono font-semibold text-xs text-zinc-700"><span class="text-emerald-600">↓<span id="vNetIn">0</span></span> <span class="text-ink">↑<span id="vNetOut">0</span></span> <span class="text-zinc-300">Mbps</span></span>
     </div>
     <div id="chartNet"></div>
   </div>
   <div class="card p-4">
     <div class="flex items-center justify-between mb-1">
-      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><i class="ti ti-database-cog text-speed" aria-hidden="true"></i> <?= e(t('chart.diskio')) ?></span>
+      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('database-cog', 'text-speed') ?> <?= e(t('chart.diskio')) ?></span>
       <span class="mono font-semibold text-xs text-zinc-700"><span class="text-speed">R <span id="vDioR">0</span></span> <span class="text-violet-600">W <span id="vDioW">0</span></span> <span class="text-zinc-300">MB/s</span></span>
     </div>
     <div id="chartDio"></div>
@@ -260,14 +260,14 @@ $range = $history['range'] ?? '1h';
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
   <div class="card lg:col-span-2 overflow-hidden">
     <div class="card-head">
-      <h2 class="card-title"><i class="ti ti-flame text-amber-500" aria-hidden="true"></i> <?= e(t('dash.top_sites')) ?> <span class="text-zinc-300 font-sans font-normal text-xs">· <?= e(t('dash.top_sites.hint')) ?></span></h2>
+      <h2 class="card-title"><?= icon('flame', 'text-amber-500') ?> <?= e(t('dash.top_sites')) ?> <span class="text-zinc-300 font-sans font-normal text-xs">· <?= e(t('dash.top_sites.hint')) ?></span></h2>
       <a href="/sites" class="btn btn-sm btn-ghost"><?= e(t('sites.view_all')) ?> →</a>
     </div>
     <?php if (empty($sites)): ?>
       <div class="px-6 py-12 text-center">
-        <i class="ti ti-world text-4xl text-zinc-200 block mb-2" aria-hidden="true"></i>
+        <?= icon('world', 'text-4xl text-zinc-200 block mb-2') ?>
         <p class="text-sm font-medium text-zinc-600"><?= e(t('sites.empty')) ?></p>
-        <a href="/sites/add" class="btn btn-primary btn-sm mt-3 inline-flex"><i class="ti ti-plus text-sm" aria-hidden="true"></i> <?= e(t('sites.add_first')) ?></a>
+        <a href="/sites/add" class="btn btn-primary btn-sm mt-3 inline-flex"><?= icon('plus', 'text-sm') ?> <?= e(t('sites.add_first')) ?></a>
       </div>
     <?php else: ?>
       <table class="tbl">
@@ -285,14 +285,14 @@ $range = $history['range'] ?? '1h';
           <tr>
             <td>
               <a href="/sites/<?= e($site['domain']) ?>" class="flex items-center gap-2.5 font-medium text-zinc-900 hover:text-ink">
-                <span class="w-8 h-8 rounded-lg bg-ink-pale flex items-center justify-center shrink-0"><i class="ti <?= e($appIcon($site['type'])) ?> text-ink" aria-hidden="true"></i></span>
+                <span class="w-8 h-8 rounded-lg bg-ink-pale flex items-center justify-center shrink-0"><?= icon($appIcon($site['type']), 'text-ink') ?></span>
                 <?= e($site['domain']) ?>
               </a>
             </td>
             <td><span class="text-xs text-zinc-700"><?= e(ucfirst($site['type'])) ?></span> <span class="mono text-[11px] text-zinc-400">· PHP <?= e($site['php_version']) ?></span></td>
             <td>
               <?php if (($site['ssl_type'] ?? '') === 'letsencrypt'): ?>
-                <span class="badge badge-ok"><i class="ti ti-lock-check text-xs" aria-hidden="true"></i> <?= e(t('ssl.le')) ?></span>
+                <span class="badge badge-ok"><?= icon('lock-check', 'text-xs') ?> <?= e(t('ssl.le')) ?></span>
               <?php else: ?>
                 <span class="badge badge-muted"><?= e(t('ssl.self')) ?></span>
               <?php endif; ?>
@@ -308,12 +308,12 @@ $range = $history['range'] ?? '1h';
 
   <div class="card overflow-hidden flex flex-col">
     <div class="card-head">
-      <h2 class="card-title"><i class="ti ti-bell text-amber-500" aria-hidden="true"></i> <?= e(t('dash.attention')) ?></h2>
+      <h2 class="card-title"><?= icon('bell', 'text-amber-500') ?> <?= e(t('dash.attention')) ?></h2>
       <?php if (!empty($alerts)): ?><span class="badge badge-warn"><?= count($alerts) ?></span><?php endif; ?>
     </div>
     <?php if (empty($alerts)): ?>
       <div class="flex-1 flex flex-col items-center justify-center text-center px-4 py-12">
-        <span class="w-10 h-10 rounded-full bg-emerald-50 flex items-center justify-center mb-2"><i class="ti ti-circle-check text-emerald-500 text-xl" aria-hidden="true"></i></span>
+        <span class="w-10 h-10 rounded-full bg-emerald-50 flex items-center justify-center mb-2"><?= icon('circle-check', 'text-emerald-500 text-xl') ?></span>
         <p class="text-sm text-zinc-500"><?= e(t('dash.allclear')) ?></p>
       </div>
     <?php else: ?>
@@ -321,7 +321,7 @@ $range = $history['range'] ?? '1h';
       <div class="divide-y divide-zinc-50 flex-1">
         <?php foreach ($alerts as $a): ?>
           <div class="flex items-start gap-2.5 px-4 py-3">
-            <span class="w-6 h-6 rounded-md flex items-center justify-center shrink-0 mt-0.5 <?= $alertStyle[$a['level']] ?? $alertStyle['info'] ?>"><i class="ti <?= e($a['icon']) ?> text-sm" aria-hidden="true"></i></span>
+            <span class="w-6 h-6 rounded-md flex items-center justify-center shrink-0 mt-0.5 <?= $alertStyle[$a['level']] ?? $alertStyle['info'] ?>"><?= icon($a['icon'], 'text-sm') ?></span>
             <p class="text-xs text-zinc-700 leading-snug flex-1"><?= e($a['text']) ?></p>
           </div>
         <?php endforeach; ?>

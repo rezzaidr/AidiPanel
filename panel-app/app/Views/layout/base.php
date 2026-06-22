@@ -41,15 +41,15 @@ if ($_ip === '') { $_ip = $_hostname; }
   <title><?= e($pageTitle ?? t('nav.dashboard')) ?> — <?= e(t('app.name')) ?></title>
 
   <!-- Local production assets — no third-party CDN. Order matters: fonts →
-       built Tailwind utilities → app.css component layer (overrides utilities)
-       → Tabler icon webfont. Theme/colours that lived in the old inline
-       tailwind.config now live in tailwind.config.js and are baked into
-       tailwind.css. Only the main body weight is preloaded. -->
+       built Tailwind utilities → app.css component layer (overrides utilities).
+       Icons are inline local SVGs (see the icon() helper) — there is no icon
+       webfont. Theme/colours that lived in the old inline tailwind.config now
+       live in tailwind.config.js and are baked into tailwind.css. Only the main
+       body weight is preloaded. -->
   <link rel="preload" href="/assets/fonts/plus-jakarta-sans-400.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/assets/fonts.css">
   <link rel="stylesheet" href="/assets/tailwind.css">
   <link rel="stylesheet" href="/assets/app.css">
-  <link rel="stylesheet" href="/assets/vendor/tabler/tabler-icons.css">
 
   <script defer src="/assets/vendor/alpine.min.js"></script>
 </head>
@@ -58,14 +58,14 @@ if ($_ip === '') { $_ip = $_hostname; }
 <!-- ===== TOP BAR ===== -->
 <header class="h-16 bg-white border-b border-zinc-200/80 flex items-center px-5 gap-4">
   <a href="/dashboard" class="flex items-center gap-2.5 pr-4 shrink-0">
-    <div class="w-9 h-9 rounded-lg flex items-center justify-center bg-ink"><i class="ti ti-bolt text-white text-lg" aria-hidden="true"></i></div>
+    <div class="w-9 h-9 rounded-lg flex items-center justify-center bg-ink"><?= icon('bolt', 'text-white text-lg') ?></div>
     <span class="font-head font-bold text-[15px] text-zinc-900"><?= e(t('app.name')) ?></span>
   </a>
 
   <nav class="flex items-center gap-1">
-    <a href="/dashboard" class="topnav <?= $navDashboard ?>"><i class="ti ti-chart-line text-base" aria-hidden="true"></i> <?= e(t('nav.dashboard')) ?></a>
-    <a href="/sites" class="topnav <?= $navSites ?>"><i class="ti ti-world text-base" aria-hidden="true"></i> <?= e(t('nav.sites')) ?></a>
-    <a href="/admin" class="topnav <?= $navAdmin ?>"><i class="ti ti-server-cog text-base" aria-hidden="true"></i> <?= e(t('nav.admin')) ?></a>
+    <a href="/dashboard" class="topnav <?= $navDashboard ?>"><?= icon('chart-line', 'text-base') ?> <?= e(t('nav.dashboard')) ?></a>
+    <a href="/sites" class="topnav <?= $navSites ?>"><?= icon('world', 'text-base') ?> <?= e(t('nav.sites')) ?></a>
+    <a href="/admin" class="topnav <?= $navAdmin ?>"><?= icon('server-cog', 'text-base') ?> <?= e(t('nav.admin')) ?></a>
   </nav>
 
   <div class="ml-auto flex items-center gap-2.5">
@@ -78,13 +78,13 @@ if ($_ip === '') { $_ip = $_hostname; }
       <span class="mono text-emerald-600" x-show="copied" x-cloak><?= e(t('topbar.copied')) ?></span>
     </button>
 
-    <button type="button" class="w-8 h-8 rounded-lg hover:bg-zinc-100 flex items-center justify-center text-zinc-400" title="<?= e(t('topbar.theme')) ?>"><i class="ti ti-moon text-[18px]" aria-hidden="true"></i></button>
+    <button type="button" class="w-8 h-8 rounded-lg hover:bg-zinc-100 flex items-center justify-center text-zinc-400" title="<?= e(t('topbar.theme')) ?>"><?= icon('moon', 'text-[18px]') ?></button>
 
     <!-- account menu -->
     <div class="relative">
       <button type="button" @click="userMenu = !userMenu" class="flex items-center gap-1.5 pl-1 hover:bg-zinc-100 rounded-lg py-1 pr-1.5" title="<?= e(t('topbar.account')) ?>">
         <div class="w-8 h-8 rounded-full bg-ink-pale flex items-center justify-center text-ink text-xs font-bold font-head"><?= e($_initials) ?></div>
-        <i class="ti ti-chevron-down text-zinc-400 text-sm" aria-hidden="true"></i>
+        <?= icon('chevron-down', 'text-zinc-400 text-sm') ?>
       </button>
       <div x-show="userMenu" x-cloak @click.outside="userMenu = false" x-transition.opacity
            class="absolute right-0 mt-2 w-48 bg-white border border-zinc-200 rounded-xl shadow-lg py-1.5 z-50">
@@ -93,10 +93,10 @@ if ($_ip === '') { $_ip = $_hostname; }
           <p class="text-[11px] text-zinc-400"><?= !empty($_is_admin) ? 'Administrator' : 'Read-only' ?></p>
         </div>
         <a href="/settings" class="flex items-center gap-2 px-3.5 py-2 text-sm text-zinc-600 hover:bg-zinc-50">
-          <i class="ti ti-settings text-base text-zinc-400" aria-hidden="true"></i> <?= e(t('topbar.settings')) ?>
+          <?= icon('settings', 'text-base text-zinc-400') ?> <?= e(t('topbar.settings')) ?>
         </a>
         <a href="/logout" class="flex items-center gap-2 px-3.5 py-2 text-sm text-zinc-600 hover:bg-zinc-50">
-          <i class="ti ti-logout text-base text-zinc-400" aria-hidden="true"></i> <?= e(t('topbar.logout')) ?>
+          <?= icon('logout', 'text-base text-zinc-400') ?> <?= e(t('topbar.logout')) ?>
         </a>
       </div>
     </div>
@@ -117,29 +117,29 @@ if ($_ip === '') { $_ip = $_hostname; }
   <?php if (!empty($_flash_success ?? '')): ?>
     <div x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 8000)" x-transition
          class="toast toast-ok">
-      <i class="ti ti-circle-check text-base shrink-0" aria-hidden="true"></i>
+      <?= icon('circle-check', 'text-base shrink-0') ?>
       <span class="flex-1">
         <?= e($_flash_success) ?>
         <?php if (!empty($_flash_success_warn ?? '')): ?>
           <span class="block text-amber-700 mt-0.5"><?= e($_flash_success_warn) ?></span>
         <?php endif; ?>
       </span>
-      <button type="button" @click="show = false" aria-label="<?= e(t('common.dismiss')) ?>" class="text-emerald-700/60 hover:text-emerald-700 shrink-0"><i class="ti ti-x text-sm" aria-hidden="true"></i></button>
+      <button type="button" @click="show = false" aria-label="<?= e(t('common.dismiss')) ?>" class="text-emerald-700/60 hover:text-emerald-700 shrink-0"><?= icon('x', 'text-sm') ?></button>
     </div>
   <?php endif; ?>
   <?php if (!empty($_flash_warning ?? '')): ?>
     <div x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 10000)" x-transition
          class="toast toast-warn">
-      <i class="ti ti-alert-triangle text-base" aria-hidden="true"></i>
+      <?= icon('alert-triangle', 'text-base') ?>
       <span class="flex-1"><?= e($_flash_warning) ?></span>
-      <button type="button" @click="show = false" aria-label="<?= e(t('common.dismiss')) ?>" class="text-amber-700/60 hover:text-amber-700"><i class="ti ti-x text-sm" aria-hidden="true"></i></button>
+      <button type="button" @click="show = false" aria-label="<?= e(t('common.dismiss')) ?>" class="text-amber-700/60 hover:text-amber-700"><?= icon('x', 'text-sm') ?></button>
     </div>
   <?php endif; ?>
   <?php if (!empty($_flash_error ?? '')): ?>
     <div x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 10000)" x-transition class="toast toast-error">
-      <i class="ti ti-alert-circle text-base" aria-hidden="true"></i>
+      <?= icon('alert-circle', 'text-base') ?>
       <span class="flex-1"><?= e($_flash_error) ?></span>
-      <button type="button" @click="show = false" aria-label="<?= e(t('common.dismiss')) ?>" class="text-red-600/60 hover:text-red-600"><i class="ti ti-x text-sm" aria-hidden="true"></i></button>
+      <button type="button" @click="show = false" aria-label="<?= e(t('common.dismiss')) ?>" class="text-red-600/60 hover:text-red-600"><?= icon('x', 'text-sm') ?></button>
     </div>
   <?php endif; ?>
 </div>
@@ -163,6 +163,21 @@ if ($_ip === '') { $_ip = $_hostname; }
 // close) during that wait is what gets warned. The success/error redirect is a
 // continuation of the same POST navigation, so it does not re-fire beforeunload —
 // no spurious prompt on completion. The next page load resets everything.
+// ── Icon strings for JS-injected icons (toasts, op-progress). Rendered from the
+// same local Tabler SVGs as the rest of the UI via the icon() helper, so the
+// panel needs no icon webfont. JSON_HEX_TAG keeps the markup safe inside <script>.
+window.AidiIcons = {
+  loading:  <?= json_encode(icon('loader-2', 'spin text-ink text-base'), JSON_HEX_TAG) ?>,
+  failed:   <?= json_encode(icon('alert-circle', 'text-rose-600 text-base'), JSON_HEX_TAG) ?>,
+  done:     <?= json_encode(icon('circle-check', 'text-emerald-600 text-base'), JSON_HEX_TAG) ?>,
+  copyIdle: <?= json_encode(icon('copy', 'text-sm'), JSON_HEX_TAG) ?>,
+  copyDone: <?= json_encode(icon('check', 'text-emerald-500 text-sm'), JSON_HEX_TAG) ?>,
+  tSuccess: <?= json_encode(icon('circle-check', 'text-base shrink-0'), JSON_HEX_TAG) ?>,
+  tError:   <?= json_encode(icon('alert-circle', 'text-base shrink-0'), JSON_HEX_TAG) ?>,
+  tWarning: <?= json_encode(icon('alert-triangle', 'text-base shrink-0'), JSON_HEX_TAG) ?>,
+  tClose:   <?= json_encode(icon('x', 'text-sm'), JSON_HEX_TAG) ?>,
+};
+
 window.opGuard = (function () {
   var armed = false;
   var expectSelfNav = false;   // the op's own form submit is an allowed navigation
@@ -206,16 +221,16 @@ window.AidiToast = function (kind, message) {
   var stack = document.getElementById('toast-stack');
   if (!stack || !message) return;
   var map = {
-    success: ['toast-ok', 'ti-circle-check'],
-    error:   ['toast-error', 'ti-alert-circle'],
-    warning: ['toast-warn', 'ti-alert-triangle'],
+    success: ['toast-ok', 'tSuccess'],
+    error:   ['toast-error', 'tError'],
+    warning: ['toast-warn', 'tWarning'],
   };
   var cfg = map[kind] || map.success;
   var el = document.createElement('div');
   el.className = 'toast ' + cfg[0];
-  el.innerHTML = '<i class="ti ' + cfg[1] + ' text-base shrink-0" aria-hidden="true"></i>'
+  el.innerHTML = (window.AidiIcons[cfg[1]] || '')
     + '<span class="flex-1"></span>'
-    + '<button type="button" aria-label="Dismiss" class="shrink-0"><i class="ti ti-x text-sm" aria-hidden="true"></i></button>';
+    + '<button type="button" aria-label="Dismiss" class="shrink-0">' + (window.AidiIcons.tClose || '') + '</button>';
   el.querySelector('span').textContent = message;        // textContent = no HTML injection
   el.querySelector('button').addEventListener('click', function () { el.remove(); });
   stack.appendChild(el);
@@ -292,7 +307,7 @@ window.opProgressController = function (root) {
     show: function () {
       root.classList.remove('hidden');
       if (errEl) { errEl.classList.add('hidden'); errEl.textContent = ''; }
-      if (icon) icon.className = 'ti ti-loader-2 spin text-ink';
+      if (icon) icon.innerHTML = window.AidiIcons.loading;
       if (bar) { bar.style.width = '0%'; bar.classList.remove('op-working', 'op-bar-fail'); }
       stepStart = Date.now(); stopTimer(); timer = setInterval(tick, 1000); tick();
     },
@@ -304,7 +319,7 @@ window.opProgressController = function (root) {
     },
     fail: function (msg) {
       stopTimer();
-      if (icon) icon.className = 'ti ti-alert-circle text-rose-600';
+      if (icon) icon.innerHTML = window.AidiIcons.failed;
       if (bar) { bar.classList.remove('op-working'); bar.classList.add('op-bar-fail'); }
       if (label) label.textContent = 'Failed';
       if (elapsed) elapsed.textContent = '';
@@ -313,7 +328,7 @@ window.opProgressController = function (root) {
     done: function () {
       stopTimer();
       if (bar) { bar.style.width = '100%'; bar.classList.remove('op-working'); }
-      if (icon) icon.className = 'ti ti-circle-check text-emerald-600';
+      if (icon) icon.innerHTML = window.AidiIcons.done;
       if (elapsed) elapsed.textContent = '';
     },
   };

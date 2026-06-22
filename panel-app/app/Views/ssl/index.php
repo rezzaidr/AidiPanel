@@ -3,7 +3,7 @@
 <!-- page header -->
 <div class="mb-5">
   <a href="/admin" class="text-xs text-zinc-400 hover:text-ink flex items-center gap-1 mb-2">
-    <i class="ti ti-arrow-left text-sm" aria-hidden="true"></i> <?= e(t('admin.title')) ?>
+    <?= icon('arrow-left', 'text-sm') ?> <?= e(t('admin.title')) ?>
   </a>
   <h1 class="font-head font-bold text-[22px] text-zinc-900 leading-none"><?= e(t('admin.ssl.title')) ?></h1>
   <p class="text-sm text-zinc-400 mt-1.5"><?= e(t('admin.ssl.desc')) ?></p>
@@ -16,7 +16,7 @@
     <div class="card p-5">
       <div class="flex items-center gap-2.5 mb-4">
         <div class="w-8 h-8 bg-emerald-50 rounded-lg flex items-center justify-center">
-          <i class="ti ti-lock text-emerald-600 text-base" aria-hidden="true"></i>
+          <?= icon('lock', 'text-emerald-600 text-base') ?>
         </div>
         <h2 class="font-head font-semibold text-sm text-zinc-900"><?= e(t('ssl.install_title')) ?></h2>
       </div>
@@ -43,12 +43,12 @@
         </div>
 
         <div class="bg-speed-pale border border-speed/20 rounded-lg px-3 py-2.5 text-[11px] text-speed flex items-start gap-2">
-          <i class="ti ti-info-circle shrink-0 mt-0.5" aria-hidden="true"></i>
+          <?= icon('info-circle', 'shrink-0 mt-0.5') ?>
           <?= e(t('ssl.install_dns_note')) ?>
         </div>
 
         <button type="submit" class="btn btn-primary w-full">
-          <i class="ti ti-lock text-sm" aria-hidden="true"></i> <?= e(t('ssl.install_btn')) ?>
+          <?= icon('lock', 'text-sm') ?> <?= e(t('ssl.install_btn')) ?>
         </button>
       </form>
     </div>
@@ -56,7 +56,7 @@
     <form method="POST" action="/ssl/renew">
       <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
       <button type="submit" class="btn btn-secondary w-full">
-        <i class="ti ti-refresh text-sm" aria-hidden="true"></i> <?= e(t('ssl.renew_all')) ?>
+        <?= icon('refresh', 'text-sm') ?> <?= e(t('ssl.renew_all')) ?>
       </button>
     </form>
   </div>
@@ -64,7 +64,7 @@
   <!-- Certificate status table -->
   <div class="lg:col-span-2 card overflow-hidden">
     <div class="card-head">
-      <h2 class="card-title"><i class="ti ti-certificate text-zinc-400" aria-hidden="true"></i> <?= e(t('ssl.cert_status_title')) ?></h2>
+      <h2 class="card-title"><?= icon('certificate', 'text-zinc-400') ?> <?= e(t('ssl.cert_status_title')) ?></h2>
     </div>
 
     <?php if (empty($sites)): ?>
@@ -143,7 +143,7 @@
     </table>
     <div class="px-5 py-3 border-t border-zinc-100">
       <p class="text-[11px] text-zinc-400 flex items-center gap-1.5">
-        <i class="ti ti-info-circle text-sm" aria-hidden="true"></i>
+        <?= icon('info-circle', 'text-sm') ?>
         <?= e(t('ssl.auto_renew_note')) ?>
         <span class="mono bg-zinc-100 px-1.5 py-0.5 rounded text-[10px]">0 2 * * * certbot renew --nginx</span>
       </p>

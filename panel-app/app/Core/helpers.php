@@ -14,6 +14,71 @@ function e(mixed $value): string
 }
 
 /**
+ * Render a local Tabler SVG icon inline (the panel ships no icon webfont).
+ *
+ * Usage:
+ *   icon('server')
+ *   icon('lock-check', 'text-emerald-500 text-sm')
+ *   icon($appIcon($type), 'text-ink text-xl')          // accepts a 'ti-…' value too
+ *   icon('loader-2', 'text-sm', ['x-show' => 'submitting', 'x-cloak' => true])
+ *   icon('shield-lock', 'text-lg', [':class' => "enabled ? 'text-speed' : 'text-zinc-300'"])
+ *
+ * - Accepts either 'server' or the legacy class name 'ti-server' (ti- is stripped).
+ * - Sized like the old icon font: 1em square (inline style), so existing text-*
+ *   classes still control size and text-* colours still apply — Tabler outline
+ *   SVGs stroke with currentColor. Sizing therefore works even where app.css is
+ *   not loaded (e.g. the standalone login page).
+ * - aria-hidden="true" by default (icons are decorative; an icon-only button/link
+ *   carries its own aria-label). Pass 'aria-hidden' or 'aria-label' in $attrs to
+ *   override. $attrs also passes through Alpine bindings (:class, x-show, x-cloak…).
+ * - Unknown / missing icon → '' (never fatal, never a broken glyph).
+ *
+ * Icons live in public/assets/icons/tabler/<name>.svg, vendored from the official
+ * @tabler/icons package by build/sync-icons.mjs — never hand-drawn or invented.
+ */
+function icon(string $name, string $class = '', array $attrs = []): string
+{
+    $name = strtolower(trim($name));
+    if (str_starts_with($name, 'ti-')) {
+        $name = substr($name, 3);
+    }
+    if ($name === '' || !preg_match('/^[a-z0-9]+(?:-[a-z0-9]+)*$/', $name)) {
+        return '';   // reject anything that is not a plain icon slug (no path traversal)
+    }
+
+    static $cache = [];
+    if (!array_key_exists($name, $cache)) {
+        $file = dirname(APP_ROOT) . '/public/assets/icons/tabler/' . $name . '.svg';
+        $cache[$name] = is_file($file) ? trim((string) file_get_contents($file)) : '';
+    }
+    $svg = $cache[$name];
+    if ($svg === '' || !preg_match('/^<svg\b[^>]*>/', $svg, $m)) {
+        return '';
+    }
+
+    // Our attributes: class (+ base .icon), inline 1em sizing, a11y default, extras.
+    $out = ' class="' . e(trim('icon ' . $class)) . '" style="width:1em;height:1em"';
+    if (!array_key_exists('aria-hidden', $attrs) && !array_key_exists('aria-label', $attrs)) {
+        $out .= ' aria-hidden="true"';
+    }
+    foreach ($attrs as $k => $v) {
+        if (!preg_match('/^[a-zA-Z_:@][a-zA-Z0-9_:.\-]*$/', $k)) {
+            continue;                       // skip unsafe attribute names
+        }
+        if ($v === true) {
+            $out .= ' ' . $k;               // valueless attribute, e.g. x-cloak
+        } elseif ($v !== false && $v !== null) {
+            $out .= ' ' . $k . '="' . e($v) . '"';
+        }
+    }
+
+    // Rewrite only the opening <svg> tag: drop the source width/height/class (we set
+    // our own) but keep fill/stroke so currentColor + the outline weight survive.
+    $open = preg_replace('/\s(?:width|height|class)="[^"]*"/', '', $m[0]);
+    return '<svg' . $out . substr($open, 4) . substr($svg, strlen($m[0]));
+}
+
+/**
  * Safe internal redirect target derived from the Referer header.
  * Returns only a same-origin path (single leading slash). The host is
  * discarded and leading slashes are collapsed so the result can never be a

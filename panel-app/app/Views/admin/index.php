@@ -38,7 +38,7 @@ $accentTile = [
     ?>
     <?php if ($isSoon): ?>
       <div class="card p-4 flex items-start gap-3.5 opacity-70 select-none">
-        <span class="w-10 h-10 rounded-lg <?= $tile ?> flex items-center justify-center shrink-0"><i class="ti <?= e($s['icon']) ?> text-xl" aria-hidden="true"></i></span>
+        <span class="w-10 h-10 rounded-lg <?= $tile ?> flex items-center justify-center shrink-0"><?= icon($s['icon'], 'text-xl') ?></span>
         <div class="min-w-0 flex-1">
           <p class="font-head font-semibold text-sm text-zinc-500 flex items-center gap-2"><?= e($title) ?> <span class="tag tag-muted"><?= e(t('common.soon')) ?></span></p>
           <p class="text-xs text-zinc-400 mt-1 leading-snug"><?= e($desc) ?></p>
@@ -46,12 +46,12 @@ $accentTile = [
       </div>
     <?php else: ?>
       <a href="<?= e($s['href']) ?>" class="card p-4 flex items-start gap-3.5 hover:border-ink/30 hover:shadow-sm transition group">
-        <span class="w-10 h-10 rounded-lg <?= $tile ?> flex items-center justify-center shrink-0"><i class="ti <?= e($s['icon']) ?> text-xl" aria-hidden="true"></i></span>
+        <span class="w-10 h-10 rounded-lg <?= $tile ?> flex items-center justify-center shrink-0"><?= icon($s['icon'], 'text-xl') ?></span>
         <div class="min-w-0 flex-1">
           <p class="font-head font-semibold text-sm text-zinc-900"><?= e($title) ?></p>
           <p class="text-xs text-zinc-400 mt-1 leading-snug"><?= e($desc) ?></p>
         </div>
-        <i class="ti ti-arrow-right text-zinc-300 group-hover:text-ink transition mt-1" aria-hidden="true"></i>
+        <?= icon('arrow-right', 'text-zinc-300 group-hover:text-ink transition mt-1') ?>
       </a>
     <?php endif; ?>
   <?php endforeach; ?>

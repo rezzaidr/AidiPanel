@@ -3,7 +3,7 @@
 <!-- page header -->
 <div class="mb-5">
   <a href="/admin" class="text-xs text-zinc-400 hover:text-ink flex items-center gap-1 mb-2">
-    <i class="ti ti-arrow-left text-sm" aria-hidden="true"></i> <?= e(t('admin.title')) ?>
+    <?= icon('arrow-left', 'text-sm') ?> <?= e(t('admin.title')) ?>
   </a>
   <h1 class="font-head font-bold text-[22px] text-zinc-900 leading-none"><?= e(t('admin.logs.title')) ?></h1>
   <p class="text-sm text-zinc-400 mt-1.5"><?= e(t('admin.logs.desc')) ?></p>
@@ -47,7 +47,7 @@
       </div>
 
       <button type="submit" class="btn btn-primary w-full">
-        <i class="ti ti-refresh text-sm" aria-hidden="true"></i> <?= e(t('logs.load_btn')) ?>
+        <?= icon('refresh', 'text-sm') ?> <?= e(t('logs.load_btn')) ?>
       </button>
     </form>
   </div>
@@ -57,7 +57,7 @@
     <div class="card-head">
       <div>
         <h2 class="card-title">
-          <i class="ti ti-file-text text-zinc-400" aria-hidden="true"></i>
+          <?= icon('file-text', 'text-zinc-400') ?>
           <?= $domain ? e($domain) . ' — ' . e(ucfirst($type)) : 'Log output' ?>
         </h2>
         <?php if ($logFile): ?>
@@ -71,12 +71,12 @@
 
     <?php if (!$domain): ?>
       <div class="px-5 py-16 text-center">
-        <i class="ti ti-file-text text-5xl text-zinc-200 block mb-3" aria-hidden="true"></i>
+        <?= icon('file-text', 'text-5xl text-zinc-200 block mb-3') ?>
         <p class="text-sm text-zinc-400"><?= e(t('logs.select_hint')) ?></p>
       </div>
     <?php elseif (!$logContent): ?>
       <div class="px-5 py-16 text-center">
-        <i class="ti ti-file-off text-5xl text-zinc-200 block mb-3" aria-hidden="true"></i>
+        <?= icon('file-off', 'text-5xl text-zinc-200 block mb-3') ?>
         <p class="text-sm text-zinc-400"><?= e(t('logs.empty_log')) ?></p>
         <?php if ($logFile): ?>
           <p class="mono text-[10px] text-zinc-300 mt-1"><?= e($logFile) ?></p>
@@ -94,7 +94,7 @@
 <!-- Panel activity log -->
 <div class="card overflow-hidden">
   <div class="card-head">
-    <h2 class="card-title"><i class="ti ti-activity text-zinc-400" aria-hidden="true"></i> <?= e(t('logs.activity_title')) ?></h2>
+    <h2 class="card-title"><?= icon('activity', 'text-zinc-400') ?> <?= e(t('logs.activity_title')) ?></h2>
   </div>
   <?php if (empty($activity)): ?>
     <div class="px-5 py-10 text-center text-sm text-zinc-400"><?= e(t('logs.activity_empty')) ?></div>
