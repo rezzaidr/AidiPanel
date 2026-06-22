@@ -53,7 +53,11 @@ const names = [...requested].sort();
 mkdirSync(OUT, { recursive: true });
 const copied = [], missing = [];
 for (const n of names) {
-  const src = SRC.map((d) => join(d, n + '.svg')).find(existsSync);
+  // A trailing "-filled" maps to Tabler's filled/ variant, e.g.
+  // player-stop-filled -> icons/filled/player-stop.svg (kept solid, not outline).
+  const src = n.endsWith('-filled')
+    ? [join(SRC[1], n.slice(0, -7) + '.svg')].find(existsSync)
+    : SRC.map((d) => join(d, n + '.svg')).find(existsSync);
   if (src) {
     // Minify to a single line so the inlined markup stays small and clean.
     const min = readFileSync(src, 'utf8').replace(/\s+/g, ' ').replace(/>\s+</g, '><').trim();

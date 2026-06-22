@@ -44,7 +44,7 @@
   <div class="card p-5">
     <div class="flex items-center gap-2.5 mb-4">
       <div class="w-8 h-8 bg-ink-pale rounded-lg flex items-center justify-center">
-        <?= icon('brand-redis', 'text-ink text-base') ?>
+        <?= icon('database', 'text-ink text-base') ?>
       </div>
       <span class="font-head font-semibold text-sm text-zinc-900"><?= e(t('cache.redis_title')) ?></span>
     </div>
