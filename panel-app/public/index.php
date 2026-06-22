@@ -113,6 +113,15 @@ $router->get('/sites/{domain}/files/download-many', 'SiteFileController@download
 $router->post('/sites/{domain}/files/upload-chunk', 'SiteFileController@uploadChunk');
 $router->post('/sites/{domain}/files/upload-cancel', 'SiteFileController@uploadCancel');
 
+// Per-site SFTP access
+$router->get('/sites/{domain}/sftp/status',         'SiteSftpController@status');
+$router->post('/sites/{domain}/sftp/enable',         'SiteSftpController@enable');
+$router->post('/sites/{domain}/sftp/disable',        'SiteSftpController@disable');
+$router->post('/sites/{domain}/sftp/password',       'SiteSftpController@setPassword');
+$router->post('/sites/{domain}/sftp/password-clear', 'SiteSftpController@clearPassword');
+$router->post('/sites/{domain}/sftp/key-add',        'SiteSftpController@addKey');
+$router->post('/sites/{domain}/sftp/key-delete',     'SiteSftpController@deleteKey');
+
 // Cache
 $router->get('/cache',         'CacheController@index');
 $router->post('/cache/purge',  'CacheController@purge');

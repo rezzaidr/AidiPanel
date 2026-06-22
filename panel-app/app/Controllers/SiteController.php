@@ -650,7 +650,7 @@ class SiteController extends BaseController
 
     private function sanitizeTab(string $raw): string
     {
-        $valid = ['overview', 'performance', 'ssl', 'database', 'security', 'cron', 'files', 'settings'];
+        $valid = ['overview', 'performance', 'ssl', 'database', 'security', 'cron', 'files', 'sftp', 'settings'];
         return in_array($raw, $valid, true) ? $raw : 'overview';
     }
 

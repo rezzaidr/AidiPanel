@@ -24,6 +24,7 @@ class Router
         '/sites/{domain}/files/read',
         '/sites/{domain}/files/download',
         '/sites/{domain}/files/download-many',
+        '/sites/{domain}/sftp/status',
     ];
 
     public function __construct(Request $request)

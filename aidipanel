@@ -429,6 +429,15 @@ _usage() {
   echo "  files:download-many  Zip + stream a selection (--domain; one path per line on stdin)"
   echo "  files:upload-chunk   Append one chunk of a large upload (--domain --id --offset [--total] [--final])"
   echo "  files:upload-cancel  Remove a partial chunked upload (--domain --id; destDir on stdin)"
+
+  echo -e "\n${BOLD}${BLUE}SFTP${RESET}"
+  echo "  sftp:status          Per-site SFTP status as JSON (--domain)"
+  echo "  sftp:enable          Enable jailed SFTP-only access for the site user (--domain)"
+  echo "  sftp:disable         Disable SFTP (--domain)"
+  echo "  sftp:passwd          Set the SFTP password (--domain; password on stdin)"
+  echo "  sftp:passwd-clear    Disable the password, keep keys (--domain)"
+  echo "  sftp:key-add         Add an SSH public key (--domain; key on stdin)"
+  echo "  sftp:key-delete      Remove an SSH key by fingerprint (--domain; fp on stdin)"
   echo "  cloudflare:realip    Manage global Cloudflare real-IP restoration (--action status|provision|enable|refresh|disable)"
 
   echo -e "\n${BOLD}${BLUE}Database Management${RESET}"
@@ -1802,6 +1811,219 @@ _files_upload_cancel() {
   part="${dir}/.aidipanel-up-${id}.part"
   _files_run rm -f -- "$part" 2>/dev/null || true
   ok "Upload cancelled."
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Per-site SFTP (chrooted, SFTP-only). One shared sshd block keyed on the
+# aidipanel-sftp group; enabling a site adds its Linux user to that group and
+# makes the home a valid chroot. Reuses the Files resolver (domain -> user/home).
+# ---------------------------------------------------------------------------
+SFTP_GROUP="aidipanel-sftp"
+SFTP_DROPIN="/etc/ssh/sshd_config.d/50-aidipanel-sftp.conf"
+
+# Ensure the group + sshd drop-in exist and are valid; reload sshd only if changed
+# and only if `sshd -t` passes (never break SSH).
+_sftp_ensure_sshd() {
+  getent group "$SFTP_GROUP" >/dev/null 2>&1 || groupadd "$SFTP_GROUP"
+  local want changed=0
+  want=$(cat <<EOF
+# Managed by AidiPanel — per-site chrooted SFTP-only access. Do not edit by hand.
+Match Group ${SFTP_GROUP}
+    ChrootDirectory %h
+    ForceCommand internal-sftp
+    AllowTcpForwarding no
+    X11Forwarding no
+    PermitTunnel no
+    PasswordAuthentication yes
+EOF
+)
+  if [[ ! -f "$SFTP_DROPIN" ]] || [[ "$(cat "$SFTP_DROPIN" 2>/dev/null)" != "$want" ]]; then
+    printf '%s\n' "$want" > "${SFTP_DROPIN}.tmp"
+    chmod 0644 "${SFTP_DROPIN}.tmp"
+    mv -f "${SFTP_DROPIN}.tmp" "$SFTP_DROPIN"
+    changed=1
+  fi
+  if ! sshd -t 2>/dev/null; then
+    [[ "$changed" == "1" ]] && rm -f "$SFTP_DROPIN"
+    die "sshd configuration test failed; SFTP was not applied."
+  fi
+  if [[ "$changed" == "1" ]]; then
+    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+  fi
+  return 0
+}
+
+# Ensure ~/.ssh + authorized_keys exist with strict perms, owned by the site user.
+_sftp_ensure_sshdir() {
+  local sshdir="${FILES_HOME}/.ssh" ak="${FILES_HOME}/.ssh/authorized_keys"
+  [[ -d "$sshdir" ]] || mkdir -p "$sshdir"
+  [[ -f "$ak" ]] || : > "$ak"
+  chown "$FILES_USER":"$FILES_USER" "$sshdir" "$ak"
+  chmod 700 "$sshdir"; chmod 600 "$ak"
+}
+
+# Make the home a valid chroot target (root-owned dir; group stays the user so they
+# can still traverse their own home; content subdirs stay user-owned + writable).
+_sftp_chroot_prep() {
+  chown root:"$FILES_USER" "$FILES_HOME"
+  chmod 750 "$FILES_HOME"
+  _sftp_ensure_sshdir
+}
+
+_sftp_in_group() {
+  # space-pad both sides so a substring match is exact; case is IFS-independent
+  # (the CLI runs with IFS=$'\n\t', so `for g in $(id -nG)` would NOT split on spaces).
+  case " $(id -nG "$FILES_USER" 2>/dev/null) " in
+    *" ${SFTP_GROUP} "*) return 0 ;;
+  esac
+  return 1
+}
+
+# sftp:status --domain X -> JSON
+_sftp_status() {
+  _require_root "sftp:status"; _parse_opts "$@"
+  local domain; domain=$(_opt "domain"); _require_arg "domain" "$domain" "sftp:status --domain X"
+  _files_resolve "$domain"
+  local enabled=0 host port pwhash owner
+  _sftp_in_group && enabled=1
+  host=$(hostname -I 2>/dev/null | awk '{print $1}'); [[ -n "$host" ]] || host=$(hostname -f 2>/dev/null || hostname)
+  port=$(sshd -T 2>/dev/null | awk '/^port /{print $2}' | tail -n1); [[ "$port" =~ ^[0-9]+$ ]] || port=22
+  pwhash=$(getent shadow "$FILES_USER" 2>/dev/null | cut -d: -f2)
+  owner=$(stat -c '%U' "$FILES_HOME" 2>/dev/null)
+  python3 - "$FILES_USER" "${FILES_HOME}/.ssh/authorized_keys" "$enabled" "$host" "$port" "$pwhash" "$owner" <<'PY'
+import json, sys, os, hashlib, base64
+user, ak, enabled, host, port, pwhash, owner = sys.argv[1:8]
+pwset = bool(pwhash) and pwhash[0] not in "!*"
+keys = []
+if os.path.isfile(ak):
+    for line in open(ak, encoding="utf-8", errors="replace"):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        idx = next((i for i, p in enumerate(parts) if p.startswith(("ssh-", "ecdsa-", "sk-"))), None)
+        if idx is None or idx + 1 >= len(parts):
+            continue
+        ktype, b64, comment = parts[idx], parts[idx + 1], " ".join(parts[idx + 2:])
+        try:
+            fp = "SHA256:" + base64.b64encode(hashlib.sha256(base64.b64decode(b64)).digest()).decode().rstrip("=")
+        except Exception:
+            fp = ""
+        keys.append({"type": ktype, "comment": comment, "fingerprint": fp})
+print(json.dumps({
+    "enabled": enabled == "1", "password_set": pwset, "chroot_ready": owner == "root",
+    "host": host, "port": int(port), "user": user, "path": "/htdocs", "protocol": "SFTP",
+    "keys": keys,
+}))
+PY
+  return 0
+}
+
+# sftp:enable --domain X
+_sftp_enable() {
+  _require_root "sftp:enable"; _parse_opts "$@"
+  local domain; domain=$(_opt "domain"); _require_arg "domain" "$domain" "sftp:enable --domain X"
+  _files_resolve "$domain"
+  _sftp_ensure_sshd
+  _sftp_chroot_prep
+  usermod -aG "$SFTP_GROUP" "$FILES_USER"
+  ok "SFTP enabled."
+  return 0
+}
+
+# sftp:disable --domain X
+_sftp_disable() {
+  _require_root "sftp:disable"; _parse_opts "$@"
+  local domain; domain=$(_opt "domain"); _require_arg "domain" "$domain" "sftp:disable --domain X"
+  _files_resolve "$domain"
+  if _sftp_in_group; then gpasswd -d "$FILES_USER" "$SFTP_GROUP" >/dev/null 2>&1 || true; fi
+  ok "SFTP disabled."
+  return 0
+}
+
+# sftp:passwd --domain X   (password on stdin, one line)
+_sftp_passwd() {
+  _require_root "sftp:passwd"; _parse_opts "$@"
+  local domain pw; domain=$(_opt "domain"); _require_arg "domain" "$domain" "sftp:passwd --domain X (password on stdin)"
+  _files_resolve "$domain"
+  IFS= read -r pw || true
+  [[ -n "$pw" ]] || die "No password provided."
+  [[ "${#pw}" -ge 8 ]] || die "Password must be at least 8 characters."
+  printf '%s:%s\n' "$FILES_USER" "$pw" | chpasswd || die "Could not set the password."
+  ok "Password set."
+  return 0
+}
+
+# sftp:passwd-clear --domain X   (disable password auth; keys still work)
+_sftp_passwd_clear() {
+  _require_root "sftp:passwd-clear"; _parse_opts "$@"
+  local domain; domain=$(_opt "domain"); _require_arg "domain" "$domain" "sftp:passwd-clear --domain X"
+  _files_resolve "$domain"
+  usermod -p '!' "$FILES_USER" || die "Could not clear the password."
+  ok "Password disabled (key-only)."
+  return 0
+}
+
+# sftp:key-add --domain X   (one SSH public key on stdin)
+_sftp_key_add() {
+  _require_root "sftp:key-add"; _parse_opts "$@"
+  local domain key tmp body ak; domain=$(_opt "domain"); _require_arg "domain" "$domain" "sftp:key-add --domain X (key on stdin)"
+  _files_resolve "$domain"
+  IFS= read -r key || true
+  [[ -n "$key" ]] || die "No key provided."
+  tmp=$(mktemp); printf '%s\n' "$key" > "$tmp"
+  if ! ssh-keygen -l -f "$tmp" >/dev/null 2>&1; then rm -f "$tmp"; die "That is not a valid SSH public key."; fi
+  rm -f "$tmp"
+  _sftp_ensure_sshdir
+  ak="${FILES_HOME}/.ssh/authorized_keys"
+  body=$(awk '{print $2}' <<<"$key")
+  if [[ -n "$body" ]] && awk -v b="$body" '$2==b{found=1} END{exit !found}' "$ak"; then
+    die "That key is already added."
+  fi
+  printf '%s\n' "$key" >> "$ak"
+  chown "$FILES_USER":"$FILES_USER" "$ak"; chmod 600 "$ak"
+  ok "Key added."
+  return 0
+}
+
+# sftp:key-delete --domain X   (fingerprint on stdin, e.g. SHA256:...)
+_sftp_key_delete() {
+  _require_root "sftp:key-delete"; _parse_opts "$@"
+  local domain fp ak; domain=$(_opt "domain"); _require_arg "domain" "$domain" "sftp:key-delete --domain X (fingerprint on stdin)"
+  _files_resolve "$domain"
+  IFS= read -r fp || true
+  [[ -n "$fp" ]] || die "No fingerprint provided."
+  ak="${FILES_HOME}/.ssh/authorized_keys"
+  [[ -f "$ak" ]] || die "No keys to remove."
+  python3 - "$ak" "$fp" <<'PY' || die "Key not found."
+import sys, os, hashlib, base64
+ak, target = sys.argv[1], sys.argv[2]
+out, removed = [], 0
+for line in open(ak, encoding="utf-8", errors="replace"):
+    s = line.strip()
+    if not s or s.startswith("#"):
+        out.append(line); continue
+    parts = s.split()
+    idx = next((i for i, p in enumerate(parts) if p.startswith(("ssh-", "ecdsa-", "sk-"))), None)
+    fp = ""
+    if idx is not None and idx + 1 < len(parts):
+        try:
+            fp = "SHA256:" + base64.b64encode(hashlib.sha256(base64.b64decode(parts[idx + 1])).digest()).decode().rstrip("=")
+        except Exception:
+            fp = ""
+    if fp == target:
+        removed += 1
+    else:
+        out.append(line)
+if removed:
+    tmp = ak + ".tmp"
+    open(tmp, "w", encoding="utf-8").writelines(out)
+    os.replace(tmp, ak)
+sys.exit(0 if removed else 3)
+PY
+  chown "$FILES_USER":"$FILES_USER" "$ak"; chmod 600 "$ak"
+  ok "Key removed."
   return 0
 }
 
@@ -7540,6 +7762,13 @@ main() {
     files:download-many) _files_download_many "$@" ;;
     files:upload-chunk)  _files_upload_chunk "$@" ;;
     files:upload-cancel) _files_upload_cancel "$@" ;;
+    sftp:status)    _sftp_status "$@" ;;
+    sftp:enable)    _sftp_enable "$@" ;;
+    sftp:disable)   _sftp_disable "$@" ;;
+    sftp:passwd)    _sftp_passwd "$@" ;;
+    sftp:passwd-clear) _sftp_passwd_clear "$@" ;;
+    sftp:key-add)   _sftp_key_add "$@" ;;
+    sftp:key-delete) _sftp_key_delete "$@" ;;
 
     security:ip-block)   _security_ipblock "$@" ;;
     security:cloudflare-only) _security_cloudflare_only "$@" ;;
