@@ -39,6 +39,12 @@ Thumbs.db
 *.swp
 *.swo
 
+# Node / frontend build dependencies
+# (the build OUTPUT in panel-app/public/assets is committed and deployed;
+#  only the dev dependencies are ignored. package-lock.json IS committed.)
+node_modules/
+panel-app/node_modules/
+
 # Build artifacts
 *.tar.gz
 *.zip

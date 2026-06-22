@@ -1,0 +1,7 @@
+/* AidiPanel — Tailwind entry (input for the local build).
+   Emits Tailwind's preflight + the utility classes scanned from the PHP views.
+   The custom component layer lives in public/assets/app.css and loads after the
+   generated public/assets/tailwind.css. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

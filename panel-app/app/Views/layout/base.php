@@ -40,30 +40,18 @@ if ($_ip === '') { $_ip = $_hostname; }
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <title><?= e($pageTitle ?? t('nav.dashboard')) ?> — <?= e(t('app.name')) ?></title>
 
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+  <!-- Local production assets — no third-party CDN. Order matters: fonts →
+       built Tailwind utilities → app.css component layer (overrides utilities)
+       → Tabler icon webfont. Theme/colours that lived in the old inline
+       tailwind.config now live in tailwind.config.js and are baked into
+       tailwind.css. Only the main body weight is preloaded. -->
+  <link rel="preload" href="/assets/fonts/plus-jakarta-sans-400.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/assets/fonts.css">
+  <link rel="stylesheet" href="/assets/tailwind.css">
   <link rel="stylesheet" href="/assets/app.css">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
+  <link rel="stylesheet" href="/assets/vendor/tabler/tabler-icons.css">
 
-  <!-- Tailwind Play CDN must load before tailwind.config is assigned -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = { theme: { extend: {
-      colors: {
-        ink:   { DEFAULT:'#322C7A', light:'#4A42A8', pale:'#ECEBF7' },
-        speed: { DEFAULT:'#0891B2', light:'#06B6D4', pale:'#E0F7FB' },
-        // legacy alias → ink, so pre-Fase2 pages keep their colour while we migrate
-        brand: { DEFAULT:'#322C7A', light:'#4A42A8', pale:'#ECEBF7' },
-      },
-      fontFamily: {
-        sans: ['"Plus Jakarta Sans"','system-ui','sans-serif'],
-        head: ['"Space Grotesk"','system-ui','sans-serif'],
-        mono: ['"JetBrains Mono"','ui-monospace','monospace'],
-      },
-    }}};
-  </script>
-  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <script defer src="/assets/vendor/alpine.min.js"></script>
 </head>
 <body class="h-full text-zinc-800 antialiased" x-data="{ userMenu: false }">
 

@@ -1,0 +1,21 @@
+{
+  "name": "aidipanel-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Frontend build pipeline for AidiPanel — local Tailwind CSS build plus vendored fonts/JS so the panel ships no third-party CDN dependencies.",
+  "scripts": {
+    "build:css": "tailwindcss -c tailwind.config.js -i resources/css/tailwind.css -o public/assets/tailwind.css --minify",
+    "build:assets": "node build/vendor-assets.mjs",
+    "build": "npm run build:css && npm run build:assets",
+    "watch:css": "tailwindcss -c tailwind.config.js -i resources/css/tailwind.css -o public/assets/tailwind.css --watch"
+  },
+  "devDependencies": {
+    "@fontsource/jetbrains-mono": "^5.0.0",
+    "@fontsource/plus-jakarta-sans": "^5.0.0",
+    "@fontsource/space-grotesk": "^5.0.0",
+    "@tabler/icons-webfont": "^3.0.0",
+    "alpinejs": "^3.13.0",
+    "apexcharts": "^4.0.0",
+    "tailwindcss": "^3.4.0"
+  }
+}

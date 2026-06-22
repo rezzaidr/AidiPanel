@@ -4,9 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Login — AidiPanel</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
-  <script>tailwind.config = { theme: { extend: { colors: { brand: { DEFAULT:'#3C3489', light:'#534AB7', pale:'#EEEDFE' } } } } }</script>
+  <!-- Local production assets — no third-party CDN. Login is a standalone page
+       (no app.css component layer); it loads the self-hosted fonts, built
+       Tailwind utilities, and the Tabler icon webfont. Its brand purple is kept
+       via arbitrary colour values below so the look is unchanged. -->
+  <link rel="preload" href="/assets/fonts/plus-jakarta-sans-400.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/assets/fonts.css">
+  <link rel="stylesheet" href="/assets/tailwind.css">
+  <link rel="stylesheet" href="/assets/vendor/tabler/tabler-icons.css">
 </head>
 <body class="min-h-screen bg-gray-50 flex items-center justify-center font-sans antialiased">
 
@@ -15,7 +20,7 @@
   <!-- Logo -->
   <div class="text-center mb-8">
     <div class="inline-flex items-center gap-2.5">
-      <div class="w-10 h-10 bg-brand rounded-xl flex items-center justify-center shadow">
+      <div class="w-10 h-10 bg-[#3C3489] rounded-xl flex items-center justify-center shadow">
         <i class="ti ti-server text-white text-lg" aria-hidden="true"></i>
       </div>
       <span class="text-xl font-bold text-gray-900">AidiPanel</span>
@@ -41,7 +46,7 @@
         <div class="relative">
           <i class="ti ti-user absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" aria-hidden="true"></i>
           <input type="text" id="username" name="username" required autofocus
-            class="w-full pl-9 pr-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent"
+            class="w-full pl-9 pr-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3C3489] focus:border-transparent"
             placeholder="admin">
         </div>
       </div>
@@ -51,13 +56,13 @@
         <div class="relative">
           <i class="ti ti-lock absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" aria-hidden="true"></i>
           <input type="password" id="password" name="password" required
-            class="w-full pl-9 pr-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent"
+            class="w-full pl-9 pr-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3C3489] focus:border-transparent"
             placeholder="••••••••">
         </div>
       </div>
 
       <button type="submit"
-        class="w-full bg-brand hover:bg-brand-light text-white text-sm font-medium py-2.5 rounded-lg transition-colors">
+        class="w-full bg-[#3C3489] hover:bg-[#534AB7] text-white text-sm font-medium py-2.5 rounded-lg transition-colors">
         Sign in
       </button>
     </form>

@@ -330,7 +330,7 @@ $range = $history['range'] ?? '1h';
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+<script src="/assets/vendor/apexcharts.min.js"></script>
 <script>
 (function () {
   const $ = s => document.querySelector(s);
