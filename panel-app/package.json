@@ -20,6 +20,7 @@
     "tailwindcss": "^3.4.0"
   },
   "dependencies": {
-    "codemirror": "^5.65.21"
+    "codemirror": "^5.65.21",
+    "qrcode-generator": "^1.5.2"
   }
 }

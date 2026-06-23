@@ -104,6 +104,14 @@ class DB
                 dio_r  REAL NOT NULL DEFAULT 0,  -- bytes/sec
                 dio_w  REAL NOT NULL DEFAULT 0
             );
+
+            CREATE TABLE IF NOT EXISTS user_recovery_codes (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id   INTEGER NOT NULL,
+                code_hash TEXT    NOT NULL,
+                used_at   TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
         ");
 
         // Additive migrations (CREATE TABLE IF NOT EXISTS won't alter an existing table).
@@ -114,6 +122,12 @@ class DB
         $this->addColumnIfMissing('users', 'first_name', 'TEXT');
         $this->addColumnIfMissing('users', 'last_name',  'TEXT');
         $this->addColumnIfMissing('users', 'timezone',   "TEXT DEFAULT 'UTC'");
+
+        // Two-Factor Authentication (TOTP) — see _private/specs/2026-06-23-panel-2fa-totp-design.md
+        $this->addColumnIfMissing('users', 'totp_secret',       'TEXT');
+        $this->addColumnIfMissing('users', 'totp_enabled',      'INTEGER NOT NULL DEFAULT 0');
+        $this->addColumnIfMissing('users', 'totp_confirmed_at', 'TEXT');
+        $this->addColumnIfMissing('users', 'totp_last_step',    'INTEGER');
 
         // Seed admin ONLY if there is no user at all yet
         // Password hash is written by deploy-panel.sh via the CLI -

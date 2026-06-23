@@ -70,6 +70,9 @@ warn()   { echo -e "${YELLOW}[WARN]${RESET}  $*" >&2; echo "[$(_ts)] [WARN]  $*"
 die()    { echo -e "${RED}[ERROR]${RESET} $*" >&2; echo "[$(_ts)] [ERROR] $*" >> "$CLI_LOG" 2>/dev/null || true; exit 1; }
 info()   { echo -e "${DIM}$*${RESET}"; }
 
+# Escape a value for safe single-quoted interpolation into a sqlite3 statement.
+_sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
+
 # Progress markers for the panel's streaming UI. Prints ONE machine-readable line
 # to stdout per stage, but ONLY when --progress was passed (PROGRESS_ENABLED=1) —
 # so terminal use and the smoke tests see byte-identical output otherwise. First
@@ -481,6 +484,7 @@ _usage() {
   echo "  user:delete     Delete a system user"
   echo "  user:list       List all AidiPanel site users"
   echo "  user:passwd     Change password for a user"
+  echo "  user:2fa-reset  Reset a panel account's 2FA (break-glass: --user <name>)"
 
   echo -e "\n${BOLD}${BLUE}System${RESET}"
   echo "  system:info     Show server and panel information"
@@ -6782,6 +6786,38 @@ _user_passwd() {
   die "Site users are no-login by default; interactive passwords are not set. SFTP/SSH access is a planned, opt-in feature."
 }
 
+# Break-glass: clear a PANEL login account's two-factor state directly in the panel
+# SQLite DB. For the worst case where a user lost both their authenticator and their
+# recovery codes. Run on the server as root. Operates on panel users (the `users`
+# table), NOT system/site users.
+_user_2fa_reset() {
+  _require_root "user:2fa-reset"
+  _parse_opts "$@"
+  local username; username=$(_opt "user")
+  _require_arg "user" "$username" "user:2fa-reset --user admin"
+
+  local db="${PANEL_DIR}/storage/db/aidipanel.sqlite"
+  [[ -f "$db" ]] || die "Panel database not found: ${db}"
+  command -v sqlite3 >/dev/null 2>&1 || die "sqlite3 is required but not installed."
+
+  local esc count
+  esc=$(_sql_escape "$username")
+  count=$(sqlite3 "$db" "SELECT COUNT(*) FROM users WHERE username = '${esc}';" 2>/dev/null || echo 0)
+  [[ "$count" == "1" ]] || die "No panel user named '${username}'."
+
+  sqlite3 "$db" <<SQL
+UPDATE users
+   SET totp_secret = NULL, totp_enabled = 0, totp_confirmed_at = NULL, totp_last_step = NULL
+ WHERE username = '${esc}';
+DELETE FROM user_recovery_codes
+ WHERE user_id = (SELECT id FROM users WHERE username = '${esc}');
+INSERT INTO activity_log (user_id, action, detail, ip)
+ VALUES ((SELECT id FROM users WHERE username = '${esc}'), '2fa:reset', 'Two-factor reset via CLI', '127.0.0.1');
+SQL
+
+  ok "Two-factor authentication reset for '${username}'. They can now sign in with their password alone."
+}
+
 # ===========================================================================
 # SYSTEM COMMANDS
 # ===========================================================================
@@ -7818,6 +7854,7 @@ main() {
     user:delete)    _user_delete "$@" ;;
     user:list)      _user_list "$@" ;;
     user:passwd)    _user_passwd "$@" ;;
+    user:2fa-reset) _user_2fa_reset "$@" ;;
 
     # System
     system:info)    _system_info "$@" ;;

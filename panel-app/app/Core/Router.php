@@ -13,7 +13,7 @@ class Router
     private Request $request;
 
     // Routes that do NOT require authentication
-    private array $publicRoutes = ['/login'];
+    private array $publicRoutes = ['/login', '/login/2fa'];
 
     // Read-only users may browse operational pages, but not sensitive admin views.
     private array $adminOnlyGetRoutes = [

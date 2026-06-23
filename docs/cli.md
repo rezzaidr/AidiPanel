@@ -153,7 +153,13 @@ The `php` alias resolves to the default PHP version's FPM service.
 ```bash
 aidipanel user:list                       # list managed site users
 aidipanel user:delete --user example
+aidipanel user:2fa-reset --user admin     # break-glass: clear a panel account's 2FA
 ```
+
+> `user:2fa-reset` is the recovery path for a panel **login account** that has lost
+> both its authenticator app and its recovery codes. Run on the server as root; it
+> clears the account's two-factor secret and recovery codes in the panel database so
+> the user can sign in with their password alone, then re-enable 2FA.
 
 ---
 
@@ -176,6 +182,6 @@ DB       db:add  db:delete  db:list  db:backup
 PHP      php:install  php:list  php:version  php:restart  php:info
 SSL      ssl:install  ssl:renew  ssl:status  ssl:import
 SERVICE  service:status  service:restart  service:reload  service:start  service:stop
-USER     user:list  user:delete
+USER     user:list  user:delete  user:2fa-reset
 SYSTEM   system:info  log:tail  self:update
 ```

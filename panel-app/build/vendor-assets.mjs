@@ -67,6 +67,10 @@ ensure(vendor);
 log.push(`vendor alpine.min.js      ${kb(copy(join(NM, 'alpinejs', 'dist', 'cdn.min.js'), join(vendor, 'alpine.min.js')))}`);
 log.push(`vendor apexcharts.min.js  ${kb(copy(join(NM, 'apexcharts', 'dist', 'apexcharts.min.js'), join(vendor, 'apexcharts.min.js')))}`);
 
+// QR generator (Kazuhiko Arase, MIT) for the 2FA enrollment QR — rendered client-side
+// from the otpauth:// URI. UMD: loaded as a plain <script>, it exposes a global qrcode().
+log.push(`vendor qrcode.min.js      ${kb(copy(join(NM, 'qrcode-generator', 'qrcode.js'), join(vendor, 'qrcode.min.js')))}`);
+
 // CodeMirror 5 for the file-manager editor (syntax highlight + line numbers).
 // Bundled to ONE js (core + curated modes in dependency order) so the Files tab
 // fetches two static assets — no per-mode requests. Lazy-loaded on first edit.

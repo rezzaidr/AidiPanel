@@ -49,6 +49,8 @@ $router  = new Router($request);
 // Auth
 $router->get('/login',  'AuthController@showLogin');
 $router->post('/login', 'AuthController@login');
+$router->get('/login/2fa',  'AuthController@show2fa');
+$router->post('/login/2fa', 'AuthController@verify2fa');
 $router->get('/logout', 'AuthController@logout');
 
 // Dashboard
@@ -152,6 +154,11 @@ $router->get('/logs', 'SystemController@logs');
 $router->get('/settings', 'SettingsController@index');
 $router->post('/settings/profile',  'SettingsController@saveProfile');
 $router->post('/settings/password', 'SettingsController@changePassword');
+$router->post('/settings/2fa/start',    'SettingsController@start2fa');
+$router->post('/settings/2fa/cancel',   'SettingsController@cancel2fa');
+$router->post('/settings/2fa/enable',   'SettingsController@enable2fa');
+$router->post('/settings/2fa/disable',  'SettingsController@disable2fa');
+$router->post('/settings/2fa/recovery', 'SettingsController@regenerateRecovery');
 
 // API (JSON responses for Alpine.js fetch calls)
 $router->get('/api/metrics',         'DashboardController@apiMetrics');
