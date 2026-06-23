@@ -1639,6 +1639,13 @@ set -Eeuo pipefail
 export NO_COLOR=1
 cmd="${1:-}"
 case "$cmd" in
+  security:status)
+    if [[ "$#" -ne 3 || "${2:-}" != "--domain" \
+          || ! "${3:-}" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]; then
+      echo "AidiPanel web command not allowed: security:status needs exactly --domain <domain>" >&2
+      exit 126
+    fi
+    ;;
   cloudflare:realip)
     if [[ "$#" -ne 3 || "${2:-}" != "--action" || "${3:-}" != "status" ]]; then
       echo "AidiPanel web command not allowed: cloudflare:realip is status-only" >&2

@@ -407,6 +407,7 @@ _usage() {
   echo "  cache:opcache-restart    Restart PHP-FPM to flush OPcache [--php 8.4]"
 
   echo -e "\n${BOLD}${BLUE}Site Security${RESET}"
+  echo "  security:status      Read the complete per-site Security snapshot (--domain)"
   echo "  security:basic-auth  Manage per-site HTTP Basic Authentication"
   echo "  cron:list            List a site's cron jobs (--domain)"
   echo "  cron:add             Add or replace a cron job (--domain --schedule; command on stdin)"
@@ -4749,9 +4750,14 @@ _security_ipblock_status() {
 # Read-only transport for the saved list (the panel textarea). stdout = canonical
 # list body ONLY; no log lines. Non-zero (no output) when absent or drifted.
 _security_ipblock_get() {
+  local domain="$1"
+  _security_lock "$domain" s || return 3
+  _security_ipblock_get_locked "$domain"
+}
+
+_security_ipblock_get_locked() {
   local domain="$1" list state stored_sha actual_sha
   list=$(_security_ipblock_list "$domain"); state=$(_security_ipblock_state "$domain")
-  _security_lock "$domain" s || return 3
   [[ -f "$list" && -f "$state" ]] || return 1
   stored_sha=$(_security_state_value "$state" list_sha256)
   actual_sha=$(sha256sum "$list" | cut -d' ' -f1)
@@ -4884,19 +4890,19 @@ _security_ipblock() {
 }
 
 _security_cfonly_siblings_valid() {
-  local domain="$1" basic ip basic_error ip_error
-  basic=$(_security_status "$domain") || return 1
+  local domain="$1" basic="${2:-}" ip="${3:-}" basic_error ip_error
+  [[ -n "$basic" ]] || basic=$(_security_status "$domain") || return 1
   basic_error=$(printf '%s\n' "$basic" \
     | awk -F= '$1=="error"{print substr($0,7); n++} END{if(n!=1)exit 1}') || return 1
   [[ -z "$basic_error" ]] || return 1
-  ip=$(_security_ipblock_status_locked "$domain") || return 1
+  [[ -n "$ip" ]] || ip=$(_security_ipblock_status_locked "$domain") || return 1
   ip_error=$(printf '%s\n' "$ip" \
     | awk -F= '$1=="error"{print substr($0,7); n++} END{if(n!=1)exit 1}') || return 1
   [[ -z "$ip_error" ]]
 }
 
 _security_cfonly_status() {
-  local domain="$1" global_status="${2:-}"
+  local domain="$1" global_status="${2:-}" basic_status="${3:-}" ip_status="${4:-}"
   local conf="${NGINX_CONF_DIR}/${domain}.conf" state stored="" marker error="" enabled=0
   state=$(_security_cfonly_state "$domain")
   [[ -n "$global_status" ]] || global_status=$(_cloudflare_status)
@@ -4915,7 +4921,7 @@ _security_cfonly_status() {
       error="$marker"
     elif [[ "$(grep -cF 'if ($aidipanel_from_cloudflare = 0) { return 403; }' "$conf" 2>/dev/null || true)" -ne 1 ]]; then
       error=marker_drift
-    elif ! _security_cfonly_siblings_valid "$domain"; then
+    elif ! _security_cfonly_siblings_valid "$domain" "$basic_status" "$ip_status"; then
       error=sibling_drift
     elif ! _security_cfonly_dependency_healthy "$global_status"; then
       error=dependency_unhealthy
@@ -4929,6 +4935,68 @@ _security_cfonly_status() {
   printf 'enabled=%s\n' "$enabled"
   printf 'realip_required=1\n'
   printf 'error=%s\n' "$error"
+}
+
+_security_snapshot_emit() {
+  local prefix="$1" payload="$2" line
+  while IFS= read -r line; do
+    [[ "$line" == *=* ]] || continue
+    printf '%s_%s\n' "$prefix" "$line"
+  done <<< "$payload"
+}
+
+# One read-only process for the Manage Site -> Security tab. Lock order remains
+# global Cloudflare first, then per-site Security, matching Cloudflare-only
+# mutations. Existing status functions remain the source of truth.
+_security_snapshot() {
+  _require_root "security:status"
+  [[ "$#" -eq 2 && "$1" == "--domain" ]] \
+    || die "Usage: security:status --domain example.com"
+  local domain="$2"
+  _domain_valid "$domain" || die "Invalid domain name: ${domain}"
+  _domain_exists "$domain" || die "Site not found: ${domain}"
+
+  local global_locked=0 site_locked=0
+  local cloudflare_status basic_auth_status ip_block_status cloudflare_only_status
+  local ip_block_list="" ip_block_list_b64="" ip_error=""
+
+  if _cloudflare_lock s; then
+    global_locked=1
+    cloudflare_status=$(_cloudflare_status_locked)
+  else
+    cloudflare_status=$(_cloudflare_status_empty busy)
+  fi
+
+  if _security_lock "$domain" s; then
+    site_locked=1
+    basic_auth_status=$(_security_status "$domain")
+    ip_block_status=$(_security_ipblock_status_locked "$domain")
+  else
+    basic_auth_status=$'enabled=0\nscope=wp-login\npath=\nusername=\nbypass_ips=\nhtpasswd_exists=0\nforce_https=0\nerror=busy'
+    ip_block_status=$'enabled=0\nentry_count=0\nlist_sha256=\nrealip_active=0\nerror=busy'
+  fi
+
+  if [[ "$global_locked" -eq 1 && "$site_locked" -eq 1 ]]; then
+    cloudflare_only_status=$(_security_cfonly_status \
+      "$domain" "$cloudflare_status" "$basic_auth_status" "$ip_block_status")
+  else
+    cloudflare_only_status=$'enabled=0\nrealip_required=1\nerror=busy'
+  fi
+
+  ip_error=$(printf '%s\n' "$ip_block_status" \
+    | awk -F= '$1=="error"{print substr($0,7); n++} END{if(n!=1)exit 1}') || ip_error=status_unavailable
+  if [[ "$site_locked" -eq 1 && -z "$ip_error" ]]; then
+    ip_block_list=$(_security_ipblock_get_locked "$domain") || ip_block_list=""
+    if [[ -n "$ip_block_list" ]]; then
+      ip_block_list_b64=$(printf '%s' "$ip_block_list" | base64 -w 0)
+    fi
+  fi
+
+  _security_snapshot_emit basic_auth "$basic_auth_status"
+  _security_snapshot_emit cloudflare "$cloudflare_status"
+  _security_snapshot_emit ip_block "$ip_block_status"
+  printf 'ip_block_list_b64=%s\n' "$ip_block_list_b64"
+  _security_snapshot_emit cloudflare_only "$cloudflare_only_status"
 }
 
 _security_cfonly_enable_locked() {
@@ -7775,6 +7843,7 @@ main() {
     cache:opcache-restart)  _cache_opcache_restart "$@" ;;
 
     # Site security
+    security:status)     _security_snapshot "$@" ;;
     security:basic-auth) _security_basic_auth "$@" ;;
     cron:list)   _cron_list "$@" ;;
     cron:add)    _cron_add "$@" ;;

@@ -294,7 +294,7 @@ function web_cli_allowed_commands(): array
         'php:list', 'php:version', 'php:restart', 'php:install',
         'ssl:install', 'ssl:renew', 'ssl:status', 'ssl:import',
         'ssl:force-https', 'ssl:hsts', 'ssl:autorenew', 'ssl:check', 'ssl:use',
-        'security:basic-auth', 'cloudflare:realip', 'security:ip-block', 'security:cloudflare-only',
+        'security:status', 'security:basic-auth', 'cloudflare:realip', 'security:ip-block', 'security:cloudflare-only',
         'service:status', 'service:start', 'service:stop', 'service:restart', 'service:reload',
         'cron:list', 'cron:add', 'cron:delete', 'cron:toggle', 'cron:wp',
         'files:list', 'files:read', 'files:write', 'files:mkdir', 'files:delete', 'files:download',
@@ -317,6 +317,12 @@ function is_web_cli_invocation_allowed(string $command, array $args): bool
 {
     if (!is_web_cli_command_allowed($command)) {
         return false;
+    }
+
+    if ($command === 'security:status') {
+        return count($args) === 2
+            && ($args[0] ?? null) === '--domain'
+            && is_valid_domain((string) ($args[1] ?? ''));
     }
 
     if ($command === 'cloudflare:realip') {

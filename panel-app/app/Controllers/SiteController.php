@@ -368,78 +368,74 @@ class SiteController extends BaseController
         }
 
         if ($activeTab === 'security') {
-            $result = run_cli('security:basic-auth', [
-                '--domain', $domain,
-                '--action', 'status',
-            ]);
+            $result = run_cli('security:status', ['--domain', $domain]);
             if ($result['success']) {
-                $allowed = array_fill_keys(array_keys($basicAuthInfo), true);
+                $seen = [
+                    'basic_auth' => false,
+                    'cloudflare' => false,
+                    'ip_block' => false,
+                    'cloudflare_only' => false,
+                    'ip_block_list' => false,
+                ];
+
                 foreach (preg_split('/\R/', trim((string) $result['output'])) ?: [] as $line) {
                     if (!str_contains($line, '=')) {
                         continue;
                     }
                     [$key, $value] = explode('=', $line, 2);
-                    if (isset($allowed[$key])) {
-                        $basicAuthInfo[$key] = $value;
+
+                    if ($key === 'ip_block_list_b64') {
+                        $seen['ip_block_list'] = true;
+                        $decoded = base64_decode($value, true);
+                        if ($decoded === false) {
+                            $ipBlockInfo['error'] = 'status_unavailable';
+                        } else {
+                            $ipBlockList = rtrim($decoded, "\r\n");
+                        }
+                        continue;
+                    }
+
+                    if (str_starts_with($key, 'cloudflare_only_')) {
+                        $field = substr($key, strlen('cloudflare_only_'));
+                        if (array_key_exists($field, $cloudflareOnlyInfo)) {
+                            $cloudflareOnlyInfo[$field] = $value;
+                            if ($field === 'error') { $seen['cloudflare_only'] = true; }
+                        }
+                        continue;
+                    }
+                    if (str_starts_with($key, 'basic_auth_')) {
+                        $field = substr($key, strlen('basic_auth_'));
+                        if (array_key_exists($field, $basicAuthInfo)) {
+                            $basicAuthInfo[$field] = $value;
+                            if ($field === 'error') { $seen['basic_auth'] = true; }
+                        }
+                        continue;
+                    }
+                    if (str_starts_with($key, 'cloudflare_')) {
+                        $field = substr($key, strlen('cloudflare_'));
+                        if (array_key_exists($field, $cloudflareInfo)) {
+                            $cloudflareInfo[$field] = $value;
+                            if ($field === 'error') { $seen['cloudflare'] = true; }
+                        }
+                        continue;
+                    }
+                    if (str_starts_with($key, 'ip_block_')) {
+                        $field = substr($key, strlen('ip_block_'));
+                        if (array_key_exists($field, $ipBlockInfo)) {
+                            $ipBlockInfo[$field] = $value;
+                            if ($field === 'error') { $seen['ip_block'] = true; }
+                        }
                     }
                 }
+
+                if (!$seen['basic_auth']) { $basicAuthInfo['error'] = 'status_unavailable'; }
+                if (!$seen['cloudflare']) { $cloudflareInfo['error'] = 'status_unavailable'; }
+                if (!$seen['ip_block'] || !$seen['ip_block_list']) { $ipBlockInfo['error'] = 'status_unavailable'; }
+                if (!$seen['cloudflare_only']) { $cloudflareOnlyInfo['error'] = 'status_unavailable'; }
             } else {
                 $basicAuthInfo['error'] = 'status_unavailable';
-            }
-
-            $result = run_cli('cloudflare:realip', ['--action', 'status']);
-            if ($result['success']) {
-                $allowed = array_fill_keys(array_keys($cloudflareInfo), true);
-                foreach (preg_split('/\R/', trim((string) $result['output'])) ?: [] as $line) {
-                    if (!str_contains($line, '=')) {
-                        continue;
-                    }
-                    [$key, $value] = explode('=', $line, 2);
-                    if (isset($allowed[$key])) {
-                        $cloudflareInfo[$key] = $value;
-                    }
-                }
-            } else {
                 $cloudflareInfo['error'] = 'status_unavailable';
-            }
-
-            $result = run_cli('security:ip-block', ['--domain', $domain, '--action', 'status']);
-            if ($result['success']) {
-                $allowed = array_fill_keys(array_keys($ipBlockInfo), true);
-                foreach (preg_split('/\R/', trim((string) $result['output'])) ?: [] as $line) {
-                    if (!str_contains($line, '=')) {
-                        continue;
-                    }
-                    [$key, $value] = explode('=', $line, 2);
-                    if (isset($allowed[$key])) {
-                        $ipBlockInfo[$key] = $value;
-                    }
-                }
-            } else {
                 $ipBlockInfo['error'] = 'status_unavailable';
-            }
-            // Fetch the saved list ONLY when status is healthy. The body is kept
-            // out of logs and error messages (see security:ip-block get).
-            if ($ipBlockInfo['error'] === '') {
-                $listResult = run_cli('security:ip-block', ['--domain', $domain, '--action', 'get']);
-                if ($listResult['success']) {
-                    $ipBlockList = rtrim((string) $listResult['output'], "\r\n");
-                }
-            }
-
-            $result = run_cli('security:cloudflare-only', ['--domain', $domain, '--action', 'status']);
-            if ($result['success']) {
-                $allowed = array_fill_keys(array_keys($cloudflareOnlyInfo), true);
-                foreach (preg_split('/\R/', trim((string) $result['output'])) ?: [] as $line) {
-                    if (!str_contains($line, '=')) {
-                        continue;
-                    }
-                    [$key, $value] = explode('=', $line, 2);
-                    if (isset($allowed[$key])) {
-                        $cloudflareOnlyInfo[$key] = $value;
-                    }
-                }
-            } else {
                 $cloudflareOnlyInfo['error'] = 'status_unavailable';
             }
         }
