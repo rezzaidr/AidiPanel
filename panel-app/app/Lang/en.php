@@ -75,12 +75,6 @@ return [
     'admin.subtitle'        => 'Server-wide settings and services',
     'admin.services.title'  => 'Services',
     'admin.services.desc'   => 'Start, stop, and restart system services used by AidiPanel.',
-    'admin.php.title'       => 'PHP Versions',
-    'admin.php.desc'        => 'Installed PHP versions and pool status',
-    'admin.cache.title'     => 'FastCGI Cache',
-    'admin.cache.desc'      => 'Server-level page cache status and purge',
-    'admin.ssl.title'       => 'SSL / TLS',
-    'admin.ssl.desc'        => 'Certificates and auto-renewal across sites',
     'admin.users.title'     => 'Panel Users',
     'admin.users.desc'      => 'Accounts that can sign in to AidiPanel',
     'admin.logs.title'      => 'System Logs',
@@ -91,6 +85,8 @@ return [
     'admin.tuning.desc'     => 'Auto-tune PHP-FPM, Nginx, the database engine, delivery defaults',
     'admin.backups.title'   => 'Backups',
     'admin.backups.desc'    => 'Scheduled and on-demand server backups',
+    'admin.support.title'   => 'Support',
+    'admin.support.desc'    => 'Help, documentation, and contact',
 
     // Dashboard
     'dash.subtitle'           => 'Real-time monitoring & performance',
@@ -575,6 +571,7 @@ return [
 
     // Users page
     'users.add_title'       => 'Add panel user',
+    'users.add_btn'         => 'Add user',
     'users.username'        => 'Username',
     'users.password'        => 'Password',
     'users.role'            => 'Role',
@@ -594,7 +591,6 @@ return [
     'col.last_login'        => 'Last login',
 
     // Logs page
-    'logs.viewer_title'     => 'Log viewer',
     'logs.domain_ph'        => '— Select domain —',
     'logs.log_type'         => 'Log type',
     'logs.lines'            => 'Lines',

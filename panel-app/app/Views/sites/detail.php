@@ -1055,7 +1055,7 @@ $tabs = [
     <?php endif; ?>
   </div>
 
-  <!-- OPcache card — read-only (manage via Admin Area → PHP) -->
+  <!-- OPcache card — read-only status for this site's PHP version -->
   <div class="card overflow-hidden mb-5">
     <div class="card-head">
       <div class="flex items-center gap-2.5">
@@ -1079,9 +1079,6 @@ $tabs = [
           <?php endif; ?>
         </div>
       </div>
-      <a href="/php" class="btn btn-ghost btn-sm shrink-0">
-        <?= icon('settings', 'text-sm') ?> Manage in PHP Settings
-      </a>
     </div>
     <?php if ($opcEnabled): ?>
     <div class="grid grid-cols-2 sm:grid-cols-4 divide-x divide-zinc-100 border-t border-zinc-100">

@@ -76,6 +76,19 @@ summary:focus-visible,
 .topnav.active        { background: var(--ink-pale); color: var(--ink); font-weight: 600; }
 .topnav.active i      { color: var(--speed); }
 
+/* --- Side navigation (Admin Area left rail) ------------------------------ */
+.sidenav { display: flex; flex-direction: column; gap: 2px; }
+.sidenav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px; font-size: .8125rem; font-weight: 500; color: #52525b;
+  border-radius: 9px; transition: .12s; cursor: pointer; text-decoration: none;
+}
+.sidenav-item:hover        { background: #f1f2f5; color: #18181b; }
+.sidenav-item.active       { background: var(--ink-pale); color: var(--ink); font-weight: 600; }
+.sidenav-item.active .icon { color: var(--speed); }
+.sidenav-item.is-soon      { color: #a1a1aa; cursor: default; }
+.sidenav-item.is-soon:hover{ background: transparent; color: #a1a1aa; }
+
 /* --- Horizontal tabs (per-site / sectioned pages) ------------------------ */
 .tab {
   display: inline-flex; align-items: center; gap: 6px;

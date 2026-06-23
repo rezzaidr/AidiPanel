@@ -55,7 +55,7 @@ $router->get('/logout', 'AuthController@logout');
 $router->get('/',          'DashboardController@index');
 $router->get('/dashboard', 'DashboardController@index');
 
-// Admin Area (server-wide hub — collects services, PHP, cache, SSL, users, logs)
+// Admin Area (server-wide hub — collects services, users, logs; sidebar shell)
 $router->get('/admin', 'AdminController@index');
 
 // Sites
@@ -122,8 +122,7 @@ $router->post('/sites/{domain}/sftp/password-clear', 'SiteSftpController@clearPa
 $router->post('/sites/{domain}/sftp/key-add',        'SiteSftpController@addKey');
 $router->post('/sites/{domain}/sftp/key-delete',     'SiteSftpController@deleteKey');
 
-// Cache
-$router->get('/cache',         'CacheController@index');
+// Cache — server-wide page removed; these endpoints back the per-site Performance tab.
 $router->post('/cache/purge',  'CacheController@purge');
 $router->post('/cache/toggle',          'CacheController@toggle');
 $router->post('/cache/config',          'CacheController@config');
@@ -133,15 +132,8 @@ $router->post('/cache/purge-urls',      'CacheController@purgeUrls');
 $router->post('/cache/opcache-restart', 'CacheController@opcacheRestart');
 $router->post('/cache/zone',            'CacheController@zone');
 
-// PHP
-$router->get('/php',           'PhpController@index');
+// PHP — server-wide page removed; restart backs the per-site quick action.
 $router->post('/php/restart',  'PhpController@restart');
-$router->post('/php/install',  'PhpController@install');
-
-// SSL
-$router->get('/ssl',           'SslController@index');
-$router->post('/ssl/install',  'SslController@install');
-$router->post('/ssl/renew',    'SslController@renew');
 
 // Services
 $router->get('/services',          'ServiceController@index');
@@ -165,7 +157,6 @@ $router->post('/settings/password', 'SettingsController@changePassword');
 $router->get('/api/metrics',         'DashboardController@apiMetrics');
 $router->get('/api/metrics/history', 'DashboardController@apiHistory');
 $router->get('/api/services',     'ServiceController@apiStatus');
-$router->get('/api/cache/stats',  'CacheController@apiStats');
 $router->get('/api/cache/object-metrics', 'CacheController@objectCacheMetrics');
 $router->get('/api/cache/check',   'CacheController@checkUrl');
 $router->get('/api/cache/zone-status', 'CacheController@zoneStatus');

@@ -16,10 +16,25 @@ $uri = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
 
 $navDashboard = ($uri === '/' || str_starts_with($uri, '/dashboard')) ? 'active' : '';
 $navSites     = str_starts_with($uri, '/sites') ? 'active' : '';
-$navAdmin     = '';
-foreach (['/admin', '/services', '/php', '/cache', '/ssl', '/logs', '/users'] as $p) {
+// Admin Area sections — drive both the top-nav active state and the left sidebar
+// that wraps every admin route. 'soon' entries are previews (no page yet); 'admin'
+// entries only show to administrators. Server-wide PHP/Cache/SSL pages were removed
+// (those live per-site now), so they are intentionally absent here.
+$adminSections = [
+    ['key' => 'users',    'icon' => 'ti-users',          'href' => '/users', 'admin' => true],
+    ['key' => 'services', 'icon' => 'ti-stack-2',        'href' => '/services'],
+    ['key' => 'logs',     'icon' => 'ti-file-text',      'href' => '/logs',  'admin' => true],
+    ['key' => 'security', 'icon' => 'ti-shield-lock',    'href' => null,     'soon' => true],
+    ['key' => 'tuning',   'icon' => 'ti-adjustments-bolt','href' => null,    'soon' => true],
+    ['key' => 'backups',  'icon' => 'ti-database-export','href' => null,     'soon' => true],
+    ['key' => 'support',  'icon' => 'ti-lifebuoy',       'href' => null,     'soon' => true],
+];
+
+$navAdmin = '';
+foreach (['/admin', '/services', '/logs', '/users'] as $p) {
     if (str_starts_with($uri, $p)) { $navAdmin = 'active'; break; }
 }
+$_is_admin_area = ($navAdmin === 'active');
 
 $_username = (string) ($_user['username'] ?? 'admin');
 $_initials = strtoupper(mb_substr($_username, 0, 2, 'UTF-8'));
@@ -110,6 +125,39 @@ $assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROO
 <!-- ===== CONTENT ===== -->
 <?php if (!empty($_full_bleed)): ?>
   <?= $_content ?? '' ?>
+<?php elseif (!empty($_is_admin_area)): ?>
+  <!-- Admin Area shell: persistent left sidebar + section content on the right. -->
+  <main class="mx-auto px-6 py-6 max-w-[1280px]">
+    <div class="flex gap-7 items-start">
+      <aside class="w-56 shrink-0 sticky top-6">
+        <nav class="sidenav">
+          <?php foreach ($adminSections as $s): ?>
+            <?php
+              if (!empty($s['admin']) && empty($_is_admin)) { continue; }
+              $isSoon = !empty($s['soon']) || empty($s['href']);
+              $active = (!$isSoon && str_starts_with($uri, $s['href'])) ? ' active' : '';
+              $title  = t('admin.' . $s['key'] . '.title');
+            ?>
+            <?php if ($isSoon): ?>
+              <span class="sidenav-item is-soon">
+                <?= icon($s['icon'], 'text-[18px]') ?>
+                <span class="flex-1"><?= e($title) ?></span>
+                <span class="tag tag-muted"><?= e(t('common.soon')) ?></span>
+              </span>
+            <?php else: ?>
+              <a href="<?= e($s['href']) ?>" class="sidenav-item<?= $active ?>"<?= $active ? ' aria-current="page"' : '' ?>>
+                <?= icon($s['icon'], 'text-[18px]') ?>
+                <span class="flex-1"><?= e($title) ?></span>
+              </a>
+            <?php endif; ?>
+          <?php endforeach; ?>
+        </nav>
+      </aside>
+      <div class="flex-1 min-w-0">
+        <?= $_content ?? '' ?>
+      </div>
+    </div>
+  </main>
 <?php else: ?>
   <main class="mx-auto px-6 py-6 <?= e($_content_max ?? 'max-w-[1280px]') ?>">
     <?= $_content ?? '' ?>

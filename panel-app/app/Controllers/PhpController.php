@@ -2,26 +2,6 @@
 
 class PhpController extends BaseController
 {
-    public function index(array $params = []): void
-    {
-        $status   = php_versions_status();
-        $versions = [];
-        foreach ($status as $ver => $s) {
-            $full = $s['installed']
-                ? trim((string) shell_exec("/usr/bin/php{$ver} -r 'echo PHP_VERSION;' 2>/dev/null"))
-                : null;
-            $versions[$ver] = [
-                'installed'  => $s['installed'],
-                'fpm_active' => $s['running'],
-                'default'    => $s['default'],
-                'label'      => $s['label'],
-                'full_ver'   => $full,
-            ];
-        }
-        $sites = $this->db->rows('SELECT domain, php_version, type FROM sites ORDER BY domain');
-        $this->view('php/index', compact('versions', 'sites'));
-    }
-
     public function restart(array $params = []): void
     {
         $version = (string) $this->request->post('version', 'all');
@@ -37,29 +17,7 @@ class PhpController extends BaseController
         if ($this->request->isAjax()) {
             $this->json(['success' => true, 'message' => "PHP-FPM {$version} restarted."]);
         }
-        $this->success("PHP-FPM {$version} restarted.", '/php');
-    }
-
-    public function install(array $params = []): void
-    {
-        $version = (string) $this->request->post('version', '');
-        if (!in_array($version, php_policy()['available'], true)) {
-            $this->error('Invalid PHP version.');
-        }
-
-        if ($this->request->post('stream') === '1') {
-            $this->streamCli('php:install', ['--version', $version], function (array $r) use ($version): array {
-                \Core\DB::log('php:install', "Installed PHP {$version}");
-                return ['redirect' => '/php', 'message' => "PHP {$version} installed."];
-            });
-        }
-
-        $result = run_cli('php:install', ['--version', $version]);
-        if (!$result['success']) {
-            $this->error('PHP ' . $version . ' install failed: ' . $result['output']);
-        }
-
-        \Core\DB::log('php:install', "Installed PHP {$version}");
-        $this->success("PHP {$version} installed.", '/php');
+        // Quick action lives on the site page; return there (no server-wide PHP page).
+        $this->success("PHP-FPM {$version} restarted.");
     }
 }

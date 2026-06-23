@@ -4,18 +4,6 @@ namespace Controllers;
 
 class CacheController extends BaseController
 {
-    public function index(array $params = []): void
-    {
-        $sites = $this->db->rows('SELECT domain, cache_enabled, type FROM sites ORDER BY domain');
-        $stats = $this->getCacheStats();
-        $this->view('cache/index', compact('sites', 'stats'));
-    }
-
-    public function apiStats(array $params = []): void
-    {
-        $this->json($this->getCacheStats());
-    }
-
     public function purge(array $params = []): void
     {
         $domain = (string) $this->request->post('domain', '');
@@ -480,45 +468,5 @@ class CacheController extends BaseController
         $referer = (string) ($_SERVER['HTTP_REFERER'] ?? '');
         $back    = $referer !== '' ? $referer : '/';
         $this->success('OPcache restarted.', $back);
-    }
-
-    private function getCacheStats(): array
-    {
-        $cacheDir = '/var/cache/nginx/fastcgi';
-        $size     = 0;
-        $files    = 0;
-
-        if (is_dir($cacheDir)) {
-            $iter = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($cacheDir,
-                \FilesystemIterator::SKIP_DOTS));
-            foreach ($iter as $file) {
-                if ($file->isFile()) {
-                    $size += $file->getSize();
-                    $files++;
-                }
-            }
-        }
-
-        // Redis stats
-        $redisStats = [];
-        $redisInfo  = @shell_exec('redis-cli info stats 2>/dev/null');
-        if ($redisInfo) {
-            preg_match('/keyspace_hits:(\d+)/', $redisInfo, $h);
-            preg_match('/keyspace_misses:(\d+)/', $redisInfo, $m);
-            $hits   = (int) ($h[1] ?? 0);
-            $misses = (int) ($m[1] ?? 0);
-            $total  = $hits + $misses;
-            $redisStats = [
-                'hits'     => $hits,
-                'misses'   => $misses,
-                'hit_rate' => $total > 0 ? round(($hits / $total) * 100, 1) : 0,
-            ];
-        }
-
-        return [
-            'fcgi_size'  => format_bytes($size),
-            'fcgi_files' => $files,
-            'redis'      => $redisStats,
-        ];
     }
 }

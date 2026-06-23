@@ -3,15 +3,16 @@ declare(strict_types=1);
 namespace Controllers;
 
 /**
- * Admin Area — server-wide hub. The top-bar nav has no sidebar, so this page is
- * the single entry point to every server-level section. Existing sections link
- * out to their current pages; not-yet-built ones are shown as disabled previews
- * so the information architecture is visible from day one.
+ * Admin Area — server-wide hub. Navigation now lives in a persistent left sidebar
+ * (rendered by layout/base.php for every admin route), so /admin has no landing of
+ * its own: it drops the user into the first sidebar section. Admins land on Panel
+ * Users (the top item); read-only viewers (who cannot open /users) fall back to
+ * Services so they are never bounced to an access-denied page.
  */
 class AdminController extends BaseController
 {
     public function index(array $params = []): void
     {
-        $this->view('admin/index', ['pageTitle' => t('admin.title')]);
+        $this->redirect(\Core\Auth::isAdmin() ? '/users' : '/services');
     }
 }

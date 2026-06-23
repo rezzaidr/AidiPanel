@@ -39,9 +39,6 @@ $sections = [
 
 <!-- page header -->
 <div class="mb-5">
-  <a href="/admin" class="text-xs text-zinc-400 hover:text-ink flex items-center gap-1 mb-2">
-    <?= icon('arrow-left', 'text-sm') ?> <?= e(t('admin.title')) ?>
-  </a>
   <h1 class="font-head font-bold text-[22px] text-zinc-900 leading-none"><?= e(t('admin.services.title')) ?></h1>
   <p class="text-sm text-zinc-400 mt-1.5"><?= e(t('admin.services.desc')) ?></p>
 </div>
