@@ -5,7 +5,7 @@
 #  Supported OS: Debian 11/12, Ubuntu 22.04/24.04 (x86_64 & arm64)
 #
 #  One-command install (installs stack + deploys panel app automatically):
-#    bash <(curl -fsSL https://raw.githubusercontent.com/rezzaidr/AidiPanel/master/install.sh)
+#    bash <(curl -fsSL https://get.aidipanel.com)
 #
 #  Options:
 #    --port PORT           Panel HTTPS port (default: 8443)
