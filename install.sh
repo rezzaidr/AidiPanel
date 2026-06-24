@@ -1114,8 +1114,23 @@ _configure_redis() {
     -e 's/^save 60 10000/#save 60 10000/' \
     "$redis_conf"
 
+  # Per-site ACL isolation (backlog #6): point redis.conf at an aclfile so each
+  # site can later get its own scoped Redis identity. The empty file here is a
+  # no-op for behavior — `default` stays open; the admin user + `default off`
+  # lock are applied by `cache:redis-acl`. Refuse if ACLs are externally managed.
+  if ! grep -qE '^[[:space:]]*user[[:space:]]' "$redis_conf" 2>/dev/null; then
+    local acl_file="/etc/redis/users.acl"
+    if [[ ! -f "$acl_file" ]]; then
+      : > "$acl_file"
+      chown redis:redis "$acl_file" 2>/dev/null || true
+      chmod 640 "$acl_file" 2>/dev/null || true
+    fi
+    grep -qE "^[[:space:]]*aclfile[[:space:]]+${acl_file}" "$redis_conf" 2>/dev/null \
+      || printf '\n# AidiPanel — per-site Redis ACL isolation (backlog #6)\naclfile %s\n' "$acl_file" >> "$redis_conf"
+  fi
+
   run systemctl restart redis-server
-  ok "Redis configured (maxmemory: ${redis_maxmem}, policy: allkeys-lru, persistence: off)"
+  ok "Redis configured (maxmemory: ${redis_maxmem}, policy: allkeys-lru, persistence: off, aclfile)"
 }
 
 _install_wpcli() {
@@ -2075,6 +2090,16 @@ main() {
   _setup_panel_fpm;       ui_ok "Panel PHP-FPM service: aidipanel-fpm (www-data, transitional)"
   _configure_panel_vhost; ui_ok "Self-signed panel SSL generated"
   _install_cli;           ui_ok "CLI installed: /usr/local/bin/aidipanel"
+  # Born locked (backlog #6): now that the CLI exists and Redis is up with an
+  # aclfile, provision the admin identity and lock the `default` user. No sites
+  # exist yet, so this just closes the multi-tenant hole from the first boot.
+  if [[ "$INSTALL_REDIS" != "false" ]]; then
+    if /usr/local/bin/aidipanel cache:redis-acl --action enable >/dev/null 2>&1; then
+      ui_ok "Redis ACL isolation enabled (default user locked)"
+    else
+      ui_warn "Redis ACL isolation not enabled — run: aidipanel cache:redis-acl --action enable"
+    fi
+  fi
   _deploy_panel_app;      ui_ok "Web UI deployed"
   _setup_cron;            ui_ok "Maintenance cron configured"
   _test_and_start_services

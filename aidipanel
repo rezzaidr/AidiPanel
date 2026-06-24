@@ -37,6 +37,13 @@ readonly PMA_URL_PATH="/phpmyadmin/index.php"
 readonly DB_SECRET_DIR="/var/lib/aidipanel/db-secrets"
 readonly DB_SECRET_STORE="/var/lib/aidipanel/db-secrets/passwords.tsv"
 readonly DB_SECRET_KEY="/etc/aidipanel/db-secret.key"
+# Redis per-site ACL isolation (backlog #6) — see
+# _private/specs/2026-06-24-redis-acl-per-site-design.md.
+readonly REDIS_CONF="/etc/redis/redis.conf"
+readonly REDIS_ACL_FILE="/etc/redis/users.acl"
+readonly REDIS_ADMIN_USER="aidipanel_admin"
+readonly REDIS_ADMIN_KEY="/etc/aidipanel/redis-admin.key"
+readonly REDIS_ACL_STATE="/etc/aidipanel/redis-acl.enabled"
 # PHP policy — single source of truth (/etc/aidipanel/php.conf), with a dev fallback.
 if [[ -f "/etc/aidipanel/php.conf" ]]; then
   # shellcheck source=/dev/null
@@ -404,6 +411,7 @@ _usage() {
   echo "  cache:redis-enable   Enable and start Redis"
   echo "  cache:redis-disable  Stop and disable Redis"
   echo "  cache:redis-flush        Flush all Redis data (FLUSHALL)"
+  echo "  cache:redis-acl          Per-site Redis ACL isolation (--action status|enable|disable|reconcile); 'disable' = break-glass"
   echo "  cache:opcache-restart    Restart PHP-FPM to flush OPcache [--php 8.4]"
 
   echo -e "\n${BOLD}${BLUE}Site Security${RESET}"
@@ -1027,6 +1035,7 @@ _site_delete() {
 
   # Teardown (both modes)
   _db_deprovision_site "$site_user" "$domain"
+  _redis_site_purge "$site_user"   # drop per-site Redis ACL user + keys (backlog #6)
   rm -f "${NGINX_ENABLED_DIR}/${domain}.conf" "${NGINX_CONF_DIR}/${domain}.conf"
   rm -f "$(_security_http_inc "$domain")"
   rm -f "$(_security_ipblock_inc "$domain")"
@@ -2342,6 +2351,113 @@ _cache_page() {
 }
 
 # ---------------------------------------------------------------------------
+# REDIS ACL PRIMITIVES (backlog #6) — admin identity + authenticated redis-cli
+# wrapper. See _private/specs/2026-06-24-redis-acl-per-site-design.md.
+# ---------------------------------------------------------------------------
+
+# Read the Redis admin password ("" if not provisioned yet). Never fails.
+_redis_admin_secret() {
+  [[ -r "$REDIS_ADMIN_KEY" ]] && cat "$REDIS_ADMIN_KEY" 2>/dev/null || echo ""
+}
+
+# Authenticated redis-cli, wrapped in a 3s timeout (callers must NOT prefix their
+# own `timeout` — that can't run a shell function). Uses the admin ACL identity
+# once provisioned; during the pre-retrofit window (no secret yet, `default` still
+# open) it transparently falls back to unauthenticated. EVERY CLI Redis call routes
+# through this, so locking `default` only needs this one path to keep working.
+# REDISCLI_AUTH is set in `timeout`'s environment and inherited by redis-cli (so
+# the password never appears in the process arguments / `ps`).
+_redis() {
+  local pass; pass=$(_redis_admin_secret)
+  if [[ -n "$pass" ]]; then
+    REDISCLI_AUTH="$pass" timeout 3 redis-cli --user "$REDIS_ADMIN_USER" "$@"
+  else
+    timeout 3 redis-cli "$@"
+  fi
+}
+
+# True if an ACL user exists. (ACL GETUSER returns nil + exit 0 for a missing
+# user, so it can't be used as an existence test; ACL LIST is reliable.)
+_redis_user_exists() {
+  _redis ACL LIST 2>/dev/null | grep -qE "^user ${1} "
+}
+
+# Memoized probe for `ACL DRYRUN` support (Redis >= 7.0). DRYRUN evaluates whether
+# a user WOULD be allowed to run a command without executing it — the safe way to
+# assert a command denial (e.g. FLUSHALL) instead of running the command itself.
+# Returns 0 = supported, 1 = not. Cached for the life of the process.
+_redis_acl_dryrun_supported() {
+  if [[ -z "${REDIS_DRYRUN_SUPPORT:-}" ]]; then
+    if [[ "$(_redis ACL DRYRUN "$REDIS_ADMIN_USER" PING 2>&1 || true)" == "OK" ]]; then
+      REDIS_DRYRUN_SUPPORT=yes
+    else
+      REDIS_DRYRUN_SUPPORT=no
+    fi
+  fi
+  [[ "$REDIS_DRYRUN_SUPPORT" == "yes" ]]
+}
+
+# Create/refresh the admin ACL user, coping with BOTH states: steady (admin
+# exists → authenticate as admin) and bootstrap (admin absent, `default` still
+# open → unauthenticated). Non-zero only when both paths fail (true lockout →
+# use the file-level break-glass).
+_redis_setuser_admin() {
+  local pass="$1"
+  REDISCLI_AUTH="$pass" timeout 3 redis-cli --user "$REDIS_ADMIN_USER" \
+      ACL SETUSER "$REDIS_ADMIN_USER" on ">${pass}" "~*" "&*" "+@all" >> "$CLI_LOG" 2>&1 \
+    && return 0
+  timeout 3 redis-cli ACL SETUSER "$REDIS_ADMIN_USER" on ">${pass}" "~*" "&*" "+@all" >> "$CLI_LOG" 2>&1
+}
+
+# Ensure the admin secret file + ACL user exist. Idempotent and password-stable:
+# REUSES an existing key (regenerating would orphan every per-site user and break
+# all object caches — the hard invariant in the spec). Run as root.
+_redis_admin_ensure() {
+  mkdir -p "$(dirname "$REDIS_ADMIN_KEY")" || return 1
+  chown root:root "$(dirname "$REDIS_ADMIN_KEY")" 2>/dev/null || true
+  if [[ ! -s "$REDIS_ADMIN_KEY" ]]; then
+    local old_umask; old_umask=$(umask); umask 177
+    openssl rand -hex 24 > "$REDIS_ADMIN_KEY" || { umask "$old_umask"; return 1; }
+    umask "$old_umask"
+  fi
+  chown root:root "$REDIS_ADMIN_KEY" 2>/dev/null || true
+  chmod 600 "$REDIS_ADMIN_KEY" || return 1
+
+  local pass; pass=$(_redis_admin_secret)
+  [[ -n "$pass" ]] || return 1
+  _redis_setuser_admin "$pass" || return 1
+  _redis ACL SAVE >> "$CLI_LOG" 2>&1 || true
+  return 0
+}
+
+# Point redis.conf at our aclfile + create an empty aclfile if missing. Idempotent.
+# Refuses (non-zero) if redis.conf already has inline `user` directives — we won't
+# clobber an externally-managed ACL. Needs a Redis RESTART (not reload) to apply.
+_redis_aclfile_ensure() {
+  [[ -f "$REDIS_CONF" ]] || { warn "Redis config not found: ${REDIS_CONF}"; return 1; }
+  if grep -qE '^[[:space:]]*user[[:space:]]' "$REDIS_CONF" 2>/dev/null; then
+    warn "redis.conf has inline 'user' ACL directives; leaving Redis ACL unmanaged."
+    return 1
+  fi
+  if [[ ! -f "$REDIS_ACL_FILE" ]]; then
+    : > "$REDIS_ACL_FILE" || return 1
+    chown redis:redis "$REDIS_ACL_FILE" 2>/dev/null || true
+    chmod 640 "$REDIS_ACL_FILE" 2>/dev/null || true
+  fi
+  if ! grep -qE "^[[:space:]]*aclfile[[:space:]]+${REDIS_ACL_FILE}([[:space:]]|\$)" "$REDIS_CONF" 2>/dev/null; then
+    printf '\n# AidiPanel — per-site Redis ACL isolation (backlog #6)\naclfile %s\n' "$REDIS_ACL_FILE" >> "$REDIS_CONF" || return 1
+    return 10   # newly added → caller must restart Redis to load it
+  fi
+  return 0
+}
+
+# Back up users.acl before a mutation so a truncated ACL SAVE (power loss) can't
+# brick Redis startup. Single-slot (.bak); the break-glass keeps timestamped copies.
+_redis_acl_backup() {
+  [[ -f "$REDIS_ACL_FILE" ]] && cp -f "$REDIS_ACL_FILE" "${REDIS_ACL_FILE}.bak" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
 # CACHE REDIS — per-site object cache status (Phase 1: read-only)
 # ---------------------------------------------------------------------------
 
@@ -2370,7 +2486,7 @@ _cache_redis_site_status() {
 
   # Redis service check (2-second timeout)
   local service_ok=0 redis_host="127.0.0.1" redis_port="6379"
-  local ping; ping=$(timeout 2 redis-cli -h "$redis_host" -p "$redis_port" PING 2>/dev/null || echo "FAIL")
+  local ping; ping=$(_redis PING 2>/dev/null || echo "FAIL")
   [[ "$ping" == "PONG" ]] && service_ok=1
   echo "service_ok=${service_ok}"
   echo "redis_host=${redis_host}"
@@ -2436,11 +2552,35 @@ _cache_redis_site_status() {
   [[ -n "$prefix" && "$prefix" == "$expected_prefix" ]] && prefix_managed=1
   echo "prefix_managed=${prefix_managed}"
 
-  # site_cache_status: all 3 conditions required for "active"
+  # Live connection state. In ACL mode, authenticate with the exact scoped
+  # credential; filesystem artifacts alone must never be reported as active.
+  local connection_status="not_connected" acl_isolated=0
+  if [[ "$service_ok" -eq 0 ]]; then
+    connection_status="service_down"
+  elif [[ "$dropin_status" == "present" ]]; then
+    if [[ -f "$REDIS_ACL_STATE" ]]; then
+      if _cache_redis_cfg_acl_matches "$wp_config" "oc_${site_user}" \
+         && _redis_user_exists "oc_${site_user}" \
+         && _redis_site_acl_ping "$wp_config" "$site_user"; then
+        connection_status="connected"
+        acl_isolated=1
+      else
+        connection_status="auth_failed"
+      fi
+    else
+      # Legacy/pre-retrofit mode has no scoped credential to test. Redis PING is
+      # the strongest bounded check available without loading WordPress.
+      connection_status="connected"
+    fi
+  fi
+  echo "connection_status=${connection_status}"
+
+  # site_cache_status requires a live connection, not just plugin/drop-in files.
   local site_cache_status="not_connected"
   if [[ "$service_ok" -eq 0 ]]; then
     site_cache_status="service_down"
-  elif [[ "$service_ok" -eq 1 && "$plugin_status" == "active" && "$dropin_status" == "present" ]]; then
+  elif [[ "$plugin_status" == "active" && "$dropin_status" == "present" \
+          && "$connection_status" == "connected" ]]; then
     site_cache_status="active"
   fi
   echo "site_cache_status=${site_cache_status}"
@@ -2448,6 +2588,10 @@ _cache_redis_site_status() {
   # Phase 1: keys and memory not calculated
   echo "site_keys=unknown"
   echo "site_memory=unknown"
+
+  # Isolated means the configured username matches, the ACL user exists, and the
+  # stored credential successfully authenticates. An array constant alone is not proof.
+  echo "acl_isolated=${acl_isolated}"
 
   local can_enable=0 can_disable=0 can_flush=0
   [[ "$service_ok" -eq 1 && "$wp_detected" -eq 1 && "$site_cache_status" != "active" ]] && can_enable=1
@@ -2481,6 +2625,166 @@ _cache_redis_cfg_prefix() {
     "$1" 2>/dev/null | head -1 || echo ""
 }
 
+# Extract the password (2nd element) from the array-form WP_REDIS_PASSWORD:
+# define( 'WP_REDIS_PASSWORD', array('user', 'pass') ). Empty if not array form.
+# This is the only ACL credential form redis-cache's phpredis auth() accepts.
+_cache_redis_cfg_acl_pass() {
+  grep -oP "WP_REDIS_PASSWORD['\"]\s*,\s*(?:\[|array\s*\(\s*)['\"][^'\"]*['\"]\s*,\s*['\"]\K[^'\"]+" \
+    "$1" 2>/dev/null | head -1 || echo ""
+}
+
+# Extract the username (1st element) from the array-form WP_REDIS_PASSWORD.
+_cache_redis_cfg_acl_user() {
+  grep -oP "WP_REDIS_PASSWORD['\"]\s*,\s*(?:\[|array\s*\(\s*)['\"]\K[^'\"]+" \
+    "$1" 2>/dev/null | head -1 || echo ""
+}
+
+# True when wp-config contains the expected per-site ACL username and a password.
+_cache_redis_cfg_acl_matches() {
+  local wpcfg="$1" expected_user="$2"
+  [[ "$(_cache_redis_cfg_acl_user "$wpcfg")" == "$expected_user" \
+     && -n "$(_cache_redis_cfg_acl_pass "$wpcfg")" ]]
+}
+
+# Authenticate with a site's scoped credential without reading or changing keys.
+_redis_site_acl_ping() {
+  local wpcfg="$1" site_user="$2" oc_user="oc_${2}" pass
+  pass=$(_cache_redis_cfg_acl_pass "$wpcfg")
+  [[ -n "$pass" && "$(_cache_redis_cfg_acl_user "$wpcfg")" == "$oc_user" ]] || return 1
+  [[ "$(REDISCLI_AUTH="$pass" timeout 3 redis-cli --user "$oc_user" PING 2>/dev/null || echo FAIL)" == "PONG" ]]
+}
+
+# Confirm WordPress loaded the Redis drop-in and its live client is connected.
+# Uses OC_RUNNER from _cache_redis_resolve; no cache flush or write is performed.
+_cache_redis_wp_connection_ok() {
+  local out
+  out=$("${OC_RUNNER[@]}" eval \
+    'global $wp_object_cache; if (is_object($wp_object_cache) && method_exists($wp_object_cache, "redis_status") && $wp_object_cache->redis_status()) { echo "connected"; } else { exit(1); }' \
+    2>> "$CLI_LOG") || return 1
+  grep -q 'connected' <<< "$out"
+}
+
+# Install the plugin's drop-in atomically without `wp redis enable`: that upstream
+# command unconditionally executes FLUSHDB, which a per-site ACL must never allow.
+_cache_redis_install_dropin() {
+  local source="${OC_WEBROOT}/wp-content/plugins/redis-cache/includes/object-cache.php"
+  local dropin="${OC_WEBROOT}/wp-content/object-cache.php"
+  local tmp="${dropin}.aidipanel-new.$$"
+  [[ -f "$source" && ! -e "$dropin" ]] || return 1
+
+  # CLI_LOG is root-owned; redirects intentionally run as root.
+  # shellcheck disable=SC2024
+  sudo -u "$OC_SITE_USER" -- cp -- "$source" "$tmp" >> "$CLI_LOG" 2>&1 || return 1
+  # shellcheck disable=SC2024
+  sudo -u "$OC_SITE_USER" -- chmod 644 "$tmp" >> "$CLI_LOG" 2>&1 \
+    || { sudo -u "$OC_SITE_USER" -- rm -f -- "$tmp"; return 1; }
+  # shellcheck disable=SC2024
+  sudo -u "$OC_SITE_USER" -- mv -f -- "$tmp" "$dropin" >> "$CLI_LOG" 2>&1 \
+    || { sudo -u "$OC_SITE_USER" -- rm -f -- "$tmp"; return 1; }
+
+  if ! _cache_redis_wp_connection_ok; then
+    # shellcheck disable=SC2024
+    sudo -u "$OC_SITE_USER" -- rm -f -- "$dropin" >> "$CLI_LOG" 2>&1 || true
+    return 1
+  fi
+  return 0
+}
+
+# Remove only the Redis Object Cache drop-in managed by this integration. Direct
+# removal avoids the upstream disable subcommand's unconditional FLUSHDB attempt.
+_cache_redis_remove_dropin() {
+  local dropin="${OC_WEBROOT}/wp-content/object-cache.php"
+  [[ -e "$dropin" ]] || return 0
+  [[ -f "$dropin" && ! -L "$dropin" ]] || return 1
+  grep -qF 'Plugin Name: Redis Object Cache Drop-In' "$dropin" 2>/dev/null || return 1
+  # CLI_LOG is root-owned; the redirect intentionally runs as root.
+  # shellcheck disable=SC2024
+  sudo -u "$OC_SITE_USER" -- rm -f -- "$dropin" >> "$CLI_LOG" 2>&1 || return 1
+  [[ ! -e "$dropin" ]]
+}
+
+# Provision the per-site Redis ACL identity (oc_<site_user>) scoped to this site's
+# key prefix, and write array-form WP_REDIS_PASSWORD into wp-config. Idempotent and
+# password-stable (reuses the wp-config password if already present). Uses OC_*
+# globals from _cache_redis_resolve. Returns non-zero on failure.
+#
+# Grant rationale: `~prefix:*` is the real isolation — every keyed command can only
+# touch this site's keys regardless of category. `-@dangerous -@admin -flushall
+# -flushdb` additionally block the NON-keyed cross-tenant commands (FLUSHALL/FLUSHDB
+# ignore the key pattern; CONFIG/DEBUG/SHUTDOWN are instance-wide). `+@all` minus
+# those keeps the plugin's normal command set working (validated in Task 7).
+_redis_site_acl_provision() {
+  local oc_user="oc_${OC_SITE_USER}"
+  local user_existed=0
+  _redis_user_exists "$oc_user" && user_existed=1
+  OC_ACL_USER_CREATED=0
+  # Reuse the existing per-site password (2nd element of the array form) for
+  # idempotency, else generate a fresh one.
+  local oc_pass; oc_pass=$(_cache_redis_cfg_acl_pass "$OC_WPCONFIG")
+  [[ -n "$oc_pass" ]] || oc_pass=$(openssl rand -hex 24)
+
+  # Grant: `~prefix:*` is the real isolation (every keyed command is scoped to this
+  # site). `-@dangerous -@admin -flushall -flushdb` block the non-keyed cross-tenant
+  # commands. `+info` is re-added because the Redis Object Cache drop-in calls INFO
+  # on every init (server stats only — no tenant keys/values).
+  # `reset` makes the result deterministic and removes stale passwords, grants,
+  # key patterns, and selectors left by an earlier or manually-edited identity.
+  if ! _redis ACL SETUSER "$oc_user" reset on ">${oc_pass}" "~${OC_EXPECTED_PREFIX}*" \
+      resetchannels +@all -@dangerous -@admin -flushall -flushdb +info >> "$CLI_LOG" 2>&1; then
+    return 1
+  fi
+  if ! _redis ACL SAVE >> "$CLI_LOG" 2>&1; then
+    [[ "$user_existed" -eq 0 ]] && _redis_site_acl_remove
+    return 1
+  fi
+  [[ "$user_existed" -eq 0 ]] && OC_ACL_USER_CREATED=1
+
+  # Credential for the plugin: WP_REDIS_PASSWORD as a PHP [username, password] array
+  # — the only form redis-cache's phpredis `auth()` accepts for ACL (a plain string
+  # sends password-only AUTH, which the locked `default` user rejects). Written --raw.
+  if ! "${OC_RUNNER[@]}" config set WP_REDIS_PASSWORD "array('${oc_user}', '${oc_pass}')" --raw --type=constant >> "$CLI_LOG" 2>&1; then
+    if [[ "$OC_ACL_USER_CREATED" -eq 1 ]]; then
+      _redis_site_acl_remove
+      OC_ACL_USER_CREATED=0
+    fi
+    return 1
+  fi
+  # Remove obsolete constants from earlier attempts (best-effort, keeps wp-config clean).
+  "${OC_RUNNER[@]}" config delete WP_REDIS_USER >> "$CLI_LOG" 2>&1 || true
+  "${OC_RUNNER[@]}" config delete WP_REDIS_USERNAME >> "$CLI_LOG" 2>&1 || true
+  return 0
+}
+
+# Remove a site's per-site ACL identity (best-effort). Uses OC_SITE_USER.
+_redis_site_acl_remove() {
+  _redis ACL DELUSER "oc_${OC_SITE_USER}" >> "$CLI_LOG" 2>&1 || true
+  _redis ACL SAVE >> "$CLI_LOG" 2>&1 || true
+}
+
+# Best-effort Redis residue cleanup for a DELETED site (backlog #6): drop the
+# per-site ACL user and batch-UNLINK its key prefix so a removed tenant leaves no
+# trace. Non-fatal — orphans would LRU-evict anyway. $1 = site_user. Branches on
+# auth state to avoid sending AUTH "" to an open `default`.
+_redis_site_purge() {
+  local site_user="$1"
+  [[ -n "$site_user" ]] || return 0
+  command -v redis-cli >/dev/null 2>&1 || return 0
+  _redis ACL DELUSER "oc_${site_user}" >> "$CLI_LOG" 2>&1 || true
+  local pass; pass=$(_redis_admin_secret)
+  if [[ -n "$pass" ]]; then
+    ( set +o pipefail
+      REDISCLI_AUTH="$pass" redis-cli --user "$REDIS_ADMIN_USER" --scan --pattern "aidipanel:${site_user}:*" 2>/dev/null \
+        | head -50000 | REDISCLI_AUTH="$pass" xargs -r -n 256 redis-cli --user "$REDIS_ADMIN_USER" UNLINK
+    ) >> "$CLI_LOG" 2>&1 || true
+  else
+    ( set +o pipefail
+      redis-cli --scan --pattern "aidipanel:${site_user}:*" 2>/dev/null \
+        | head -50000 | xargs -r -n 256 redis-cli UNLINK
+    ) >> "$CLI_LOG" 2>&1 || true
+  fi
+  _redis ACL SAVE >> "$CLI_LOG" 2>&1 || true
+}
+
 # cache:redis --action enable --domain <domain>
 # Install/activate the per-site WordPress Redis Object Cache, managed by AidiPanel.
 # Idempotent; refuses to overwrite an unmanaged cache; full ledger-based rollback.
@@ -2493,7 +2797,7 @@ _cache_redis_enable_site() {
 
   _progress 10 oc_check "Checking site and Redis"
   [[ "$OC_SITE_TYPE" == "wordpress" && -f "$OC_WPCONFIG" ]] || { echo "error=not_wordpress"; exit 1; }
-  [[ "$(timeout 2 redis-cli -h 127.0.0.1 -p 6379 PING 2>/dev/null || echo FAIL)" == "PONG" ]] \
+  [[ "$(_redis PING 2>/dev/null || echo FAIL)" == "PONG" ]] \
     || { echo "error=redis_service_down"; exit 1; }
   command -v wp &>/dev/null || { echo "error=wp_cli_missing"; exit 1; }
 
@@ -2503,6 +2807,38 @@ _cache_redis_enable_site() {
   # Already active (drop-in present)? Managed → idempotent success; unmanaged → refuse.
   if [[ -f "$dropin" ]]; then
     if [[ "$cur_prefix" == "$OC_EXPECTED_PREFIX" ]]; then
+      local active_connection_verified=0
+      # Repair/verify ACL drift before declaring success. A drop-in can survive a
+      # failed disable or package change while its Redis identity is missing.
+      if [[ -f "$REDIS_ACL_STATE" ]]; then
+        local active_real; active_real=$(realpath -e "$OC_WPCONFIG" 2>/dev/null || echo "")
+        [[ -n "$active_real" && -f "$active_real" && ! -L "$OC_WPCONFIG" \
+           && "$active_real" == "${OC_WEBROOT}/wp-config.php" ]] \
+          || { echo "error=wp_config_not_safe"; exit 1; }
+        sudo -u "$OC_SITE_USER" -- test -w "$OC_WPCONFIG" \
+          || { echo "error=wp_config_not_writable"; exit 1; }
+        local active_cfg_backup="${OC_WPCONFIG}.aidipanel-acl-bak-$$"
+        # CLI_LOG is root-owned; redirects intentionally run as root.
+        # shellcheck disable=SC2024
+        sudo -u "$OC_SITE_USER" -- cp -f "$OC_WPCONFIG" "$active_cfg_backup" >> "$CLI_LOG" 2>&1 \
+          || { echo "error=wp_config_not_writable"; exit 1; }
+        if ! _redis_site_acl_provision || ! _cache_redis_wp_connection_ok; then
+          # shellcheck disable=SC2024
+          sudo -u "$OC_SITE_USER" -- cp -f "$active_cfg_backup" "$OC_WPCONFIG" >> "$CLI_LOG" 2>&1 || true
+          # shellcheck disable=SC2024
+          sudo -u "$OC_SITE_USER" -- rm -f "$active_cfg_backup" >> "$CLI_LOG" 2>&1 || true
+          [[ "${OC_ACL_USER_CREATED:-0}" -eq 1 ]] && _redis_site_acl_remove
+          echo "error=acl_provision_failed"
+          exit 1
+        fi
+        # shellcheck disable=SC2024
+        sudo -u "$OC_SITE_USER" -- rm -f "$active_cfg_backup" >> "$CLI_LOG" 2>&1 || true
+        active_connection_verified=1
+      fi
+      if [[ "$active_connection_verified" -eq 0 ]] && ! _cache_redis_wp_connection_ok; then
+        echo "error=object_cache_not_connected"
+        exit 1
+      fi
       _progress 100 "done" "Already active"
       ok "Object cache already active (managed): ${domain}"
       _cache_redis_site_status --domain "$domain"
@@ -2520,15 +2856,21 @@ _cache_redis_enable_site() {
 
   # Rollback ledger (parent locals; visible to the nested rollback via dynamic scope).
   local wp_config_backup_path="" plugin_installed_this_run=0 plugin_activated_this_run=0
-  local config_modified_this_run=0 dropin_enabled_this_run=0
+  local config_modified_this_run=0 dropin_enabled_this_run=0 acl_user_created_this_run=0
   _oc_enable_rollback() {
-    if [[ "$dropin_enabled_this_run" == 1 ]]; then "${OC_RUNNER[@]}" redis disable >> "$CLI_LOG" 2>&1 || true; fi
+    if [[ "$dropin_enabled_this_run" == 1 ]]; then
+      # No drop-in existed before this transaction, so any residue is ours even
+      # when a partial copy is too short to contain the normal plugin marker.
+      # shellcheck disable=SC2024
+      sudo -u "$OC_SITE_USER" -- rm -f -- "$dropin" >> "$CLI_LOG" 2>&1 || true
+    fi
     if [[ "$plugin_activated_this_run" == 1 ]]; then "${OC_RUNNER[@]}" plugin deactivate redis-cache >> "$CLI_LOG" 2>&1 || true; fi
     if [[ "$config_modified_this_run" == 1 && -f "$wp_config_backup_path" ]]; then
       # CLI_LOG is root-owned; the log redirect runs as root by design (cp runs as the site user for ownership).
       # shellcheck disable=SC2024
       sudo -u "$OC_SITE_USER" -- cp -f "$wp_config_backup_path" "$OC_WPCONFIG" >> "$CLI_LOG" 2>&1 || true
     fi
+    if [[ "$acl_user_created_this_run" == 1 ]]; then _redis_site_acl_remove; fi
     if [[ "$plugin_installed_this_run" == 1 ]]; then "${OC_RUNNER[@]}" plugin uninstall redis-cache --deactivate >> "$CLI_LOG" 2>&1 || true; fi
   }
 
@@ -2564,6 +2906,18 @@ _cache_redis_enable_site() {
   # this site's prefix only. Keep in sync with the flush guard below.
   "${OC_RUNNER[@]}" config set WP_REDIS_SELECTIVE_FLUSH true --raw --type=constant >> "$CLI_LOG" 2>&1 || true
 
+  # Per-site ACL identity (backlog #6) — only when ACL isolation is active on this
+  # box (marker set by `cache:redis-acl enable` / a fresh install). Pre-ACL boxes
+  # skip this and behave exactly as before, so enabling object cache stays
+  # backward-compatible until the retrofit runs. Writes array-form credentials.
+  if [[ -f "$REDIS_ACL_STATE" ]]; then
+    _progress 70 oc_acl "Creating isolated Redis identity"
+    if ! _redis_site_acl_provision; then
+      _oc_enable_rollback; echo "error=acl_provision_failed"; exit 1
+    fi
+    acl_user_created_this_run="$OC_ACL_USER_CREATED"
+  fi
+
   # Activate only if not already WP-active (so rollback won't deactivate a pre-active plugin).
   _progress 80 oc_activate "Activating plugin"
   if ! "${OC_RUNNER[@]}" plugin is-active redis-cache >> "$CLI_LOG" 2>&1; then
@@ -2573,12 +2927,15 @@ _cache_redis_enable_site() {
     plugin_activated_this_run=1
   fi
 
-  # Enable the object-cache drop-in.
+  # Install the object-cache drop-in without the upstream plugin enable
+  # subcommand, which unconditionally executes the forbidden global FLUSHDB.
   _progress 90 oc_dropin "Enabling object cache"
-  if ! "${OC_RUNNER[@]}" redis enable >> "$CLI_LOG" 2>&1; then
+  # Arm rollback first: even a failed installer may have created the destination
+  # before its connection validation or cleanup failed.
+  dropin_enabled_this_run=1
+  if ! _cache_redis_install_dropin; then
     _oc_enable_rollback; echo "error=dropin_enable_failed"; exit 1
   fi
-  dropin_enabled_this_run=1
 
   # Final validation: drop-in present AND our prefix in place.
   local v_prefix; v_prefix=$(_cache_redis_cfg_prefix "$OC_WPCONFIG")
@@ -2606,10 +2963,26 @@ _cache_redis_disable_site() {
   local cur_prefix; cur_prefix=$(_cache_redis_cfg_prefix "$OC_WPCONFIG")
   [[ "$cur_prefix" == "$OC_EXPECTED_PREFIX" ]] || { echo "error=object_cache_unmanaged"; exit 1; }
 
+  local dropin="${OC_WEBROOT}/wp-content/object-cache.php"
   _progress 30 oc_dropin "Disabling object cache"
-  "${OC_RUNNER[@]}" redis disable >> "$CLI_LOG" 2>&1 || true
+  _cache_redis_remove_dropin || { echo "error=dropin_disable_failed"; exit 1; }
+  # Never revoke the ACL credential while a live drop-in can still use it.
+  [[ ! -f "$dropin" ]] || { echo "error=dropin_disable_failed"; exit 1; }
+
   _progress 70 oc_deactivate "Deactivating plugin"
-  "${OC_RUNNER[@]}" plugin deactivate redis-cache >> "$CLI_LOG" 2>&1 || true
+  local deactivate_failed=0
+  if "${OC_RUNNER[@]}" plugin is-active redis-cache >> "$CLI_LOG" 2>&1; then
+    "${OC_RUNNER[@]}" plugin deactivate redis-cache >> "$CLI_LOG" 2>&1 || deactivate_failed=1
+  fi
+  # Drop the per-site ACL identity (backlog #6): least privilege — a cache-off site
+  # keeps no live Redis credential. Keys orphan and fall to LRU/inactivity eviction.
+  # Best-effort; the inert WP_REDIS_PASSWORD constant is left in wp-config so a
+  # later enable can reuse the stable password.
+  _redis_site_acl_remove
+  if [[ "$deactivate_failed" -eq 1 ]]; then
+    echo "error=plugin_deactivate_failed"
+    exit 1
+  fi
   _progress 100 "done" "Object cache disabled"
   ok "Object cache disabled: ${domain}"
   _cache_redis_site_status --domain "$domain"
@@ -2627,7 +3000,7 @@ _cache_redis_flush_site() {
   _cache_redis_resolve "$domain"
 
   [[ "$OC_SITE_TYPE" == "wordpress" && -f "$OC_WPCONFIG" ]] || { echo "error=not_wordpress"; exit 1; }
-  [[ "$(timeout 2 redis-cli -h 127.0.0.1 -p 6379 PING 2>/dev/null || echo FAIL)" == "PONG" ]] \
+  [[ "$(_redis PING 2>/dev/null || echo FAIL)" == "PONG" ]] \
     || { echo "error=redis_service_down"; exit 1; }
 
   local dropin="${OC_WEBROOT}/wp-content/object-cache.php"
@@ -2663,11 +3036,11 @@ _cache_redis_metrics() {
   local keys="unknown" mem="unknown" limited=0
   local dropin="${OC_WEBROOT}/wp-content/object-cache.php"
   if [[ "$OC_SITE_TYPE" == "wordpress" && -f "$dropin" \
-        && "$(timeout 2 redis-cli -h 127.0.0.1 -p 6379 PING 2>/dev/null || echo FAIL)" == "PONG" ]]; then
+        && "$(_redis PING 2>/dev/null || echo FAIL)" == "PONG" ]]; then
     local pat="${OC_EXPECTED_PREFIX}*"
-    # Keys: redis-cli --scan uses SCAN (never KEYS); cap 1000; time-bounded.
+    # Keys: _redis --scan uses SCAN (never KEYS); cap 1000; time-bounded (timeout in _redis).
     # The subshell disables pipefail so head closing the pipe (SIGPIPE) isn't an error.
-    local n; n=$( set +o pipefail; timeout 3 redis-cli -h 127.0.0.1 -p 6379 --scan --pattern "$pat" 2>/dev/null | head -1000 | wc -l | tr -d ' ' )
+    local n; n=$( set +o pipefail; _redis --scan --pattern "$pat" 2>/dev/null | head -1000 | wc -l | tr -d ' ' )
     [[ "$n" =~ ^[0-9]+$ ]] || n=0
     keys="$n"
     [[ "$n" -ge 1000 ]] && limited=1
@@ -2676,9 +3049,9 @@ _cache_redis_metrics() {
       local total=0 sn=0 k u
       while IFS= read -r k; do
         [[ -z "$k" ]] && continue
-        u=$(redis-cli -h 127.0.0.1 -p 6379 MEMORY USAGE "$k" 2>/dev/null || echo "")
+        u=$(_redis MEMORY USAGE "$k" 2>/dev/null || echo "")
         [[ "$u" =~ ^[0-9]+$ ]] && { total=$((total+u)); sn=$((sn+1)); }
-      done < <( set +o pipefail; timeout 2 redis-cli -h 127.0.0.1 -p 6379 --scan --pattern "$pat" 2>/dev/null | head -50 )
+      done < <( set +o pipefail; _redis --scan --pattern "$pat" 2>/dev/null | head -50 )
       if [[ "$sn" -gt 0 ]]; then
         local approx=$(( (total / sn) * n ))
         if   [[ "$approx" -ge 1048576 ]]; then mem="~$((approx/1048576))MB"
@@ -2703,6 +3076,267 @@ _cache_redis_per_site() {
     flush)   _cache_redis_flush_site "$@" ;;
     metrics) _cache_redis_metrics "$@" ;;
     *) die "cache:redis: unknown action '${action}'. Supported: status, enable, disable, flush, metrics" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# CACHE REDIS-ACL (backlog #6) — provision the admin + per-site ACL isolation
+# across the whole box, lock `default`. The ordered retrofit (see the spec):
+# admin + per-site users + verify FIRST, lock `default` LAST.
+# ---------------------------------------------------------------------------
+
+# Print every site with an AidiPanel-managed object cache: domain<TAB>user<TAB>wpconfig.
+_redis_acl_each_managed_oc_site() {
+  local conf domain site_user webroot
+  for conf in "${NGINX_CONF_DIR}"/*.conf; do
+    [[ -f "$conf" ]] || continue
+    domain="${conf##*/}"; domain="${domain%.conf}"
+    _domain_valid "$domain" || continue
+    site_user=$(grep -oP '^\s*root\s+/home/\K[^/;]+' "$conf" 2>/dev/null | head -1 || echo "")
+    [[ -n "$site_user" ]] || continue
+    webroot=$(_vhost_webroot "$conf")
+    [[ -f "${webroot}/wp-content/object-cache.php" ]] || continue
+    [[ "$(_cache_redis_cfg_prefix "${webroot}/wp-config.php")" == "aidipanel:${site_user}:" ]] || continue
+    printf '%s\t%s\t%s\n' "$domain" "$site_user" "${webroot}/wp-config.php"
+  done
+}
+
+# Verify a per-site identity is isolated WITHOUT executing any destructive command.
+# $1 = site_user, $2 = wp-config path.
+#
+# Isolation is proven by what the scoped user is REFUSED — never by running the
+# refused command. A wrong grant must never be discovered by FLUSHALL-ing every
+# tenant's cache (the previous probe's blast radius). We instead confirm: (a) own
+# prefix is reachable, (b) a foreign prefix is denied for BOTH read and write —
+# the key-pattern boundary; a stray write, in the impossible case it slips through,
+# costs one key, not the whole keyspace — and (c) the cross-tenant flush commands
+# are denied, evaluated via `ACL DRYRUN` which checks permission WITHOUT executing
+# (Redis >= 7). On older servers DRYRUN is skipped; the grant still denies flush by
+# construction (`-flushall -flushdb -@dangerous`), since provisioning must have
+# succeeded to reach this check.
+_redis_acl_verify_site() {
+  local site_user="$1" wpcfg="$2" oc_user="oc_${1}"
+  local pass; pass=$(_cache_redis_cfg_acl_pass "$wpcfg")
+  _cache_redis_cfg_acl_matches "$wpcfg" "$oc_user" || return 1
+  _redis_user_exists "$oc_user" || return 1
+  _redis_site_acl_ping "$wpcfg" "$site_user" || return 1
+
+  local out
+  # (a) Own prefix must be reachable (a missing key returns nil, never NOPERM).
+  out=$(REDISCLI_AUTH="$pass" timeout 3 redis-cli --user "$oc_user" GET "aidipanel:${site_user}:__acl_probe__" 2>&1 || true)
+  [[ "$out" == *NOPERM* ]] && return 1
+  # (b) A foreign prefix must be denied for read AND write (both non-destructive).
+  out=$(REDISCLI_AUTH="$pass" timeout 3 redis-cli --user "$oc_user" GET "aidipanel:__foreign_acl_probe__:${site_user}" 2>&1 || true)
+  [[ "$out" == *NOPERM* || "$out" == *"no permissions"* ]] || return 1
+  out=$(REDISCLI_AUTH="$pass" timeout 3 redis-cli --user "$oc_user" SET "aidipanel:__foreign_acl_probe__:${site_user}" 1 2>&1 || true)
+  if [[ "$out" != *NOPERM* && "$out" != *"no permissions"* ]]; then
+    # Impossible while the key pattern holds; if it ever slips, a single stray key
+    # was created — remove it as admin and fail closed.
+    _redis UNLINK "aidipanel:__foreign_acl_probe__:${site_user}" >> "$CLI_LOG" 2>&1 || true
+    return 1
+  fi
+  # (c) Cross-tenant flush denial, evaluated WITHOUT executing it (Redis >= 7).
+  if _redis_acl_dryrun_supported; then
+    [[ "$(_redis ACL DRYRUN "$oc_user" FLUSHALL 2>&1 || true)" == "OK" ]] && return 1
+    [[ "$(_redis ACL DRYRUN "$oc_user" FLUSHDB 2>&1 || true)" == "OK" ]] && return 1
+  fi
+  # (d) WordPress-level: the plugin must actually connect with these creds. Catches
+  # a wrong/missing constant BEFORE `default` is locked —
+  # an ACL user that works via redis-cli is useless if the drop-in can't use it.
+  # Uses OC_RUNNER from _cache_redis_resolve (set by the caller before verify).
+  _cache_redis_wp_connection_ok || return 1
+  return 0
+}
+
+# cache:redis-acl --action status (read-only).
+_redis_acl_status() {
+  _require_root "cache:redis-acl status"
+  local aclfile_set=0
+  grep -qE "^[[:space:]]*aclfile[[:space:]]+${REDIS_ACL_FILE}" "$REDIS_CONF" 2>/dev/null && aclfile_set=1
+  local default_locked=0
+  [[ "$(timeout 3 redis-cli PING 2>/dev/null || echo FAIL)" == "PONG" ]] || default_locked=1
+  local admin_present=0
+  [[ -s "$REDIS_ADMIN_KEY" ]] && _redis_user_exists "$REDIS_ADMIN_USER" && admin_present=1
+  local acl_enabled=0; [[ -f "$REDIS_ACL_STATE" ]] && acl_enabled=1
+
+  local total=0 isolated=0 drift=0 domain site_user wpcfg
+  while IFS=$'\t' read -r domain site_user wpcfg; do
+    [[ -n "$domain" ]] || continue
+    total=$((total+1))
+    _cache_redis_resolve "$domain"
+    if _redis_acl_verify_site "$site_user" "$wpcfg"; then
+      isolated=$((isolated+1))
+    else
+      drift=$((drift+1))
+    fi
+  done < <(_redis_acl_each_managed_oc_site)
+
+  echo "acl_enabled=${acl_enabled}"
+  echo "aclfile_set=${aclfile_set}"
+  echo "default_locked=${default_locked}"
+  echo "admin_present=${admin_present}"
+  echo "oc_sites_total=${total}"
+  echo "oc_sites_isolated=${isolated}"
+  echo "oc_sites_drift=${drift}"
+  echo "error="
+}
+
+# cache:redis-acl --action enable — the ordered retrofit. Provisions admin +
+# every managed site, verifies isolation, and ONLY THEN locks `default`. If any
+# site fails, `default` is left OPEN so nothing breaks.
+_redis_acl_enable() {
+  _require_root "cache:redis-acl enable"
+  command -v redis-server >/dev/null 2>&1 || die "Redis is not installed."
+
+  local rc=0
+  _redis_aclfile_ensure || rc=$?
+  case "$rc" in
+    0) : ;;
+    10) warn "Restarting Redis to load the new ACL file (brief cache cold-start)."
+        systemctl restart redis-server >> "$CLI_LOG" 2>&1 || die "Redis restart failed."
+        sleep 1 ;;
+    *) die "Could not configure the Redis ACL file (externally managed ACLs?)." ;;
+  esac
+  _redis_acl_backup
+  _redis_admin_ensure || die "Could not provision the Redis admin identity."
+
+  local was_enabled=0; [[ -f "$REDIS_ACL_STATE" ]] && was_enabled=1
+  local total=0 ok_count=0 fail=0 domain site_user wpcfg
+  while IFS=$'\t' read -r domain site_user wpcfg; do
+    [[ -n "$domain" ]] || continue
+    total=$((total+1))
+    _cache_redis_resolve "$domain"
+    local cfg_backup="${wpcfg}.aidipanel-acl-bak-$$"
+    # CLI_LOG is root-owned; redirects intentionally run as root.
+    # shellcheck disable=SC2024
+    if ! sudo -u "$site_user" -- cp -f "$wpcfg" "$cfg_backup" >> "$CLI_LOG" 2>&1; then
+      fail=$((fail+1)); warn "Could not back up wp-config.php for ${domain}."
+      continue
+    fi
+    if _redis_site_acl_provision && _redis_acl_verify_site "$site_user" "$wpcfg"; then
+      ok_count=$((ok_count+1))
+      # shellcheck disable=SC2024
+      sudo -u "$site_user" -- rm -f "$cfg_backup" >> "$CLI_LOG" 2>&1 || true
+    else
+      # shellcheck disable=SC2024
+      sudo -u "$site_user" -- cp -f "$cfg_backup" "$wpcfg" >> "$CLI_LOG" 2>&1 || true
+      # shellcheck disable=SC2024
+      sudo -u "$site_user" -- rm -f "$cfg_backup" >> "$CLI_LOG" 2>&1 || true
+      [[ "${OC_ACL_USER_CREATED:-0}" -eq 1 ]] && _redis_site_acl_remove
+      fail=$((fail+1)); warn "ACL provisioning/verification failed for ${domain}."
+    fi
+  done < <(_redis_acl_each_managed_oc_site)
+
+  if [[ "$fail" -ne 0 ]]; then
+    if [[ "$was_enabled" -eq 0 ]]; then
+      _redis ACL SETUSER default on nopass '~*' '+@all' >> "$CLI_LOG" 2>&1 || true
+      _redis ACL SAVE >> "$CLI_LOG" 2>&1 || true
+      rm -f "$REDIS_ACL_STATE"
+    fi
+    echo "error=acl_enable_failed"
+    warn "Aborted: ${fail}/${total} site(s) failed verification; the previous default-user state was preserved."
+    return 1
+  fi
+
+  _redis ACL SETUSER default off >> "$CLI_LOG" 2>&1 || die "Could not lock the 'default' user."
+  _redis ACL SAVE >> "$CLI_LOG" 2>&1 || true
+  touch "$REDIS_ACL_STATE"
+  ok "Redis ACL isolation enabled. Sites isolated: ${ok_count}/${total}. 'default' user locked."
+}
+
+# cache:redis-acl --action disable — break-glass. Re-opens `default`. Works even
+# without a Redis credential by rewriting the ACL file as root, then restarting.
+_redis_acl_disable() {
+  _require_root "cache:redis-acl disable"
+  if _redis ACL SETUSER default on nopass '~*' '+@all' >> "$CLI_LOG" 2>&1; then
+    _redis ACL SAVE >> "$CLI_LOG" 2>&1 || true
+    rm -f "$REDIS_ACL_STATE"
+    ok "Redis ACL isolation disabled — 'default' user reopened."
+    return 0
+  fi
+  warn "Admin path unavailable; using file-level break-glass."
+  if [[ -f "$REDIS_ACL_FILE" ]]; then
+    cp "$REDIS_ACL_FILE" "${REDIS_ACL_FILE}.bak.$(date +%s)" 2>/dev/null || true
+    if grep -qE '^user default' "$REDIS_ACL_FILE" 2>/dev/null; then
+      sed -i 's/^user default.*/user default on nopass ~* +@all/' "$REDIS_ACL_FILE"
+    else
+      echo 'user default on nopass ~* +@all' >> "$REDIS_ACL_FILE"
+    fi
+  fi
+  systemctl restart redis-server >> "$CLI_LOG" 2>&1 || true
+  rm -f "$REDIS_ACL_STATE"
+  ok "Redis ACL isolation disabled via break-glass — 'default' reopened (Redis restarted)."
+}
+
+# cache:redis-acl --action reconcile — self-heal after a package/dist upgrade that
+# replaced redis.conf and dropped our `aclfile` directive + `default off`. No-op
+# unless ACL mode is supposed to be ON (marker present). Re-applies aclfile + admin
+# + `default off` REUSING the existing admin key + users.acl (never regenerates —
+# the hard invariant), and reprovisions any drifted managed site.
+_redis_acl_reconcile() {
+  _require_root "cache:redis-acl reconcile"
+  [[ -f "$REDIS_ACL_STATE" ]] || { ok "Redis ACL isolation is not enabled; nothing to reconcile."; return 0; }
+  command -v redis-server >/dev/null 2>&1 || die "Redis is not installed."
+
+  local rc=0
+  _redis_aclfile_ensure || rc=$?
+  case "$rc" in
+    0) : ;;
+    10) warn "Re-adding the ACL file directive; restarting Redis (brief cache cold-start)."
+        systemctl restart redis-server >> "$CLI_LOG" 2>&1 || die "Redis restart failed."; sleep 1 ;;
+    *) die "Could not configure the Redis ACL file (externally managed?)." ;;
+  esac
+  _redis_acl_backup
+  _redis_admin_ensure || die "Could not ensure the Redis admin identity."
+
+  local domain site_user wpcfg drifted=0 repaired=0 fail=0
+  while IFS=$'\t' read -r domain site_user wpcfg; do
+    [[ -n "$domain" ]] || continue
+    _cache_redis_resolve "$domain"
+    _redis_acl_verify_site "$site_user" "$wpcfg" && continue
+
+    drifted=$((drifted+1))
+    local cfg_backup="${wpcfg}.aidipanel-acl-bak-$$"
+    # CLI_LOG is root-owned; redirects intentionally run as root.
+    # shellcheck disable=SC2024
+    if ! sudo -u "$site_user" -- cp -f "$wpcfg" "$cfg_backup" >> "$CLI_LOG" 2>&1; then
+      fail=$((fail+1)); warn "Reconcile: could not back up ${domain}."
+      continue
+    fi
+    if _redis_site_acl_provision && _redis_acl_verify_site "$site_user" "$wpcfg"; then
+      repaired=$((repaired+1))
+      # shellcheck disable=SC2024
+      sudo -u "$site_user" -- rm -f "$cfg_backup" >> "$CLI_LOG" 2>&1 || true
+    else
+      # shellcheck disable=SC2024
+      sudo -u "$site_user" -- cp -f "$cfg_backup" "$wpcfg" >> "$CLI_LOG" 2>&1 || true
+      # shellcheck disable=SC2024
+      sudo -u "$site_user" -- rm -f "$cfg_backup" >> "$CLI_LOG" 2>&1 || true
+      [[ "${OC_ACL_USER_CREATED:-0}" -eq 1 ]] && _redis_site_acl_remove
+      fail=$((fail+1)); warn "Reconcile: could not repair ${domain}."
+    fi
+  done < <(_redis_acl_each_managed_oc_site)
+
+  if [[ "$fail" -ne 0 ]]; then
+    echo "error=acl_reconcile_failed"
+    warn "Redis ACL reconcile aborted: ${fail}/${drifted} drifted site(s) could not be verified."
+    return 1
+  fi
+
+  _redis ACL SETUSER default off >> "$CLI_LOG" 2>&1 || die "Could not re-lock the 'default' user."
+  _redis ACL SAVE >> "$CLI_LOG" 2>&1 || true
+  ok "Redis ACL isolation reconciled — 'default' locked; sites repaired: ${repaired}/${drifted}."
+}
+
+_cache_redis_acl() {
+  _parse_opts "$@"
+  local action; action=$(_opt "action" "status")
+  case "$action" in
+    status)    _redis_acl_status ;;
+    enable)    _redis_acl_enable ;;
+    disable)   _redis_acl_disable ;;
+    reconcile) _redis_acl_reconcile ;;
+    *) die "cache:redis-acl: unknown action '${action}'. Supported: status, enable, disable, reconcile" ;;
   esac
 }
 
@@ -3683,7 +4317,7 @@ _cache_migrate() {
 _cache_redis_status() {
   local svc_active; svc_active=$(systemctl is-active redis-server 2>/dev/null || echo "unknown")
   local svc_enabled; svc_enabled=$(systemctl is-enabled redis-server 2>/dev/null || echo "unknown")
-  local ping; ping=$(redis-cli ping 2>/dev/null || echo "FAIL")
+  local ping; ping=$(_redis ping 2>/dev/null || echo "FAIL")
   echo ""
   echo -e "  ${BOLD}Redis Status${RESET}"
   _hr
@@ -3713,7 +4347,7 @@ _cache_redis_disable() {
 _cache_redis_flush() {
   _require_root "cache:redis-flush"
   command -v redis-cli >/dev/null 2>&1 || die "redis-cli not installed."
-  redis-cli FLUSHALL >> "$CLI_LOG" 2>&1 \
+  _redis FLUSHALL >> "$CLI_LOG" 2>&1 \
     && ok "Redis flushed (FLUSHALL)." \
     || die "Could not flush the Redis cache — Redis may not be running."
 }
@@ -7006,6 +7640,9 @@ _self_update() {
   rm -f "$tmp_file"
 
   ok "AidiPanel CLI updated: ${current_bin}"
+  # Self-heal Redis ACL isolation in case a stack/dist upgrade dropped our
+  # redis.conf directives (backlog #6). No-op when ACL mode is not enabled.
+  "$current_bin" cache:redis-acl --action reconcile >/dev/null 2>&1 || true
   aidipanel --version 2>/dev/null || true
 }
 
@@ -7864,6 +8501,7 @@ main() {
     # Cache — per-site status (Phase 1)
     cache:page)   _cache_page "$@" ;;
     cache:redis)  _cache_redis_per_site "$@" ;;
+    cache:redis-acl) _cache_redis_acl "$@" ;;
     cache:zone)   _cache_zone "$@" ;;
     # Cache — existing commands (unchanged)
     cache:status)   _cache_status "$@" ;;

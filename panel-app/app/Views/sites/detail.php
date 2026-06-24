@@ -349,6 +349,10 @@ $tabs = [
   $ocActive  = $ocStatus === 'active';
   $ocUnsup   = $ocStatus === 'unsupported';
   $ocSvcDown = $ocStatus === 'service_down';
+  // Per-site Redis ACL isolation (backlog #6): the CLI reports acl_isolated only
+  // after authenticating with the site's scoped credential, so it is proof, not a
+  // guess. The controller normalises it to a bool (like prefix_managed).
+  $ocIsolated = $objectCacheInfo['acl_isolated'] ?? false;
 
   // OPcache state
   $opcEnabled = $opcacheInfo['enabled'] ?? false;
@@ -796,6 +800,9 @@ $tabs = [
               <span class="badge badge-warn">Enabled · Manual</span>
             <?php elseif ($ocActive): ?>
               <span class="badge badge-ok"><span class="dot bg-emerald-500"></span> Enabled</span>
+              <?php if ($ocIsolated): ?>
+              <span class="badge badge-info" title="This site has its own isolated Redis identity (ACL). It cannot read or flush any other site's cache."><?= icon('shield-lock', 'text-[11px]') ?> Isolated</span>
+              <?php endif; ?>
             <?php else: ?>
               <span class="badge badge-warn">Disabled</span>
             <?php endif; ?>
