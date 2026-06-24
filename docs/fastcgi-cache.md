@@ -154,6 +154,20 @@ In `wp-config.php`:
 define('RT_WP_NGINX_HELPER_CACHE_PATH', '/var/cache/nginx/fastcgi');
 ```
 
+### When does the cache auto-purge?
+
+Nginx Helper clears a page from the FastCGI cache **only when its content is published or
+updated** (creating/editing a post or page). It does **not** auto-purge on:
+
+- menu, widget, or Customizer changes,
+- theme switches or theme-option edits,
+- plugin install / activate / update.
+
+After any of those, the old page can still be served until it expires. Clear it yourself with
+the **Purge** button (or `aidipanel cache:purge --domain <domain>`), or simply wait for the cache
+TTL (`fastcgi_cache_valid`) to lapse. The page cache only ever serves anonymous traffic, so the
+exposure is a stale public page, never private data.
+
 ---
 
 ## Adjusting Cache Duration

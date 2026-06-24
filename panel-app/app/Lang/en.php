@@ -502,6 +502,7 @@ return [
     'perf.cache.save'           => 'Save',
     'perf.cache.last_purge'     => 'Last purge',
     'perf.cache.never_purged'   => 'Never',
+    'perf.cache.autopurge_note' => 'Nginx Helper clears this cache automatically only when content is published or updated. After menu, widget, customizer, theme, or plugin changes it won\'t — purge manually here, or wait for the cache TTL to expire.',
     'perf.cache.stale'          => 'Serve stale while revalidating',
     'perf.cache.stale.desc'     => 'Show the last cached page instantly while a fresh copy rebuilds.',
     'perf.cache.debug'          => 'Add X-FastCGI-Cache header',

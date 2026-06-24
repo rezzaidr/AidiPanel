@@ -566,6 +566,13 @@ $tabs = [
     <div class="px-5 py-4 border-b border-zinc-100 space-y-4" data-cache-tools data-domain="<?= e($domain) ?>">
       <p class="eyebrow">Cache tools</p>
 
+      <?php if ($type === 'wordpress'): ?>
+      <div class="flex items-start gap-2 bg-zinc-50 border border-zinc-100 rounded-lg px-3 py-2">
+        <?= icon('info-circle', 'text-zinc-400 text-sm shrink-0 mt-0.5') ?>
+        <p class="text-[11px] text-zinc-500 leading-relaxed"><?= e(t('perf.cache.autopurge_note')) ?></p>
+      </div>
+      <?php endif; ?>
+
       <div>
         <label class="lbl">Check a URL</label>
         <div class="flex items-center gap-2">
