@@ -532,9 +532,17 @@ $tabs = [
           <?= e(t('perf.cache.status.active')) ?>
         </p>
       </div>
+      <?php
+        $hrSamples = (int) ($pageCacheInfo['hit_samples'] ?? 0);
+        $hrValue   = $pageCacheInfo['hit_rate'] ?? 'unknown';
+        $hrHasData = $hrSamples > 0 && is_numeric($hrValue);
+      ?>
       <div class="px-5 py-3.5">
-        <p class="eyebrow mb-1.5"><?= e(t('perf.cache.ttl')) ?></p>
-        <p class="text-sm font-semibold text-zinc-800"><?= e($ttlLabels[$currentTtl] ?? $currentTtl) ?></p>
+        <p class="eyebrow mb-1.5"><?= e(t('perf.cache.hit_rate')) ?></p>
+        <p class="text-sm font-semibold text-zinc-800"
+           title="<?= $hrHasData ? e(t('perf.cache.hit_rate.title', ['n' => number_format($hrSamples)])) : e(t('perf.cache.hit_rate.none')) ?>">
+          <?= $hrHasData ? e($hrValue) . '%' : '—' ?>
+        </p>
       </div>
       <div class="px-5 py-3.5">
         <p class="eyebrow mb-1.5"><?= e(t('perf.cache.last_purge')) ?></p>
@@ -544,7 +552,9 @@ $tabs = [
       </div>
       <div class="px-5 py-3.5">
         <p class="eyebrow mb-1.5"><?= e(t('perf.cache.zone')) ?></p>
-        <p class="text-sm font-semibold text-zinc-800 mono"><?= e($cacheZoneSize ?? '—') ?></p>
+        <p class="text-sm font-semibold text-zinc-800 mono">
+          <?= e($cacheZoneSize ?? '—') ?><?php if (!empty($cacheShared) && $cacheZoneSize !== null): ?><span class="ml-1 font-normal text-zinc-400 text-xs not-italic"><?= e(t('perf.cache.size_shared')) ?></span><?php endif; ?>
+        </p>
       </div>
     </div>
 

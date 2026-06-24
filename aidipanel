@@ -2137,7 +2137,19 @@ _cache_page_status() {
   echo "webroot=${webroot}"
   echo "site_type=${site_type}"
   echo "engine=fastcgi"
-  echo "cache_path=${NGINX_CACHE_DIR}"
+
+  # Zone-aware cache directory: a dedicated-zone site stores its pages under its
+  # own dir, so the panel's "Cache size" tile reflects this site, not every site.
+  local _zone _cache_dir _cache_shared
+  _zone=$(_cache_vhost_zone "$domain")
+  if [[ "$_zone" == "$NGINX_CACHE_ZONE" ]]; then
+    _cache_dir="$NGINX_CACHE_DIR"; _cache_shared=1
+  else
+    local _zuser="${_zone#"${NGINX_CACHE_ZONE}"_}"
+    _cache_dir="${NGINX_ZONE_CACHE_BASE}/${_zuser}/fastcgi"; _cache_shared=0
+  fi
+  echo "cache_path=${_cache_dir}"
+  echo "cache_shared=${_cache_shared}"
 
   # Engine readiness: fastcgi_cache_path directive exists + cache dir present
   local engine_ok=0
@@ -2152,6 +2164,7 @@ _cache_page_status() {
     echo "wp_helper_status=not_applicable"
     echo "cache_header=unknown"
     echo "hit_rate=unknown"
+    echo "hit_samples=0"
     echo "can_enable=0"
     echo "can_disable=0"
     echo "can_purge=0"
@@ -2179,7 +2192,31 @@ _cache_page_status() {
   echo "wp_helper_status=${wp_helper_status}"
 
   echo "cache_header=unknown"
-  echo "hit_rate=unknown"
+
+  # Real FastCGI hit rate for today, parsed from this site's access log. The `main`
+  # log_format ends each line with `cache:$upstream_cache_status`, so a single awk
+  # pass over the tail is enough — no separate metrics collector. hit_samples lets
+  # the panel show "—" instead of a misleading 0% when there is no traffic yet.
+  local _log="/var/log/nginx/${domain}-access.log"
+  local _hit_rate="unknown" _hit_samples=0
+  if [[ -r "$_log" ]]; then
+    local _today; _today=$(date +%d/%b/%Y)
+    local _hr
+    _hr=$(tail -n 20000 "$_log" 2>/dev/null | awk -v d="$_today" '
+      index($0, d) == 0 { next }
+      {
+        n = split($0, a, "cache:"); if (n < 2) next
+        s = a[n]; sub(/[^A-Za-z].*/, "", s)
+        if (s=="HIT"||s=="STALE"||s=="UPDATING"||s=="REVALIDATED") { c++; t++ }
+        else if (s=="MISS"||s=="EXPIRED"||s=="BYPASS") { t++ }
+      }
+      END { if (t > 0) printf "%.0f %d", c/t*100, t; else printf "unknown 0" }
+    ') || _hr="unknown 0"
+    [[ -n "$_hr" ]] || _hr="unknown 0"
+    _hit_rate="${_hr%% *}"; _hit_samples="${_hr##* }"
+  fi
+  echo "hit_rate=${_hit_rate}"
+  echo "hit_samples=${_hit_samples}"
 
   local can_enable=0 can_disable=0 can_purge=0 can_check=1
   [[ "$engine_ok" -eq 1 && "$site_cache_status" == "disabled" ]] && can_enable=1

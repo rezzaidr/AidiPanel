@@ -273,6 +273,7 @@ class SiteController extends BaseController
         $cacheConfig   = [];
         $lastPurge     = null;
         $cacheZoneSize = null;
+        $cacheShared   = true;
         $httpsOptions  = [];
         $certs         = [];
         $basicAuthInfo = [
@@ -336,8 +337,13 @@ class SiteController extends BaseController
             );
             $lastPurge = $lastPurgeRow ? $lastPurgeRow['created_at'] : null;
 
-            $duOut = @shell_exec('du -sh /var/cache/nginx/fastcgi 2>/dev/null');
-            if ($duOut !== null) {
+            // Zone-aware cache size: du the dir this site actually writes to (its own
+            // dedicated zone dir, or the shared zone). $cacheShared drives the "(shared)"
+            // note in the view so a shared total isn't mistaken for this site alone.
+            $cacheShared  = (bool) ($pageCacheInfo['cache_shared'] ?? true);
+            $cacheDir     = (string) ($pageCacheInfo['cache_path'] ?? '/var/cache/nginx/fastcgi');
+            $duOut = @shell_exec('du -sh ' . escapeshellarg($cacheDir) . ' 2>/dev/null');
+            if (is_string($duOut) && trim($duOut) !== '') {
                 $duParts = preg_split('/\s+/', trim($duOut), 2);
                 $cacheZoneSize = $duParts[0] ?? null;
             }
@@ -462,7 +468,7 @@ class SiteController extends BaseController
             'site', 'nginxConf', 'ssl', 'sslExpiry', 'sslDaysLeft',
             'logs', 'activeTab', 'diskSize', 'hasCache',
             'pageCacheInfo', 'objectCacheInfo', 'opcacheInfo', 'protocolInfo',
-            'cacheConfig', 'lastPurge', 'cacheZoneSize', 'httpsOptions', 'certs',
+            'cacheConfig', 'lastPurge', 'cacheZoneSize', 'cacheShared', 'httpsOptions', 'certs',
             'databases', 'dbUsers', 'dbHost', 'dbPort', 'dbPrefix', 'pmaInstalled', 'pmaUrl', 'wpDbInfo',
             'basicAuthInfo', 'cloudflareInfo', 'ipBlockInfo', 'ipBlockList', 'cloudflareOnlyInfo',
             'cronJobs', 'cronManualCount'
@@ -974,7 +980,9 @@ class SiteController extends BaseController
             'wp_helper_status' => $kv['wp_helper_status'] ?? 'unknown',
             'cache_header'     => $kv['cache_header'] ?? 'unknown',
             'hit_rate'         => $kv['hit_rate'] ?? 'unknown',
+            'hit_samples'      => (int) ($kv['hit_samples'] ?? 0),
             'cache_path'       => $kv['cache_path'] ?? '/var/cache/nginx/fastcgi',
+            'cache_shared'     => ($kv['cache_shared'] ?? '1') === '1',
             'can_enable'       => ($kv['can_enable'] ?? '0') === '1',
             'can_disable'      => ($kv['can_disable'] ?? '0') === '1',
             'can_purge'        => ($kv['can_purge'] ?? '0') === '1',
