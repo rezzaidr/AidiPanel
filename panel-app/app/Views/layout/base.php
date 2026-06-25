@@ -39,11 +39,15 @@ $_is_admin_area = ($navAdmin === 'active');
 $_username = (string) ($_user['username'] ?? 'admin');
 $_initials = strtoupper(mb_substr($_username, 0, 2, 'UTF-8'));
 $_hostname = gethostname() ?: 'server';
-// Server IP for the top-bar chip (click-to-copy). SERVER_ADDR is the address this
-// panel was reached on — the public droplet IP in the usual setup.
-$_ip = (string) ($_SERVER['SERVER_ADDR'] ?? '');
-if ($_ip === '' || $_ip === '127.0.0.1' || $_ip === '::1') {
-    $_ip = (string) (@gethostbyname($_hostname) ?: '');
+// Server IP for the top-bar chip (click-to-copy). Prefer the resolved public IP
+// (correct on NAT clouds like Tencent/AWS/GCP, where SERVER_ADDR is the private
+// NIC address); fall back to the address this request was reached on.
+$_ip = server_public_ip();
+if ($_ip === '') {
+    $_ip = (string) ($_SERVER['SERVER_ADDR'] ?? '');
+    if ($_ip === '' || $_ip === '127.0.0.1' || $_ip === '::1') {
+        $_ip = (string) (@gethostbyname($_hostname) ?: '');
+    }
 }
 if ($_ip === '') { $_ip = $_hostname; }
 

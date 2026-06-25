@@ -258,7 +258,7 @@ class DashboardController extends BaseController
         // universally (handles NAT clouds where the NIC only has a private IP).
         $ipv4 = $cloud['ipv4'] ?? '';
         if ($ipv4 === '') {
-            $ipv4 = (string) ($this->publicIpv4() ?? '');
+            $ipv4 = server_public_ip();
         }
 
         return [
@@ -290,53 +290,6 @@ class DashboardController extends BaseController
             'region'     => $d['region'] ?? null,
             'ipv4'       => $d['interfaces']['public'][0]['ipv4']['ip_address'] ?? '',
         ];
-    }
-
-    /**
-     * Routable public IPv4 — detected universally and cached for an hour.
-     *
-     * The public IP is the one value users copy into DNS, so it must be correct on
-     * every host, not only where the address sits on the NIC (DigitalOcean, Hetzner,
-     * Vultr). On NAT clouds (Tencent, AWS, GCP, Oracle, Alibaba) the NIC carries only
-     * a private IP, so we resolve the routable address via an external echo. Cached,
-     * so it costs one lookup per hour and zero calls where the NIC IP is already public.
-     */
-    private function publicIpv4(): ?string
-    {
-        $cache = sys_get_temp_dir() . '/aidipanel_public_ip';
-        if (is_readable($cache) && (time() - (int) filemtime($cache)) < 3600) {
-            $ip = trim((string) @file_get_contents($cache));
-            if ($ip !== '') return $ip;
-        }
-
-        $ip = '';
-        // 1. A public IPv4 already bound to the interface (NIC-bound public IP hosts).
-        $hostIp = trim((string) @shell_exec('hostname -I 2>/dev/null'));
-        foreach (preg_split('/\s+/', $hostIp) ?: [] as $cand) {
-            if ($cand !== '' && filter_var(
-                $cand,
-                FILTER_VALIDATE_IP,
-                FILTER_FLAG_IPV4 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
-            )) {
-                $ip = $cand;
-                break;
-            }
-        }
-        // 2. NAT clouds: the NIC only has a private IP — ask an external echo.
-        if ($ip === '') {
-            foreach (['https://api.ipify.org', 'https://ifconfig.me/ip', 'https://icanhazip.com'] as $url) {
-                $out = trim((string) @shell_exec('curl -fsS --max-time 4 ' . escapeshellarg($url) . ' 2>/dev/null'));
-                if (filter_var($out, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-                    $ip = $out;
-                    break;
-                }
-            }
-        }
-
-        if ($ip !== '') {
-            @file_put_contents($cache, $ip, LOCK_EX);
-        }
-        return $ip !== '' ? $ip : null;
     }
 
     private function getAlerts(array $metrics, array $services): array

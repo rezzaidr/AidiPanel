@@ -463,6 +463,58 @@ function php_policy(): array
 }
 
 /**
+ * Routable public IPv4 of this server.
+ *
+ * The public IP is what users copy into DNS and expect to see in the UI, so it
+ * must be correct on every host — not only where the address sits on the NIC
+ * (DigitalOcean, Hetzner, Vultr). On NAT clouds (Tencent, AWS, GCP, Oracle,
+ * Alibaba) the NIC only carries a private IP, so we resolve the routable address
+ * via an external echo. Cached per request and on disk for an hour, so it costs
+ * at most one lookup — and zero external calls where the NIC IP is already public.
+ * Returns '' when nothing resolves (callers fall back to hostname/SERVER_ADDR).
+ */
+function server_public_ip(): string
+{
+    static $cached = null;
+    if ($cached !== null) return $cached;
+
+    $file = defined('STORAGE_ROOT') ? STORAGE_ROOT . '/public_ip' : sys_get_temp_dir() . '/aidipanel_public_ip';
+    if (is_readable($file) && (time() - (int) filemtime($file)) < 3600) {
+        $ip = trim((string) @file_get_contents($file));
+        if ($ip !== '') return $cached = $ip;
+    }
+
+    $ip = '';
+    // 1. A public IPv4 already bound to the interface (NIC-bound public IP hosts).
+    $hostIp = trim((string) @shell_exec('hostname -I 2>/dev/null'));
+    foreach (preg_split('/\s+/', $hostIp) ?: [] as $cand) {
+        if ($cand !== '' && filter_var(
+            $cand,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_IPV4 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+        )) {
+            $ip = $cand;
+            break;
+        }
+    }
+    // 2. NAT clouds: the NIC only has a private IP — ask an external echo.
+    if ($ip === '') {
+        foreach (['https://api.ipify.org', 'https://ifconfig.me/ip', 'https://icanhazip.com'] as $url) {
+            $out = trim((string) @shell_exec('curl -fsS --max-time 4 ' . escapeshellarg($url) . ' 2>/dev/null'));
+            if (filter_var($out, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                $ip = $out;
+                break;
+            }
+        }
+    }
+
+    if ($ip !== '') {
+        @file_put_contents($file, $ip, LOCK_EX);
+    }
+    return $cached = $ip;
+}
+
+/**
  * True if PHP <ver> is genuinely installed.
  *
  * Probes the FPM *binary* (/usr/sbin/php-fpm<ver>, shipped by the phpX.Y-fpm
