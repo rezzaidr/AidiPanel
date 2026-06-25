@@ -1925,9 +1925,40 @@ _cleanup_system() {
 # ---------------------------------------------------------------------------
 # 23. SUMMARY — FIX #4: Show random panel password
 # ---------------------------------------------------------------------------
+
+# True when $1 is a private / link-local / loopback address — i.e. NOT a routable
+# public IP. NAT clouds (Tencent, AWS, GCP, Oracle, Alibaba) only put a private IP
+# on the interface; the real public IP is mapped at the gateway.
+_is_private_ip() {
+  case "$1" in
+    10.*|192.168.*|127.*|169.254.*)         return 0 ;;
+    172.1[6-9].*|172.2[0-9].*|172.3[0-1].*) return 0 ;;
+    *)                                      return 1 ;;
+  esac
+}
+
+# Best-effort public IP via an HTTPS echo. Called ONLY when the interface IP is
+# private/empty, so installs where the public IP is on the NIC (DigitalOcean,
+# Hetzner, Vultr, Linode) make zero extra calls. Prints nothing if all probes fail.
+_detect_public_ip() {
+  local url ip
+  for url in https://api.ipify.org https://ifconfig.me/ip https://icanhazip.com; do
+    ip=$(curl -fsS --max-time 4 "$url" 2>/dev/null | tr -dc '0-9.')
+    [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && { printf '%s\n' "$ip"; return 0; }
+  done
+  return 1
+}
+
 _print_summary() {
   local server_ip
+  # Interface src is correct where the public IP is bound to the NIC; on NAT clouds
+  # it returns a private IP, so resolve the real public one (the panel listens on
+  # all interfaces, so it's reachable there once the cloud firewall allows the port).
   server_ip=$(ip route get 8.8.8.8 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}')
+  if [[ -z "$server_ip" ]] || _is_private_ip "$server_ip"; then
+    local public_ip; public_ip=$(_detect_public_ip || true)
+    [[ -n "$public_ip" ]] && server_ip="$public_ip"
+  fi
   server_ip="${server_ip:-<server-ip>}"
 
   [[ "$DRY_RUN" == "true" ]] && return 0
@@ -1953,7 +1984,7 @@ _print_summary() {
   ui_kv "Runtime"     "PHP-FPM $(_php_list)"
   ui_kv "Database"    "${DB_ENGINE_LABELS[$DB_ENGINE]}"
   ui_kv "Cache"       "Redis + FastCGI Cache"
-  ui_kv "Firewall"    "UFW enabled"
+  ui_kv "Firewall"    "UFW enabled (22, 80, 443, ${PANEL_PORT})"
   ui_kv "Protection"  "Fail2ban enabled"
   printf '\n'
   printf '%s\n' "Panel runtime aidipanel-fpm · www-data (transitional)"
@@ -1966,6 +1997,10 @@ _print_summary() {
   ui_note "The panel currently uses a self-signed SSL certificate."
   ui_note "Install trusted SSL later from the SSL/TLS tab or CLI."
   printf '\n'
+  ui_note "On a cloud VM (AWS, GCP, Tencent, Oracle, Alibaba), the server's UFW"
+  ui_note "  can't open the provider firewall — also allow TCP 80, 443, and"
+  ui_note "  ${PANEL_PORT} in its security group, or the panel/sites won't load."
+  printf '\n'
   ui_note "Credentials are stored in:"
   ui_note "  ${PANEL_DIR}/credentials.conf"
   printf '\n'
@@ -1977,11 +2012,12 @@ _print_summary() {
   fi
 
   ui_section "Next Steps"
-  printf '1. %s\n' "Open the Panel URL"
-  printf '2. %s\n' "Save/change the admin password"
-  printf '3. %s\n' "Add your first isolated site"
-  printf '4. %s\n' "Point your domain DNS to this server"
-  printf '5. %s\n' "Install trusted SSL for the panel"
+  printf '1. %s\n' "Cloud VM? First open TCP 80, 443, and ${PANEL_PORT} in your provider's firewall"
+  printf '2. %s\n' "Open the Panel URL"
+  printf '3. %s\n' "Save/change the admin password"
+  printf '4. %s\n' "Add your first isolated site"
+  printf '5. %s\n' "Point your domain DNS to this server"
+  printf '6. %s\n' "Install trusted SSL for the panel"
   printf '\n'
 
   # Also save admin pass to credentials file
