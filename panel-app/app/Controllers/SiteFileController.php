@@ -31,6 +31,7 @@ class SiteFileController extends BaseController
         $domain = $this->site($params);
         $path   = (string) $this->request->get('path', '');
         if ($path === '') { $this->fail('Path is required.'); }
+        if ($this->demoHidesPath($path)) { $this->fail('This file is hidden in the read-only demo.'); }
         $this->reply(run_cli_stdin('files:read', ['--domain', $domain], $path));
     }
 
@@ -41,6 +42,7 @@ class SiteFileController extends BaseController
         $path   = (string) $this->request->get('path', '');
         $name   = basename(str_replace('\\', '/', $path));
         if ($path === '' || $name === '') { abort(400, 'Bad path.'); }
+        if ($this->demoHidesPath($path)) { abort(403, 'This file is hidden in the read-only demo.'); }
         $this->unlockForLongOp();
         header('Content-Type: application/octet-stream');
         header('Content-Disposition: attachment; filename="' . str_replace(['"', "\r", "\n"], '', $name) . '"');
@@ -168,6 +170,9 @@ class SiteFileController extends BaseController
             : [];
         if (!$names) { abort(400, 'No files.'); }
         $paths  = array_map(static fn($n) => $dir !== '' ? "{$dir}/{$n}" : $n, $names);
+        foreach ($paths as $p) {
+            if ($this->demoHidesPath($p)) { abort(403, 'A selected file is hidden in the read-only demo.'); }
+        }
         $this->unlockForLongOp();
         header('Content-Type: application/zip');
         header('Content-Disposition: attachment; filename="' . $domain . '-files.zip"');
@@ -228,6 +233,29 @@ class SiteFileController extends BaseController
             abort(404, "Site not found: {$domain}");
         }
         return $domain;
+    }
+
+    /**
+     * Read-only demo: hide the *contents* of secret-bearing files (wp-config.php,
+     * .env, private keys, ...). Browsing/listing stays open so the File Manager
+     * still demos; only read + download are gated — the same credential-leak class
+     * we keep db:pma-credentials out of the demo allowlist for. No-op off-demo.
+     */
+    private function demoHidesPath(string $path): bool
+    {
+        if (!demo_mode()) { return false; }
+        $norm = strtolower(str_replace('\\', '/', $path));
+        $base = basename($norm);
+        $names = [
+            'wp-config.php', '.env', '.htpasswd', '.my.cnf', '.pgpass', 'auth.json',
+            'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519',
+        ];
+        if (in_array($base, $names, true)) { return true; }
+        if (preg_match('/^\.env(\..+)?$/', $base)) { return true; }            // .env.local, .env.production
+        if (preg_match('/\.(key|pem|p12|pfx|ppk)$/', $base)) { return true; }  // private keys / cert bundles
+        if (preg_match('/^id_(rsa|dsa|ecdsa|ed25519)/', $base)) { return true; }
+        if ($norm === '.git' || str_starts_with($norm, '.git/') || str_contains($norm, '/.git/')) { return true; }
+        return false;
     }
 
     /** Read paths[] from POST or JSON body as a clean string list. */
