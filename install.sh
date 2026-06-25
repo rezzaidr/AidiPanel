@@ -1533,6 +1533,16 @@ _install_cli() {
 # ---------------------------------------------------------------------------
 # FIX #5: DEPLOY PANEL APP AUTOMATICALLY (one-command install)
 # ---------------------------------------------------------------------------
+_find_downloaded_panel_app() {
+  local search_root="$1"
+  local public_dir
+
+  public_dir="$(find "$search_root" -mindepth 2 -maxdepth 4 -type d -path '*/panel-app/public' -print -quit 2>/dev/null || true)"
+  [[ -n "$public_dir" ]] || return 1
+
+  dirname "$public_dir"
+}
+
 _deploy_panel_app() {
   log "Deploying AidiPanel web application..."
   [[ "$DRY_RUN" == "true" ]] && { warn "[dry-run] skipping panel app deploy"; return 0; }
@@ -1562,8 +1572,7 @@ _deploy_panel_app() {
     || { rm -rf "$tmp_dir"; die "Failed to download AidiPanel repository archive."; }
   tar -xzf "${tmp_dir}/aidipanel.tar.gz" -C "$tmp_dir" \
     || { rm -rf "$tmp_dir"; die "Failed to extract AidiPanel repository archive."; }
-  downloaded_app="${tmp_dir}/aidipanel-master/panel-app"
-  [[ -d "${downloaded_app}/public" ]] \
+  downloaded_app="$(_find_downloaded_panel_app "$tmp_dir")" \
     || { rm -rf "$tmp_dir"; die "Downloaded archive does not contain panel-app/public."; }
   _do_deploy_app "$downloaded_app"
   rm -rf "$tmp_dir"

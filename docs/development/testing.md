@@ -12,6 +12,9 @@ bash -n install.sh
 bash -n aidipanel
 bash -n panel-app/deploy-panel.sh
 
+# Installer unit tests
+bash tests/unit/installer_archive_test.sh
+
 # Bash lint (optional)
 shellcheck -S warning install.sh aidipanel
 
