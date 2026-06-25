@@ -1,9 +1,18 @@
 /* ===========================================================================
    AidiPanel — shared UI component layer (Fase 2 design foundation)
-   Plain CSS, no build step. Loaded alongside Tailwind (CDN) which handles
-   layout utilities; this file owns the reusable, stateful components so pages
+   Plain CSS, no build step. Loaded AFTER the built Tailwind utilities (which
+   handle layout); this file owns the reusable, stateful components so pages
    share one consistent vocabulary instead of repeating long utility strings.
-   Palette/typography mirror docs/design/2026-06-07-fase2-ui-design-foundation.md
+
+   THEMING: every colour is a CSS variable. :root is the light palette — its
+   values match the original hardcoded design exactly, so light mode is
+   unchanged — and [data-theme="dark"] re-themes the same variables. base.php
+   sets data-theme on <html> before first paint (no FOUC). The "dark-mode
+   utility bridge" at the bottom remaps the handful of hardcoded Tailwind colour
+   utilities the views still use (bg-white, text-zinc-*, …) under [data-theme=
+   "dark"] only, so pages flip to dark without editing every template and light
+   mode keeps Tailwind's exact shades.
+   Palette/typography mirror _private/design/fase2-ui/styleguide.html.
    =========================================================================== */
 
 :root {
@@ -13,12 +22,63 @@
   --speed:      #0891B2;   /* accent = performance / cache */
   --speed-light:#06B6D4;
   --speed-pale: #E0F7FB;
-  --bg:         #F4F5F8;
+  --primary:    #322C7A;   /* solid brand surfaces (primary button, logo) */
+  --primary-hov:#4A42A8;
+  --on-primary: #ffffff;   /* text/icon on a --primary surface */
+
+  --bg:         #F4F5F8;   /* page background              */
+  --surface:    #ffffff;   /* cards, inputs, menus         */
+  --surface-2:  #fafafa;   /* subtle raised / row hover    */
+  --surface-3:  #f1f2f5;   /* chips, tracks, stronger hover*/
+  --text:       #18181b;   /* primary text                */
+  --text-soft:  #52525b;   /* secondary text              */
+  --text-muted: #71717a;   /* labels, hints (AA on bg)     */
+  --text-faint: #a1a1aa;   /* decorative / disabled        */
+  --border:     #e4e4e7;   /* card / input borders (zinc-200) */
   --line:       #f4f4f5;   /* hairline divider (zinc-100)  */
+
+  --ok:      #047857; --ok-bg:     #ecfdf5; --ok-border:     #a7f3d0;
+  --warn:    #b45309; --warn-bg:   #fffbeb; --warn-border:   #fde68a;
+  --danger:  #dc2626; --danger-bg: #fef2f2; --danger-border: #fecaca;
+
+  --shadow:    0 10px 30px -12px rgba(24,24,27,.18);
+  --shadow-sm: 0 6px 24px -8px rgba(24,24,27,.18);
+}
+
+/* Dark palette — same variables, re-themed (mirrors the dark-ready styleguide). */
+[data-theme="dark"] {
+  --ink:        #9a95f0;
+  --ink-light:  #b3aff5;
+  --ink-pale:   rgba(124,120,230,.16);
+  --speed:      #22d3ee;
+  --speed-light:#67e8f9;
+  --speed-pale: rgba(34,211,238,.12);
+
+  --bg:         #0a0c12;
+  --surface:    #12141d;
+  --surface-2:  #171a25;
+  --surface-3:  #1d2130;
+  --text:       #e9eaf1;
+  --text-soft:  #bcc0cd;
+  --text-muted: #9398a8;
+  --text-faint: #6b7081;
+  --border:     rgba(255,255,255,.09);
+  --line:       rgba(255,255,255,.06);
+  --primary:    #4f46e5;   /* vivid indigo reads on the dark surface */
+  --primary-hov:#5d54ec;
+  --on-primary: #ffffff;
+
+  --ok:      #34d399; --ok-bg:     rgba(52,211,153,.13);  --ok-border:     rgba(52,211,153,.28);
+  --warn:    #fbbf24; --warn-bg:   rgba(251,191,36,.13);  --warn-border:   rgba(251,191,36,.28);
+  --danger:  #f87171; --danger-bg: rgba(248,113,113,.13); --danger-border: rgba(248,113,113,.30);
+
+  --shadow:    0 24px 60px -24px rgba(0,0,0,.65);
+  --shadow-sm: 0 2px 10px -2px rgba(0,0,0,.5);
 }
 
 body {
   background: var(--bg);
+  color: var(--text);
   font-family: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
 }
 
@@ -30,7 +90,7 @@ html { scrollbar-gutter: stable; }
 
 ::-webkit-scrollbar       { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 4px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
 /* Monospace signature for numbers, IDs, paths, technical values */
 .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
@@ -44,10 +104,11 @@ html { scrollbar-gutter: stable; }
 
 /* --- Contrast: muted text meets WCAG AA (a11y) --------------------------- */
 /* zinc-400 (#a1a1aa, ~2.6:1 on white) failed AA. Map the muted text utility to
-   zinc-500 (~4.7:1) centrally so every `text-zinc-400` across the views passes
-   without editing each template. app.css loads after tailwind.css so this wins.
+   the --text-muted token (zinc-500 in light, ~4.7:1) centrally so every
+   `text-zinc-400` across the views passes without editing each template, and
+   it re-themes in dark for free. app.css loads after tailwind.css so this wins.
    Decorative-only zinc-300 (dashes, disabled, off-state icons) is left as-is. */
-.text-zinc-400 { color: #71717a; }
+.text-zinc-400 { color: var(--text-muted); }
 
 /* --- Keyboard focus ring (a11y) ------------------------------------------ */
 /* Visible focus indicator for keyboard users only (:focus-visible), so mouse
@@ -69,10 +130,10 @@ summary:focus-visible,
 /* --- Top navigation (primary nav in the top bar) ------------------------- */
 .topnav {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 7px 14px; font-size: .8125rem; font-weight: 500; color: #52525b;
+  padding: 7px 14px; font-size: .8125rem; font-weight: 500; color: var(--text-soft);
   border-radius: 9px; transition: .12s; cursor: pointer; text-decoration: none;
 }
-.topnav:hover         { background: #f1f2f5; color: #18181b; }
+.topnav:hover         { background: var(--surface-3); color: var(--text); }
 .topnav.active        { background: var(--ink-pale); color: var(--ink); font-weight: 600; }
 .topnav.active i      { color: var(--speed); }
 
@@ -80,28 +141,28 @@ summary:focus-visible,
 .sidenav { display: flex; flex-direction: column; gap: 2px; }
 .sidenav-item {
   display: flex; align-items: center; gap: 10px;
-  padding: 9px 12px; font-size: .8125rem; font-weight: 500; color: #52525b;
+  padding: 9px 12px; font-size: .8125rem; font-weight: 500; color: var(--text-soft);
   border-radius: 9px; transition: .12s; cursor: pointer; text-decoration: none;
 }
-.sidenav-item:hover        { background: #f1f2f5; color: #18181b; }
+.sidenav-item:hover        { background: var(--surface-3); color: var(--text); }
 .sidenav-item.active       { background: var(--ink-pale); color: var(--ink); font-weight: 600; }
 .sidenav-item.active .icon { color: var(--speed); }
-.sidenav-item.is-soon      { color: #a1a1aa; cursor: default; }
-.sidenav-item.is-soon:hover{ background: transparent; color: #a1a1aa; }
+.sidenav-item.is-soon      { color: var(--text-faint); cursor: default; }
+.sidenav-item.is-soon:hover{ background: transparent; color: var(--text-faint); }
 
 /* --- Horizontal tabs (per-site / sectioned pages) ------------------------ */
 .tab {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 11px 4px; margin-right: 22px;
-  font-size: .8125rem; font-weight: 500; color: #71717a;
+  font-size: .8125rem; font-weight: 500; color: var(--text-muted);
   border-bottom: 2px solid transparent; cursor: pointer;
   white-space: nowrap; text-decoration: none;
 }
-.tab:hover  { color: #18181b; }
+.tab:hover  { color: var(--text); }
 .tab.active { color: var(--ink); font-weight: 600; border-bottom-color: var(--speed); }
 
 /* --- Surfaces ------------------------------------------------------------ */
-.card { background: #fff; border: 1px solid rgba(228,228,231,.8); border-radius: 12px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
 .card-head {
   display: flex; align-items: center; justify-content: space-between; gap: 1rem;
   padding: .875rem 1.25rem; border-bottom: 1px solid var(--line);
@@ -109,11 +170,11 @@ summary:focus-visible,
 .card-title {
   display: flex; align-items: center; gap: .5rem;
   font-family: "Space Grotesk", system-ui, sans-serif;
-  font-weight: 600; font-size: .875rem; color: #18181b;
+  font-weight: 600; font-size: .875rem; color: var(--text);
 }
 .eyebrow {
   font-size: 10px; font-weight: 600; letter-spacing: .05em;
-  text-transform: uppercase; color: #71717a;
+  text-transform: uppercase; color: var(--text-muted);
 }
 
 /* --- Buttons ------------------------------------------------------------- */
@@ -125,12 +186,14 @@ summary:focus-visible,
 }
 .btn:disabled, .btn[disabled] { opacity: .5; cursor: not-allowed; }
 .btn-sm { padding: .375rem .625rem; border-radius: 6px; }
-.btn-primary   { background: var(--ink); color: #fff; }
-.btn-primary:hover   { background: var(--ink-light); }
-.btn-secondary { background: #fff; border-color: #e4e4e7; color: #52525b; font-weight: 500; }
-.btn-secondary:hover { border-color: #d4d4d8; color: #18181b; }
+.btn-primary   { background: var(--primary); color: var(--on-primary); }
+.btn-primary:hover   { background: var(--primary-hov); }
+.btn-secondary { background: var(--surface); border-color: var(--border); color: var(--text-soft); font-weight: 500; }
+.btn-secondary:hover { border-color: var(--text-faint); color: var(--text); }
 .btn-ghost     { background: transparent; color: var(--ink); }
 .btn-ghost:hover     { background: var(--ink-pale); }
+/* Danger keeps a strong solid red in both themes (the light --danger token is for
+   text/badges; white-on-light-red would fail contrast as a button surface). */
 .btn-danger    { background: #dc2626; color: #fff; }
 .btn-danger:hover    { background: #b91c1c; }
 
@@ -140,11 +203,11 @@ summary:focus-visible,
   font-size: 11px; font-weight: 600; line-height: 1;
   padding: .25rem .625rem; border-radius: 9999px;
 }
-.badge-ok     { color: #047857; background: #ecfdf5; }
-.badge-warn   { color: #b45309; background: #fffbeb; }
-.badge-danger { color: #dc2626; background: #fef2f2; }
+.badge-ok     { color: var(--ok); background: var(--ok-bg); }
+.badge-warn   { color: var(--warn); background: var(--warn-bg); }
+.badge-danger { color: var(--danger); background: var(--danger-bg); }
 .badge-info   { color: var(--speed); background: var(--speed-pale); }
-.badge-muted  { color: #71717a; background: #f4f4f5; }
+.badge-muted  { color: var(--text-muted); background: var(--surface-3); }
 .dot { width: .375rem; height: .375rem; border-radius: 9999px; display: inline-block; }
 
 .tag {
@@ -153,30 +216,30 @@ summary:focus-visible,
   padding: .125rem .375rem; border-radius: 4px;
 }
 .tag-info  { color: var(--speed); background: var(--speed-pale); }
-.tag-ok    { color: #047857; background: #ecfdf5; }
-.tag-muted { color: #71717a; background: #f4f4f5; }
-.tag-soon  { color: #b45309; background: #fffbeb; }
+.tag-ok    { color: var(--ok); background: var(--ok-bg); }
+.tag-muted { color: var(--text-muted); background: var(--surface-3); }
+.tag-soon  { color: var(--warn); background: var(--warn-bg); }
 
 /* --- Form controls ------------------------------------------------------- */
 .inp {
-  width: 100%; font-size: .8125rem; color: #18181b; background: #fff;
-  border: 1px solid #e4e4e7; border-radius: 8px; padding: .5rem .625rem;
+  width: 100%; font-size: .8125rem; color: var(--text); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 8px; padding: .5rem .625rem;
   outline: none; transition: .12s;
 }
 /* A leading-icon padding utility (pl-9) must beat .inp's own `padding` shorthand
    — app.css loads after tailwind.css, so bump specificity to keep room for the
    absolute search icon (otherwise the icon overlaps the placeholder text). */
 .inp.pl-9 { padding-left: 2.25rem; }
-.inp:focus       { border-color: rgba(50,44,122,.4); box-shadow: 0 0 0 2px rgba(50,44,122,.1); }
-.inp::placeholder{ color: #71717a; }
-.inp-soon        { background: #fafafa; border-style: dashed; color: #71717a; cursor: not-allowed; }
+.inp:focus       { border-color: var(--ink); box-shadow: 0 0 0 2px var(--ink-pale); }
+.inp::placeholder{ color: var(--text-muted); }
+.inp-soon        { background: var(--surface-2); border-style: dashed; color: var(--text-muted); cursor: not-allowed; }
 select.inp {
   appearance: none; -webkit-appearance: none; padding-right: 2rem;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat; background-position: right 8px center;
 }
-.lbl  { display: block; font-size: .75rem; font-weight: 600; color: #3f3f46; margin-bottom: 5px; }
-.hint { font-size: .6875rem; color: #71717a; margin-top: 4px; }
+.lbl  { display: block; font-size: .75rem; font-weight: 600; color: var(--text-soft); margin-bottom: 5px; }
+.hint { font-size: .6875rem; color: var(--text-muted); margin-top: 4px; }
 
 /* --- Toggle switch (visual; wire state with Alpine on the page) ---------- */
 .sw-on, .sw-off {
@@ -185,7 +248,7 @@ select.inp {
   transition: background .15s;
 }
 .sw-on  { background: var(--speed); }
-.sw-off { background: #e4e4e7; }
+.sw-off { background: var(--border); }
 .sw-on > span, .sw-off > span {
   position: absolute; top: 2px; width: 16px; height: 16px;
   background: #fff; border-radius: 9999px; box-shadow: 0 1px 2px rgba(0,0,0,.2);
@@ -198,11 +261,11 @@ select.inp {
 .tbl { width: 100%; font-size: .875rem; border-collapse: collapse; }
 .tbl thead th {
   font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
-  color: #71717a; font-weight: 600; text-align: left;
+  color: var(--text-muted); font-weight: 600; text-align: left;
   padding: .75rem; border-bottom: 1px solid var(--line);
 }
-.tbl tbody tr      { border-top: 1px solid #fafafa; }
-.tbl tbody tr:hover{ background: rgba(250,250,250,.6); }
+.tbl tbody tr      { border-top: 1px solid var(--line); }
+.tbl tbody tr:hover{ background: var(--surface-2); }
 .tbl td            { padding: .875rem .75rem; vertical-align: middle; }
 /* Center a header/cell without an inline style (beats `.tbl thead th { text-align:left }`). */
 .tbl .th-center    { text-align: center; }
@@ -237,12 +300,12 @@ select.inp {
 .toast {
   display: flex; align-items: center; gap: .5rem;
   font-size: .8125rem; font-weight: 500; padding: .625rem .875rem;
-  border-radius: 10px; border: 1px solid; background: #fff;
-  box-shadow: 0 6px 24px -8px rgba(24,24,27,.18);
+  border-radius: 10px; border: 1px solid; background: var(--surface);
+  box-shadow: var(--shadow-sm);
 }
-.toast-ok    { color: #047857; border-color: #a7f3d0; background: #ecfdf5; }
-.toast-error { color: #dc2626; border-color: #fecaca; background: #fef2f2; }
-.toast-warn  { color: #b45309; border-color: #fde68a; background: #fffbeb; }
+.toast-ok    { color: var(--ok); border-color: var(--ok-border); background: var(--ok-bg); }
+.toast-error { color: var(--danger); border-color: var(--danger-border); background: var(--danger-bg); }
+.toast-warn  { color: var(--warn); border-color: var(--warn-border); background: var(--warn-bg); }
 
 /* --- Reduced motion (a11y) ----------------------------------------------- */
 /* Honour the OS "reduce motion" setting: drop the decorative loops (status
@@ -260,3 +323,115 @@ select.inp {
     animation-iteration-count: infinite !important;
   }
 }
+
+/* ===========================================================================
+   DARK-MODE UTILITY BRIDGE
+   The views still use raw Tailwind colour utilities (bg-white, text-zinc-*,
+   border-zinc-*, status pales). Rather than edit every template, remap those
+   utilities to theme tokens — but ONLY under [data-theme="dark"], so light mode
+   keeps Tailwind's exact shades. Higher specificity + later load = these win.
+   This is the broad-strokes first pass; rare/opacity-variant colours are
+   refined as they surface in visual review.
+   =========================================================================== */
+[data-theme="dark"] .bg-white            { background-color: var(--surface); }
+[data-theme="dark"] .bg-zinc-50          { background-color: var(--surface-2); }
+[data-theme="dark"] .bg-zinc-50\/40      { background-color: var(--surface-2); }
+[data-theme="dark"] .bg-zinc-100         { background-color: var(--surface-3); }
+[data-theme="dark"] .hover\:bg-zinc-50:hover,
+[data-theme="dark"] .hover\:bg-zinc-100:hover { background-color: var(--surface-3); }
+
+[data-theme="dark"] .text-zinc-900,
+[data-theme="dark"] .text-zinc-800       { color: var(--text); }
+[data-theme="dark"] .text-zinc-700,
+[data-theme="dark"] .text-zinc-600       { color: var(--text-soft); }
+[data-theme="dark"] .text-zinc-500       { color: var(--text-muted); }
+[data-theme="dark"] .text-zinc-300       { color: var(--text-faint); }
+
+[data-theme="dark"] .border-zinc-200,
+[data-theme="dark"] .border-zinc-200\/80,
+[data-theme="dark"] .border-zinc-100     { border-color: var(--border); }
+[data-theme="dark"] .divide-zinc-100 > :not([hidden]) ~ :not([hidden]),
+[data-theme="dark"] .divide-zinc-200 > :not([hidden]) ~ :not([hidden]) { border-color: var(--border); }
+
+/* Status pales — keep meaning, fit the dark surface. */
+[data-theme="dark"] .bg-emerald-50,
+[data-theme="dark"] .bg-emerald-50\/40   { background-color: var(--ok-bg); }
+[data-theme="dark"] .text-emerald-600,
+[data-theme="dark"] .text-emerald-700,
+[data-theme="dark"] .text-emerald-800    { color: var(--ok); }
+[data-theme="dark"] .border-emerald-100,
+[data-theme="dark"] .border-emerald-200,
+[data-theme="dark"] .border-emerald-200\/70 { border-color: var(--ok-border); }
+
+[data-theme="dark"] .bg-amber-50         { background-color: var(--warn-bg); }
+[data-theme="dark"] .text-amber-700,
+[data-theme="dark"] .text-amber-800      { color: var(--warn); }
+[data-theme="dark"] .border-amber-100,
+[data-theme="dark"] .border-amber-200,
+[data-theme="dark"] .border-amber-200\/70 { border-color: var(--warn-border); }
+
+[data-theme="dark"] .bg-red-50,
+[data-theme="dark"] .bg-rose-50          { background-color: var(--danger-bg); }
+[data-theme="dark"] .text-red-600,
+[data-theme="dark"] .text-red-700        { color: var(--danger); }
+[data-theme="dark"] .border-red-100,
+[data-theme="dark"] .border-red-200      { border-color: var(--danger-border); }
+
+[data-theme="dark"] .bg-sky-50           { background-color: var(--speed-pale); }
+[data-theme="dark"] .text-sky-500,
+[data-theme="dark"] .text-sky-700,
+[data-theme="dark"] .text-sky-800        { color: var(--speed); }
+[data-theme="dark"] .border-sky-100      { border-color: var(--border); }
+
+/* Brand utilities are baked as static hex in tailwind.config.js, so the dark
+   theme must remap them too. The solid logo box becomes the vivid --primary;
+   pales/accents follow the ink/speed tokens (white text on them stays white). */
+[data-theme="dark"] .bg-ink             { background-color: var(--primary); }
+[data-theme="dark"] .bg-ink-pale        { background-color: var(--ink-pale); }
+[data-theme="dark"] .text-ink           { color: var(--ink); }
+[data-theme="dark"] .bg-speed-pale      { background-color: var(--speed-pale); }
+[data-theme="dark"] .text-speed,
+[data-theme="dark"] .text-speed-light   { color: var(--speed); }
+
+/* --- Round 2: opacity-variants, indigo accents, toasts and hovers the first
+   pass missed (Tailwind emits a separate class per /opacity, and indigo wasn't
+   bridged). Surfaced in the dark-mode visual review. ----------------------- */
+[data-theme="dark"] .bg-zinc-50\/60,
+[data-theme="dark"] .bg-zinc-50\/70      { background-color: var(--surface-2); }
+[data-theme="dark"] .bg-zinc-100\/70     { background-color: var(--surface-3); }
+[data-theme="dark"] .bg-red-50\/50       { background-color: var(--danger-bg); }
+[data-theme="dark"] .bg-emerald-50\/50   { background-color: var(--ok-bg); }
+[data-theme="dark"] .border-zinc-200\/70 { border-color: var(--border); }
+[data-theme="dark"] .text-red-600\/60    { color: var(--danger); }
+[data-theme="dark"] .text-emerald-700\/60 { color: var(--ok); }
+[data-theme="dark"] .text-amber-700\/60  { color: var(--warn); }
+[data-theme="dark"] .divide-zinc-50 > :not([hidden]) ~ :not([hidden]) { border-color: var(--line); }
+
+[data-theme="dark"] .bg-indigo-50,
+[data-theme="dark"] .bg-indigo-50\/80    { background-color: var(--ink-pale); }
+[data-theme="dark"] .bg-indigo-100       { background-color: rgba(124,120,230,.24); } /* selected row — stays visible */
+[data-theme="dark"] .bg-indigo-500       { background-color: var(--primary); }
+[data-theme="dark"] .text-indigo-400,
+[data-theme="dark"] .text-indigo-500,
+[data-theme="dark"] .text-indigo-600     { color: var(--ink); }
+[data-theme="dark"] .border-indigo-400   { border-color: var(--ink); }
+[data-theme="dark"] .ring-indigo-300,
+[data-theme="dark"] .ring-indigo-500     { --tw-ring-color: var(--ink); }
+[data-theme="dark"] .ring-indigo-500\/20 { --tw-ring-color: rgba(154,149,240,.32); }
+
+[data-theme="dark"] .hover\:text-ink-light:hover { color: var(--ink-light); }
+[data-theme="dark"] .hover\:text-zinc-700:hover,
+[data-theme="dark"] .hover\:text-zinc-900:hover  { color: var(--text); }
+
+/* Status-tint tokens are translucent (good on the light surface); give dark
+   toasts an opaque surface and let the coloured border/icon/text carry meaning. */
+[data-theme="dark"] .toast-ok,
+[data-theme="dark"] .toast-error,
+[data-theme="dark"] .toast-warn { background: var(--surface-2); }
+
+/* --- Round 3: darkest status text (the -900/-800 headings inside status boxes
+   are near-black and vanish on a dark tint) + the segmented On/Off control's
+   white hover (covered the label in dark). ----------------------------------*/
+[data-theme="dark"] .text-amber-900   { color: var(--warn); }
+[data-theme="dark"] .text-red-800     { color: var(--danger); }
+[data-theme="dark"] .hover\:bg-white:hover { background-color: var(--surface-3); }

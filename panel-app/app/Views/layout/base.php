@@ -52,10 +52,23 @@ if ($_ip === '') { $_ip = $_hostname; }
 $assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROOT . $p) ?: PANEL_VERSION);
 ?>
 <!DOCTYPE html>
-<html lang="<?= e(current_locale()) ?>" class="h-full">
+<html lang="<?= e(current_locale()) ?>" class="h-full" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script>
+    // Set the colour theme before any CSS paints, so there is no light-mode
+    // flash. A saved choice wins; otherwise follow the OS preference; else light.
+    (function () {
+      try {
+        var t = localStorage.getItem('aidipanel-theme');
+        if (t !== 'dark' && t !== 'light') {
+          t = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+        document.documentElement.dataset.theme = t;
+      } catch (e) { document.documentElement.dataset.theme = 'light'; }
+    })();
+  </script>
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <title><?= e($pageTitle ?? t('nav.dashboard')) ?> — <?= e(t('app.name')) ?></title>
 
@@ -97,7 +110,13 @@ $assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROO
       <span class="mono text-emerald-600" x-show="copied" x-cloak><?= e(t('topbar.copied')) ?></span>
     </button>
 
-    <button type="button" class="w-8 h-8 rounded-lg hover:bg-zinc-100 flex items-center justify-center text-zinc-400" title="<?= e(t('topbar.theme')) ?>"><?= icon('moon', 'text-[18px]') ?></button>
+    <button type="button"
+            x-data="{ dark: document.documentElement.dataset.theme === 'dark' }"
+            @click="dark = !dark; document.documentElement.dataset.theme = dark ? 'dark' : 'light'; try { localStorage.setItem('aidipanel-theme', dark ? 'dark' : 'light'); } catch (e) {}"
+            class="w-8 h-8 rounded-lg hover:bg-zinc-100 flex items-center justify-center text-zinc-400" title="<?= e(t('topbar.theme')) ?>">
+      <span x-show="!dark"><?= icon('moon', 'text-[18px]') ?></span>
+      <span x-show="dark" x-cloak><?= icon('sun', 'text-[18px]') ?></span>
+    </button>
 
     <!-- account menu -->
     <div class="relative">

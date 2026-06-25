@@ -335,6 +335,12 @@ $range = $history['range'] ?? '1h';
 (function () {
   const $ = s => document.querySelector(s);
 
+  // Chart palette follows the active theme (read once at load; a theme toggle
+  // takes effect on the next page load / range change, when charts re-render).
+  const CH = document.documentElement.dataset.theme === 'dark'
+    ? { tip: 'dark',   grid: 'rgba(255,255,255,.08)', cross: 'rgba(255,255,255,.18)', axis: '#6b7081', legend: '#9398a8', track: 'rgba(255,255,255,.07)', text: '#e9eaf1' }
+    : { tip: 'light',  grid: '#f1f1f4',               cross: '#d4d4d8',               axis: '#a1a1aa', legend: '#71717a', track: '#E0F7FB',               text: '#18181b' };
+
   // ── shared chart options (crisp, flat, crosshair tooltips) ────────────────
   function opts(colors, type, yMax, legend, suffix) {
     suffix = suffix || '';
@@ -344,11 +350,11 @@ $range = $history['range'] ?? '1h';
       colors, fill: { type: 'solid', opacity: type === 'line' ? 1 : 0.12 },
       dataLabels: { enabled: false },
       markers: { size: 3, strokeWidth: 0, hover: { size: 5 } },
-      legend: { show: legend, position: 'top', horizontalAlign: 'right', fontSize: '11px', fontWeight: 500, labels: { colors: '#71717a' }, markers: { width: 8, height: 8, radius: 4 }, itemMargin: { horizontal: 8 }, offsetY: -2 },
-      grid: { borderColor: '#f1f1f4', strokeDashArray: 4, padding: { left: 8, right: 14, top: 4, bottom: -4 }, xaxis: { lines: { show: false } } },
-      xaxis: { categories: [], tickAmount: 7, crosshairs: { show: true, stroke: { color: '#d4d4d8', width: 1, dashArray: 3 } }, axisBorder: { show: false }, axisTicks: { show: false }, tooltip: { enabled: false }, labels: { rotate: 0, hideOverlappingLabels: true, style: { colors: '#a1a1aa', fontSize: '10px', fontFamily: '"JetBrains Mono"' } } },
-      yaxis: { max: yMax, min: 0, tickAmount: 4, labels: { style: { colors: '#a1a1aa', fontSize: '10px', fontFamily: '"JetBrains Mono"' }, formatter: v => (Math.round(v * 10) / 10) + suffix } },
-      tooltip: { theme: 'light', shared: true, intersect: false, x: { show: true }, y: { formatter: v => (Math.round(v * 10) / 10) + suffix } },
+      legend: { show: legend, position: 'top', horizontalAlign: 'right', fontSize: '11px', fontWeight: 500, labels: { colors: CH.legend }, markers: { width: 8, height: 8, radius: 4 }, itemMargin: { horizontal: 8 }, offsetY: -2 },
+      grid: { borderColor: CH.grid, strokeDashArray: 4, padding: { left: 8, right: 14, top: 4, bottom: -4 }, xaxis: { lines: { show: false } } },
+      xaxis: { categories: [], tickAmount: 7, crosshairs: { show: true, stroke: { color: CH.cross, width: 1, dashArray: 3 } }, axisBorder: { show: false }, axisTicks: { show: false }, tooltip: { enabled: false }, labels: { rotate: 0, hideOverlappingLabels: true, style: { colors: CH.axis, fontSize: '10px', fontFamily: '"JetBrains Mono"' } } },
+      yaxis: { max: yMax, min: 0, tickAmount: 4, labels: { style: { colors: CH.axis, fontSize: '10px', fontFamily: '"JetBrains Mono"' }, formatter: v => (Math.round(v * 10) / 10) + suffix } },
+      tooltip: { theme: CH.tip, shared: true, intersect: false, x: { show: true }, y: { formatter: v => (Math.round(v * 10) / 10) + suffix } },
     };
   }
 
@@ -385,10 +391,10 @@ $range = $history['range'] ?? '1h';
       stroke: { curve: 'smooth', width: 2 }, colors: ['#0891B2', '#322C7A'],
       fill: { type: 'solid', opacity: 0.85 }, dataLabels: { enabled: false }, markers: { size: 0, hover: { size: 4 } },
       legend: { show: false },
-      grid: { borderColor: '#f1f1f4', strokeDashArray: 4, padding: { left: 8, right: 14, top: 4, bottom: -4 }, xaxis: { lines: { show: false } } },
-      xaxis: { categories: tl, tickAmount: 8, crosshairs: { show: true, stroke: { color: '#d4d4d8', width: 1, dashArray: 3 } }, axisBorder: { show: false }, axisTicks: { show: false }, tooltip: { enabled: false }, labels: { rotate: 0, hideOverlappingLabels: true, style: { colors: '#a1a1aa', fontSize: '10px', fontFamily: '"JetBrains Mono"' } } },
-      yaxis: { min: 0, tickAmount: 4, labels: { style: { colors: '#a1a1aa', fontSize: '10px', fontFamily: '"JetBrains Mono"' }, formatter: v => Math.round(v) } },
-      tooltip: { theme: 'light', shared: true, intersect: false, x: { show: true }, y: { formatter: v => Math.round(v) + ' req' } },
+      grid: { borderColor: CH.grid, strokeDashArray: 4, padding: { left: 8, right: 14, top: 4, bottom: -4 }, xaxis: { lines: { show: false } } },
+      xaxis: { categories: tl, tickAmount: 8, crosshairs: { show: true, stroke: { color: CH.cross, width: 1, dashArray: 3 } }, axisBorder: { show: false }, axisTicks: { show: false }, tooltip: { enabled: false }, labels: { rotate: 0, hideOverlappingLabels: true, style: { colors: CH.axis, fontSize: '10px', fontFamily: '"JetBrains Mono"' } } },
+      yaxis: { min: 0, tickAmount: 4, labels: { style: { colors: CH.axis, fontSize: '10px', fontFamily: '"JetBrains Mono"' }, formatter: v => Math.round(v) } },
+      tooltip: { theme: CH.tip, shared: true, intersect: false, x: { show: true }, y: { formatter: v => Math.round(v) + ' req' } },
       series: [{ name: <?= json_encode(t('dash.traffic.cached')) ?>, data: tc }, { name: <?= json_encode(t('dash.traffic.origin')) ?>, data: to }],
     }).render();
 
@@ -402,9 +408,9 @@ $range = $history['range'] ?? '1h';
   new ApexCharts($('#chartHit'), {
     chart: { type: 'radialBar', height: 212, sparkline: { enabled: true }, fontFamily: '"Plus Jakarta Sans"' },
     series: [<?= (float) $analytics['hit_ratio'] ?>], colors: ['#0891B2'], labels: [<?= json_encode(t('dash.cacheperf.hit')) ?>], stroke: { lineCap: 'round' },
-    plotOptions: { radialBar: { hollow: { size: '60%' }, track: { background: '#E0F7FB', strokeWidth: '100%' },
-      dataLabels: { name: { show: true, offsetY: 20, color: '#a1a1aa', fontSize: '11px', fontWeight: 600 },
-        value: { show: true, offsetY: -10, color: '#18181b', fontSize: '32px', fontWeight: 700, fontFamily: '"JetBrains Mono"', formatter: v => (Math.round(v * 10) / 10) + '%' } } } },
+    plotOptions: { radialBar: { hollow: { size: '60%' }, track: { background: CH.track, strokeWidth: '100%' },
+      dataLabels: { name: { show: true, offsetY: 20, color: CH.axis, fontSize: '11px', fontWeight: 600 },
+        value: { show: true, offsetY: -10, color: CH.text, fontSize: '32px', fontWeight: 700, fontFamily: '"JetBrains Mono"', formatter: v => (Math.round(v * 10) / 10) + '%' } } } },
   }).render();
   <?php endif; ?>
 })();
