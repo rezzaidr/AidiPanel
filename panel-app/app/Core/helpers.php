@@ -311,11 +311,54 @@ function is_web_cli_command_allowed(string $command): bool
 }
 
 /**
+ * Is the panel running as a public read-only demo? True only when the marker
+ * file exists (present on the demo droplet, absent in normal installs), so the
+ * exact same code stays full-featured everywhere else. Cached per request.
+ */
+function demo_mode(): bool
+{
+    static $on = null;
+    if ($on === null) {
+        $on = defined('STORAGE_ROOT') && is_file(STORAGE_ROOT . '/demo.flag');
+    }
+    return $on;
+}
+
+/**
+ * Commands allowed to cross the web->CLI boundary while in read-only demo mode.
+ * Backstop only — the primary read-only enforcement blocks every mutating POST
+ * route (see Core\Router). These are genuinely read commands; the dual-use
+ * cache:* reads are reached solely via GET here.
+ */
+function web_cli_readonly_commands(): array
+{
+    return [
+        'site:list',
+        'cache:status', 'cache:page', 'cache:zone', 'cache:redis',
+        'db:list', 'db:users', 'db:pma-credentials',
+        'php:list',
+        'ssl:status', 'ssl:check',
+        'security:status', 'cloudflare:realip',
+        'service:status',
+        'cron:list',
+        'files:list', 'files:read', 'files:download', 'files:download-many',
+        'sftp:status',
+        'system:info',
+    ];
+}
+
+/**
  * Apply command-specific argument policy before crossing the root wrapper.
  */
 function is_web_cli_invocation_allowed(string $command, array $args): bool
 {
     if (!is_web_cli_command_allowed($command)) {
+        return false;
+    }
+
+    // Read-only demo: only read commands may cross the boundary (backstop to the
+    // Router's blanket block on mutating POST routes).
+    if (demo_mode() && !in_array($command, web_cli_readonly_commands(), true)) {
         return false;
     }
 

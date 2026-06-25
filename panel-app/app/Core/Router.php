@@ -57,6 +57,19 @@ class Router
                 continue;
             }
 
+            // Read-only demo: block every mutation. All writes are POST; only the
+            // self-whitelisted read-only /api/cli is let through. Login is unneeded
+            // (visitors are auto-signed-in as the viewer user), so /login* POST is
+            // blocked too — no brute-force surface against the real admin account.
+            if (demo_mode() && $method === 'POST'
+                && !in_array($routePath, ['/api/cli'], true)) {
+                if ($this->request->isAjax()) {
+                    json(['success' => false, 'message' => 'This is a read-only demo — changes are disabled.'], 403);
+                }
+                flash('warning', 'This is a read-only demo — changes are disabled.');
+                redirect(safe_back_url());
+            }
+
             // Auth check
             if (!in_array($uri, $this->publicRoutes, true)) {
                 AuthMiddleware::handle();

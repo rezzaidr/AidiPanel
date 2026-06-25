@@ -495,6 +495,10 @@ _usage() {
   echo "  user:passwd     Change password for a user"
   echo "  user:2fa-reset  Reset a panel account's 2FA (break-glass: --user <name>)"
 
+  echo -e "\n${BOLD}${BLUE}Demo${RESET}"
+  echo "  demo:enable     Turn this panel into a public read-only demo (auto-login viewer)"
+  echo "  demo:disable    Turn the read-only demo off (panel fully editable again)"
+
   echo -e "\n${BOLD}${BLUE}System${RESET}"
   echo "  system:info     Show server and panel information"
   echo "  log:tail        Tail Nginx or PHP logs for a domain"
@@ -7558,6 +7562,54 @@ SQL
 }
 
 # ===========================================================================
+# DEMO MODE  (root-only; NOT web-invokable — never added to the web allowlist)
+# ===========================================================================
+# Read-only public demo toggled by a marker file the panel checks (demo_mode()).
+# When on, the panel auto-signs-in visitors as the 'demo' viewer and blocks every
+# mutation server-side. Configure the panel as admin FIRST, then flip it on.
+
+_demo_enable() {
+  _require_root "demo:enable"
+  _parse_opts "$@"
+
+  local db="${PANEL_DIR}/storage/db/aidipanel.sqlite"
+  [[ -f "$db" ]] || die "Panel database not found: ${db}"
+  command -v sqlite3 >/dev/null 2>&1 || die "sqlite3 is required but not installed."
+
+  local flag="${PANEL_DIR}/storage/demo.flag"
+
+  # Seed (or normalise) the auto-login user as a read-only viewer. The password is a
+  # non-verifiable placeholder, so the account can NEVER be signed into via the login
+  # form — only the panel's silent auto-login (which skips the password) uses it.
+  sqlite3 "$db" <<'SQL'
+INSERT OR IGNORE INTO users (username, password_hash, role, active)
+VALUES ('demo', '!', 'viewer', 1);
+UPDATE users SET role = 'viewer', active = 1, password_hash = '!' WHERE username = 'demo';
+SQL
+  # The panel runs as www-data; keep the DB (+ any WAL/SHM) owned by it after a root write.
+  chown www-data:www-data "$db" "$db-wal" "$db-shm" 2>/dev/null || true
+
+  # Drop the marker the panel reads (world-readable so any panel worker can stat it).
+  : > "$flag"
+  chown www-data:www-data "$flag" 2>/dev/null || true
+  chmod 644 "$flag" 2>/dev/null || true
+
+  ok "Read-only demo ENABLED — visitors auto-login as 'demo' (viewer); every change is blocked."
+  info "Disable anytime with:  aidipanel demo:disable"
+}
+
+_demo_disable() {
+  _require_root "demo:disable"
+  _parse_opts "$@"
+
+  local flag="${PANEL_DIR}/storage/demo.flag"
+  rm -f "$flag"
+
+  ok "Read-only demo DISABLED — the panel is fully editable again."
+  info "The 'demo' user is left in place (inert without the flag). Re-enable: aidipanel demo:enable"
+}
+
+# ===========================================================================
 # SYSTEM COMMANDS
 # ===========================================================================
 
@@ -8599,6 +8651,10 @@ main() {
     user:list)      _user_list "$@" ;;
     user:passwd)    _user_passwd "$@" ;;
     user:2fa-reset) _user_2fa_reset "$@" ;;
+
+    # Demo (root-only; not web-invokable)
+    demo:enable)    _demo_enable "$@" ;;
+    demo:disable)   _demo_disable "$@" ;;
 
     # System
     system:info)    _system_info "$@" ;;

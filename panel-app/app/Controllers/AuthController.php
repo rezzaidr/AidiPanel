@@ -9,6 +9,13 @@ class AuthController extends BaseController
 {
     public function showLogin(array $params = []): void
     {
+        // Public read-only demo never shows a login screen — sign in and go.
+        if (demo_mode()) {
+            if (!Auth::check()) {
+                Auth::loginDemoUser();
+            }
+            redirect('/dashboard');
+        }
         if (Auth::check()) {
             redirect('/dashboard');
         }
@@ -59,6 +66,10 @@ class AuthController extends BaseController
 
     public function logout(array $params = []): void
     {
+        // No real session to end in the demo — keep the visitor on the dashboard.
+        if (demo_mode()) {
+            redirect('/dashboard');
+        }
         \Core\DB::log('logout', 'User logged out');
         Auth::logout();
         redirect('/login');

@@ -77,4 +77,23 @@ class Auth
     {
         Session::remove('pending_2fa');
     }
+
+    /**
+     * Auto-login as the seeded read-only demo user (public demo only). Seed it
+     * with the 'viewer' role: the existing role system then blocks every action
+     * (all mutating POST requires admin) and hides sensitive admin-only pages,
+     * with the Router demo guard + CLI gate as extra layers.
+     */
+    public static function loginDemoUser(): bool
+    {
+        $user = DB::instance()->row(
+            'SELECT * FROM users WHERE username = ? AND active = 1 LIMIT 1',
+            ['demo']
+        );
+        if (!$user) {
+            return false;
+        }
+        self::login($user);
+        return true;
+    }
 }
