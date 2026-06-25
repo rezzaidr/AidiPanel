@@ -435,3 +435,40 @@ select.inp {
 [data-theme="dark"] .text-amber-900   { color: var(--warn); }
 [data-theme="dark"] .text-red-800     { color: var(--danger); }
 [data-theme="dark"] .hover\:bg-white:hover { background-color: var(--surface-3); }
+
+/* ===========================================================================
+   Round 4 — full static sweep. Cross-referenced every colour utility used in
+   the views against this bridge; below are the remaining light neutrals,
+   borders, status dots and off-palette accents that otherwise stay light.
+   Intentionally NOT remapped (correct as-is on dark): the bg-zinc-900/40 modal
+   scrims, the zinc-950 terminal/code blocks, and the solid bg-zinc-600
+   "selected" pills (white text stays readable).
+   =========================================================================== */
+/* Light neutral borders — inputs, checkboxes, search fields (files / forms). */
+[data-theme="dark"] .border-zinc-300,
+[data-theme="dark"] .hover\:border-zinc-300:hover { border-color: var(--border); }
+/* Light neutral fills used as progress tracks and 1px dividers. */
+[data-theme="dark"] .bg-zinc-200          { background-color: var(--surface-3); }
+/* Muted "off"-state status dots (the "on" state is a vivid bg-emerald-500). */
+[data-theme="dark"] .bg-zinc-300,
+[data-theme="dark"] .bg-zinc-400          { background-color: var(--text-faint); }
+/* Faint oversized empty-state illustration icons (text-5xl, decorative). */
+[data-theme="dark"] .text-zinc-200        { color: var(--text-faint); }
+/* Off-palette accents folded into the theme tokens (keep meaning + contrast). */
+[data-theme="dark"] .text-amber-600       { color: var(--warn); }
+[data-theme="dark"] .text-rose-600,
+[data-theme="dark"] .text-rose-500        { color: var(--danger); }
+[data-theme="dark"] .text-sky-600,
+[data-theme="dark"] .text-cyan-600        { color: var(--speed); }
+[data-theme="dark"] .text-green-600       { color: var(--ok); }
+
+/* Auth pages (login, 2FA) are standalone but now load app.css + the no-FOUC
+   theme script, so bridge the gray-* family they use (zinc's sibling). bg-gray-50
+   is only ever the page body, so it maps to the page background. */
+[data-theme="dark"] .bg-gray-50           { background-color: var(--bg); }
+[data-theme="dark"] .text-gray-900        { color: var(--text); }
+[data-theme="dark"] .text-gray-700        { color: var(--text-soft); }
+[data-theme="dark"] .text-gray-500        { color: var(--text-muted); }
+[data-theme="dark"] .text-gray-400        { color: var(--text-faint); }
+[data-theme="dark"] .border-gray-200,
+[data-theme="dark"] .border-gray-300      { border-color: var(--border); }

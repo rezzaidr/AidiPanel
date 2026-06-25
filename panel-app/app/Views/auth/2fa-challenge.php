@@ -1,12 +1,25 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Two-Factor — AidiPanel</title>
+  <script>
+    // Apply the saved/OS colour theme before paint (no flash), same as the app shell.
+    (function () {
+      try {
+        var t = localStorage.getItem('aidipanel-theme');
+        if (t !== 'dark' && t !== 'light') {
+          t = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+        document.documentElement.dataset.theme = t;
+      } catch (e) { document.documentElement.dataset.theme = 'light'; }
+    })();
+  </script>
   <link rel="preload" href="/assets/fonts/plus-jakarta-sans-400.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/assets/fonts.css">
   <link rel="stylesheet" href="/assets/tailwind.css">
+  <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body class="min-h-screen bg-gray-50 flex items-center justify-center font-sans antialiased">
 
