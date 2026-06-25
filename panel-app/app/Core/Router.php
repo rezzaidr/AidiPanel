@@ -63,8 +63,11 @@ class Router
             // blocked too — no brute-force surface against the real admin account.
             if (demo_mode() && $method === 'POST'
                 && !in_array($routePath, ['/api/cli'], true)) {
+                // AJAX/stream callers gate on the JSON body's success flag, not the HTTP
+                // status (opStream reads this message too), so return 200 + a clear message
+                // rather than a 403 that would surface as a generic "couldn't start" error.
                 if ($this->request->isAjax()) {
-                    json(['success' => false, 'message' => 'This is a read-only demo — changes are disabled.'], 403);
+                    json(['success' => false, 'message' => 'This is a read-only demo — changes are disabled.']);
                 }
                 flash('warning', 'This is a read-only demo — changes are disabled.');
                 redirect(safe_back_url());
@@ -95,6 +98,14 @@ class Router
     {
         if ($method === 'POST' && !in_array($routePath, $this->publicRoutes, true)) {
             return true;
+        }
+
+        // Read-only demo: let the viewer browse the admin-only READ pages too (file
+        // manager, panel users, nginx view, sftp status) — every write is blocked by the
+        // demo POST guard above. EXCEPT /logs, which can carry login IPs/paths, so it
+        // stays admin-only (hidden in the demo).
+        if (demo_mode()) {
+            return $routePath === '/logs';
         }
 
         return $method === 'GET'

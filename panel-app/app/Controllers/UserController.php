@@ -4,7 +4,12 @@ class UserController extends BaseController
 {
     public function index(array $params = []): void
     {
-        $users = $this->db->rows('SELECT id, username, role, active, created_at, last_login FROM users ORDER BY created_at DESC');
+        // In the read-only demo, never expose real panel accounts — especially the
+        // admin username (half a credential). Show only non-admin (viewer/demo) rows.
+        $where = demo_mode() ? "WHERE role <> 'admin'" : '';
+        $users = $this->db->rows(
+            "SELECT id, username, role, active, created_at, last_login FROM users {$where} ORDER BY created_at DESC"
+        );
         $this->view('users/index', compact('users'));
     }
 

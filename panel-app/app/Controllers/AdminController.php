@@ -13,6 +13,7 @@ class AdminController extends BaseController
 {
     public function index(array $params = []): void
     {
-        $this->redirect(\Core\Auth::isAdmin() ? '/users' : '/services');
+        // In the read-only demo the viewer may open /users too, so land there like an admin.
+        $this->redirect((demo_mode() || \Core\Auth::isAdmin()) ? '/users' : '/services');
     }
 }

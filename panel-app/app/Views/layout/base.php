@@ -152,7 +152,11 @@ $assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROO
         <nav class="sidenav">
           <?php foreach ($adminSections as $s): ?>
             <?php
-              if (!empty($s['admin']) && empty($_is_admin)) { continue; }
+              if (!empty($s['admin']) && empty($_is_admin)) {
+                  // Read-only demo: still surface the admin READ sections (the viewer may
+                  // browse them), but keep /logs hidden — it can carry IPs/paths.
+                  if (!demo_mode() || $s['key'] === 'logs') { continue; }
+              }
               $isSoon = !empty($s['soon']) || empty($s['href']);
               $active = (!$isSoon && str_starts_with($uri, $s['href'])) ? ' active' : '';
               $title  = t('admin.' . $s['key'] . '.title');
@@ -328,7 +332,13 @@ window.opStream = function (url, formData, handlers) {
     .then(function (res) {
       var ct = res.headers.get('content-type') || '';
       if (!res.ok || ct.indexOf('text/event-stream') === -1) {
-        if (handlers.onError) handlers.onError('Could not start the operation. Please check your input and try again.');
+        // A handled error (e.g. the read-only demo guard) replies with JSON {message};
+        // surface that instead of the generic "couldn't start" line.
+        res.json().then(function (d) {
+          if (handlers.onError) handlers.onError((d && d.message) ? d.message : 'Could not start the operation. Please check your input and try again.');
+        }).catch(function () {
+          if (handlers.onError) handlers.onError('Could not start the operation. Please check your input and try again.');
+        });
         return;
       }
       var reader = res.body.getReader();

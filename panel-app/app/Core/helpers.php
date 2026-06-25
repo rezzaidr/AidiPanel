@@ -335,7 +335,10 @@ function web_cli_readonly_commands(): array
     return [
         'site:list',
         'cache:status', 'cache:page', 'cache:zone', 'cache:redis',
-        'db:list', 'db:users', 'db:pma-credentials',
+        'db:list', 'db:users',
+        // NOTE: db:pma-credentials is deliberately NOT here — it returns DB login
+        // credentials. (It is only reached via a POST route, which the demo blocks,
+        // but it must never be considered demo-safe.)
         'php:list',
         'ssl:status', 'ssl:check',
         'security:status', 'cloudflare:realip',
