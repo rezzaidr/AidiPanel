@@ -8,7 +8,12 @@ class Request
 
     public function method(): string
     {
-        return strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+        $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+        // RFC 7231: HEAD is identical to GET minus the body. Map HEAD→GET so the router
+        // matches GET routes; otherwise HEAD 404s, which makes uptime/health checks
+        // falsely report the panel (and the public demo) as down. POST-only routes still
+        // 404 for HEAD (HEAD is not POST), and CSRF/demo-POST guards key on 'POST'.
+        return $method === 'HEAD' ? 'GET' : $method;
     }
 
     public function uri(): string

@@ -89,9 +89,13 @@ class AdminSettingsController extends BaseController
             $port = '8443';
         }
 
-        $host = (string) ($_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? '127.0.0.1');
-        $host = preg_replace('/:\d+$/', '', trim($host)) ?: '127.0.0.1';
-        return "https://{$host}:{$port}/admin/settings";
+        // The recovery route is the server's own IP:8443 — never the client Host header,
+        // which is spoofable and could redirect an admin to an arbitrary host.
+        $ip = server_public_ip();
+        if ($ip === '' || !filter_var($ip, FILTER_VALIDATE_IP)) {
+            $ip = (string) ($_SERVER['SERVER_ADDR'] ?? '127.0.0.1');
+        }
+        return "https://{$ip}:{$port}/admin/settings";
     }
 
     /** A failed pre-stream step: SSE frame for streamed forms, flash+redirect otherwise. */
