@@ -137,6 +137,9 @@ return [
     'admin.settings.db.no'              => 'No',
 
     // Dashboard
+    'dash.welcome'            => 'Welcome back, {name}',
+    'dash.welcome_first'      => 'Welcome, {name}',
+    'dash.welcome_back'       => 'Welcome back, {name}',
     'dash.subtitle'           => 'Real-time monitoring & performance',
     'dash.live'               => 'Live',
     'dash.attention'          => 'Needs Attention',

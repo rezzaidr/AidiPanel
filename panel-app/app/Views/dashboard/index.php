@@ -58,7 +58,7 @@ $range = $history['range'] ?? '1h';
 <!-- page header -->
 <div class="flex items-center justify-between mb-5">
   <div>
-    <h1 class="font-head font-bold text-[22px] text-zinc-900 leading-none"><?= e(t('nav.dashboard')) ?></h1>
+    <h1 class="font-head font-bold text-[22px] text-zinc-900 leading-none"><?= t($welcomeKey ?? 'dash.welcome_back', ['name' => ($greetName ?? 'there')]) ?> <span aria-hidden="true">&#128075;</span></h1>
     <p class="text-sm text-zinc-400 mt-1.5"><?= e(t('dash.subtitle')) ?></p>
   </div>
 </div>

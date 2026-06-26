@@ -26,23 +26,25 @@
   <link rel="stylesheet" href="/assets/tailwind.css">
   <link rel="stylesheet" href="/assets/app.css">
 </head>
-<body class="min-h-screen bg-gray-50 flex items-center justify-center font-sans antialiased">
+<body class="min-h-screen bg-zinc-50 flex items-center justify-center font-sans antialiased">
 
 <div class="w-full max-w-sm">
 
   <!-- Logo -->
   <div class="text-center mb-8">
     <div class="inline-flex items-center gap-2.5">
-      <div class="w-10 h-10 bg-[#3C3489] rounded-xl flex items-center justify-center shadow">
-        <?= icon('server', 'text-white text-lg') ?>
-      </div>
-      <span class="text-xl font-bold text-gray-900">AidiPanel</span>
+      <svg viewBox="0 0 32 32" class="w-10 h-10 shrink-0 shadow rounded-xl" aria-hidden="true">
+        <rect width="32" height="32" rx="8" fill="#322C7A"/>
+        <path d="M8 22 L16 10 L24 22" stroke="#fff" stroke-width="2.5" fill="none" stroke-linejoin="round"/>
+        <circle cx="16" cy="22" r="2" fill="#fff"/>
+      </svg>
+      <span class="text-xl font-bold text-zinc-900">AidiPanel</span>
     </div>
-    <p class="text-sm text-gray-500 mt-2">Sign in to manage your server</p>
+    <p class="text-sm text-zinc-500 mt-2">Sign in to manage your server</p>
   </div>
 
   <!-- Card -->
-  <div class="bg-white rounded-2xl shadow-sm border border-gray-200 px-8 py-8">
+  <div class="bg-white rounded-2xl shadow-sm border border-zinc-200 px-8 py-8">
 
     <?php if ($error): ?>
     <div class="mb-4 bg-red-50 border border-red-200 text-red-600 text-sm px-4 py-3 rounded-lg flex items-center gap-2">
@@ -55,21 +57,21 @@
       <input type="hidden" name="_csrf_token" value="<?= e($csrf) ?>">
 
       <div class="mb-4">
-        <label class="block text-xs font-medium text-gray-700 mb-1.5" for="username">Username</label>
+        <label class="block text-xs font-medium text-zinc-700 mb-1.5" for="username">Username</label>
         <div class="relative">
-          <?= icon('user', 'absolute left-3 top-1/2 -translate-y-1/2 text-gray-400') ?>
+          <?= icon('user', 'absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400') ?>
           <input type="text" id="username" name="username" required autofocus
-            class="w-full pl-9 pr-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3C3489] focus:border-transparent"
+            class="w-full pl-9 pr-3 py-2.5 text-sm text-zinc-900 bg-white border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3C3489] focus:border-transparent"
             placeholder="admin">
         </div>
       </div>
 
       <div class="mb-6">
-        <label class="block text-xs font-medium text-gray-700 mb-1.5" for="password">Password</label>
+        <label class="block text-xs font-medium text-zinc-700 mb-1.5" for="password">Password</label>
         <div class="relative">
-          <?= icon('lock', 'absolute left-3 top-1/2 -translate-y-1/2 text-gray-400') ?>
+          <?= icon('lock', 'absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400') ?>
           <input type="password" id="password" name="password" required
-            class="w-full pl-9 pr-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3C3489] focus:border-transparent"
+            class="w-full pl-9 pr-3 py-2.5 text-sm text-zinc-900 bg-white border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3C3489] focus:border-transparent"
             placeholder="••••••••">
         </div>
       </div>
@@ -81,7 +83,7 @@
     </form>
   </div>
 
-  <p class="text-center text-xs text-gray-500 mt-6">AidiPanel v<?= PANEL_VERSION ?> · Nginx + FastCGI Cache + Redis</p>
+  <p class="text-center text-xs text-zinc-500 mt-6">Manage fast LEMP sites without the bloat</p>
 </div>
 
 </body>

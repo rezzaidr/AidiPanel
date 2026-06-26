@@ -95,7 +95,11 @@ $assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROO
 <!-- ===== TOP BAR ===== -->
 <header class="h-16 bg-white border-b border-zinc-200/80 flex items-center px-5 gap-4">
   <a href="/dashboard" class="flex items-center gap-2.5 pr-4 shrink-0">
-    <div class="w-9 h-9 rounded-lg flex items-center justify-center bg-ink"><?= icon('bolt', 'text-white text-lg') ?></div>
+    <svg viewBox="0 0 32 32" class="w-9 h-9 shrink-0" aria-hidden="true">
+      <rect width="32" height="32" rx="8" fill="#322C7A"/>
+      <path d="M8 22 L16 10 L24 22" stroke="#fff" stroke-width="2.5" fill="none" stroke-linejoin="round"/>
+      <circle cx="16" cy="22" r="2" fill="#fff"/>
+    </svg>
     <span class="font-head font-bold text-[15px] text-zinc-900"><?= e(t('app.name')) ?></span>
   </a>
 

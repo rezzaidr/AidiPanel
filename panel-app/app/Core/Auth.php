@@ -24,11 +24,19 @@ class Auth
 
     public static function login(array $user): void
     {
+        $wasFirstLogin = empty($user['last_login']);
+
         Session::regenerate();
         Session::set('user_id',  $user['id']);
         Session::set('username', $user['username']);
         Session::set('role',     $user['role']);
+        Session::set('first_login', $wasFirstLogin);
         DB::instance()->run('UPDATE users SET last_login = ? WHERE id = ?', [gmdate('Y-m-d H:i:s'), $user['id']]);
+    }
+
+    public static function wasFirstLogin(): bool
+    {
+        return (bool) Session::get('first_login', false);
     }
 
     public static function logout(): void

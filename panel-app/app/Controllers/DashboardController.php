@@ -14,7 +14,21 @@ class DashboardController extends BaseController
         $sites     = $this->getTopSites();
         $alerts    = $this->getAlerts($metrics, $services);
 
-        $this->view('dashboard/index', compact('metrics', 'vps', 'analytics', 'history', 'sites', 'alerts'));
+        $user    = \Core\Auth::user() ?? [];
+        $profile = [];
+        if (!empty($user['id'])) {
+            $profile = $this->db->row(
+                'SELECT username, first_name FROM users WHERE id = ? LIMIT 1',
+                [(int) $user['id']]
+            ) ?? [];
+        }
+
+        $firstName  = trim((string) ($profile['first_name'] ?? ''));
+        $username   = trim((string) ($profile['username'] ?? $user['username'] ?? 'there'));
+        $greetName  = $firstName !== '' ? $firstName : ($username !== '' ? $username : 'there');
+        $welcomeKey = \Core\Auth::wasFirstLogin() ? 'dash.welcome_first' : 'dash.welcome_back';
+
+        $this->view('dashboard/index', compact('metrics', 'vps', 'analytics', 'history', 'sites', 'alerts', 'greetName', 'welcomeKey'));
     }
 
     public function apiMetrics(array $params = []): void

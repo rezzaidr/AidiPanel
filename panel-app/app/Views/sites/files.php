@@ -206,7 +206,7 @@ $cmVer   = @filemtime(PUBLIC_ROOT . '/assets/vendor/codemirror.js') ?: PANEL_VER
         <form @submit.prevent="modal==='newFile' ? doNewFile() : doNewFolder()" class="p-4 space-y-3">
           <input x-ref="modalInput" x-model="form.name" type="text"
                  :placeholder="modal==='newFile' ? 'filename.php' : 'folder-name'"
-                 class="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20">
+                 class="inp w-full">
           <div class="flex justify-end gap-2">
             <button type="button" @click="modal=null" class="btn btn-secondary btn-sm">Cancel</button>
             <button type="submit" class="btn btn-primary btn-sm">Create</button>
@@ -226,7 +226,7 @@ $cmVer   = @filemtime(PUBLIC_ROOT . '/assets/vendor/codemirror.js') ?: PANEL_VER
           <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><?= icon('x') ?></button>
         </div>
         <form @submit.prevent="doRename()" class="p-4 space-y-3">
-          <input x-ref="modalInput" x-model="form.name" type="text" class="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20">
+          <input x-ref="modalInput" x-model="form.name" type="text" class="inp w-full">
           <div class="flex justify-end gap-2">
             <button type="button" @click="modal=null" class="btn btn-secondary btn-sm">Cancel</button>
             <button type="submit" class="btn btn-primary btn-sm"><?= e(t('site.files.rename')) ?></button>
@@ -246,7 +246,7 @@ $cmVer   = @filemtime(PUBLIC_ROOT . '/assets/vendor/codemirror.js') ?: PANEL_VER
           <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><?= icon('x') ?></button>
         </div>
         <form @submit.prevent="doChmod()" class="p-4 space-y-3">
-          <select x-model="form.mode" class="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm mono focus:outline-none focus:border-indigo-400">
+          <select x-model="form.mode" class="inp w-full mono">
             <option value="0644">0644 — file (owner rw, others r)</option>
             <option value="0664">0664 — file (group writable)</option>
             <option value="0600">0600 — file (private)</option>
@@ -276,7 +276,7 @@ $cmVer   = @filemtime(PUBLIC_ROOT . '/assets/vendor/codemirror.js') ?: PANEL_VER
           <button type="button" @click="modal=null" class="text-zinc-400 hover:text-zinc-700"><?= icon('x') ?></button>
         </div>
         <form @submit.prevent="doZip()" class="p-4 space-y-3">
-          <input x-ref="modalInput" x-model="form.name" type="text" placeholder="archive.zip" class="w-full border border-zinc-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20">
+          <input x-ref="modalInput" x-model="form.name" type="text" placeholder="archive.zip" class="inp w-full">
           <p class="text-xs text-zinc-400" x-text="zipPaths.length + ' item(s) selected'"></p>
           <div class="flex justify-end gap-2">
             <button type="button" @click="modal=null" class="btn btn-secondary btn-sm">Cancel</button>
