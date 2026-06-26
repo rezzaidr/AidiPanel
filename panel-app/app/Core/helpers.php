@@ -290,7 +290,8 @@ function web_cli_allowed_commands(): array
         'cache:page', 'cache:redis', 'cache:zone',
         'cache:status', 'cache:purge', 'cache:enable', 'cache:disable',
         'cache:config', 'cache:redis-enable', 'cache:redis-disable', 'cache:redis-flush', 'cache:opcache-restart',
-        'db:add', 'db:delete', 'db:list', 'db:users', 'db:user-add', 'db:user-edit', 'db:user-delete', 'db:pma-install', 'db:pma-credentials', 'db:backup',
+        'db:add', 'db:delete', 'db:list', 'db:users', 'db:user-add', 'db:user-edit', 'db:user-delete', 'db:pma-install', 'db:pma-credentials', 'db:backup', 'db:server-info',
+        'panel:domain', 'panel:ssl',
         'php:list', 'php:version', 'php:restart', 'php:install',
         'ssl:install', 'ssl:renew', 'ssl:status', 'ssl:import',
         'ssl:force-https', 'ssl:hsts', 'ssl:autorenew', 'ssl:check', 'ssl:use',
@@ -335,12 +336,12 @@ function web_cli_readonly_commands(): array
     return [
         'site:list',
         'cache:status', 'cache:page', 'cache:zone', 'cache:redis',
-        'db:list', 'db:users',
+        'db:list', 'db:users', 'db:server-info',
         // NOTE: db:pma-credentials is deliberately NOT here — it returns DB login
         // credentials. (It is only reached via a POST route, which the demo blocks,
         // but it must never be considered demo-safe.)
         'php:list',
-        'ssl:status', 'ssl:check',
+        'ssl:status', 'ssl:check', 'panel:domain', 'panel:ssl',
         'security:status', 'cloudflare:realip',
         'service:status',
         'cron:list',
@@ -357,6 +358,44 @@ function is_web_cli_invocation_allowed(string $command, array $args): bool
 {
     if (!is_web_cli_command_allowed($command)) {
         return false;
+    }
+
+    if ($command === 'db:server-info') {
+        return $args === [];
+    }
+
+    if ($command === 'panel:domain') {
+        $isStatus = $args === [] || $args === ['--action', 'status'];
+        if ($isStatus) {
+            return true;
+        }
+        if (demo_mode()) {
+            return false;
+        }
+        if ($args === ['--action', 'clear']) {
+            return true;
+        }
+        return count($args) === 2
+            && ($args[0] ?? null) === '--set'
+            && is_valid_domain((string) ($args[1] ?? ''));
+    }
+
+    if ($command === 'panel:ssl') {
+        $isStatus = $args === [] || $args === ['--action', 'status'];
+        if ($isStatus) {
+            return true;
+        }
+        if (demo_mode()) {
+            return false;
+        }
+        if ($args === ['--action', 'issue']) {
+            return true;
+        }
+        return count($args) === 4
+            && ($args[0] ?? null) === '--action'
+            && ($args[1] ?? null) === 'issue'
+            && ($args[2] ?? null) === '--email'
+            && filter_var((string) ($args[3] ?? ''), FILTER_VALIDATE_EMAIL) !== false;
     }
 
     // Read-only demo: only read commands may cross the boundary (backstop to the

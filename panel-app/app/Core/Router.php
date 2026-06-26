@@ -19,6 +19,7 @@ class Router
     private array $adminOnlyGetRoutes = [
         '/logs',
         '/users',
+        '/admin/settings',
         '/sites/{domain}/nginx',
         '/sites/{domain}/files/list',
         '/sites/{domain}/files/read',

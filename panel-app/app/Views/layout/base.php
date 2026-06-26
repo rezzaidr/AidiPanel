@@ -28,6 +28,7 @@ $adminSections = [
     ['key' => 'tuning',   'icon' => 'ti-adjustments-bolt','href' => null,    'soon' => true],
     ['key' => 'backups',  'icon' => 'ti-database-export','href' => null,     'soon' => true],
     ['key' => 'support',  'icon' => 'ti-lifebuoy',       'href' => null,     'soon' => true],
+    ['key' => 'settings', 'icon' => 'ti-settings',       'href' => '/admin/settings', 'admin' => true],
 ];
 
 $navAdmin = '';
@@ -324,6 +325,16 @@ window.AidiToast = function (kind, message) {
       sessionStorage.removeItem('aidipanel_toast');
       var t = JSON.parse(raw);
       if (t && t.message) window.AidiToast(t.kind || 'success', t.message);
+    }
+    var url = new URL(window.location.href);
+    var toastKey = url.searchParams.get('panel_toast');
+    var toastMap = {
+      domain_issued: <?= json_encode(t('admin.settings.domain.issued')) ?>,
+    };
+    if (toastKey && toastMap[toastKey]) {
+      window.AidiToast('success', toastMap[toastKey]);
+      url.searchParams.delete('panel_toast');
+      window.history.replaceState({}, '', url.pathname + (url.search || '') + url.hash);
     }
   } catch (e) {}
 })();

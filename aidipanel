@@ -28,6 +28,10 @@ readonly NGINX_ZONE_CONF_DIR="/etc/nginx/aidipanel/cache-zones"
 readonly NGINX_ZONE_SHIM="/etc/nginx/conf.d/aidipanel-cache-zones.conf"
 readonly NGINX_ZONE_CACHE_BASE="/var/cache/nginx/aidipanel"
 readonly CREDENTIALS_FILE="${PANEL_DIR}/credentials.conf"
+readonly PANEL_CONF="${PANEL_DIR}/config/panel.conf"
+readonly PANEL_VHOST="/etc/nginx/sites-available/aidipanel-ui.conf"
+readonly PANEL_ACME_CONF="/etc/nginx/conf.d/aidipanel-panel-acme.conf"
+readonly PANEL_ACME_WEBROOT="/var/www/letsencrypt"
 readonly CLI_LOG="${PANEL_DIR}/storage/logs/aidipanel-cli.log"
 readonly PMA_VERSION="5.2.3"
 readonly PMA_DIR="/usr/share/phpmyadmin"
@@ -365,6 +369,29 @@ _mysql_exec_db() {
     "$db" -e "$1" 2>/dev/null
 }
 
+# Read-only summary of the local database server for the Settings UI. Queries the
+# live server (authoritative engine + version + port); falls back to binary/service
+# detection when it cannot connect. Emits stable key=value lines.
+_db_server_info() {
+  local host="127.0.0.1" engine="" version="" port="3306" active=0 vfull="" p=""
+  vfull=$(_mysql_exec "SELECT VERSION()" | tail -n1)
+  if [[ -n "$vfull" ]]; then
+    active=1
+    if [[ "$vfull" == *MariaDB* ]]; then engine="mariadb"; else engine="mysql"; fi
+    version="${vfull%%-*}"
+    p=$(_mysql_exec "SELECT @@port" | tail -n1)
+    [[ "$p" =~ ^[0-9]+$ ]] && port="$p"
+  else
+    engine=$(command -v mariadb >/dev/null 2>&1 && echo mariadb || echo mysql)
+    systemctl is-active "$engine" >/dev/null 2>&1 && active=1
+  fi
+  printf 'host=%s\n'    "$host"
+  printf 'engine=%s\n'  "$engine"
+  printf 'version=%s\n' "$version"
+  printf 'port=%s\n'    "$port"
+  printf 'active=%s\n'  "$active"
+}
+
 _nginx_test_reload() {
   nginx -t >> "$CLI_LOG" 2>&1 || die "The web server rejected the new configuration; no changes were applied."
   systemctl reload nginx >> "$CLI_LOG" 2>&1
@@ -462,6 +489,7 @@ _usage() {
   echo "  db:user-delete  Delete a database user (--site --name)"
   echo "  db:pma-install  Install phpMyAdmin for the Database tab"
   echo "  db:backup       Backup a database to file"
+  echo "  db:server-info  Show the local database server (engine/version/port/active)"
 
   echo -e "\n${BOLD}${BLUE}PHP Management${RESET}"
   echo "  php:install     Install a supported PHP version on-demand"
@@ -480,6 +508,8 @@ _usage() {
   echo "  ssl:autorenew   Toggle per-site Let's Encrypt auto-renew (--action on|off|status)"
   echo "  ssl:check       Print machine-readable SSL status (JSON) for a site"
   echo "  ssl:use         Switch a site to an installed cert (--type letsencrypt|custom|self-signed)"
+  echo "  panel:domain    Configure panel hostname (--action status | --set panel.example.com)"
+  echo "  panel:ssl       Manage panel TLS certificate (--action status|issue|renew)"
 
   echo -e "\n${BOLD}${BLUE}Service Management${RESET}"
   echo "  service:status  Show status of all AidiPanel services"
@@ -6837,6 +6867,725 @@ _php_info() {
 # SSL COMMANDS
 # ===========================================================================
 
+# ===========================================================================
+# PANEL DOMAIN / PANEL SSL HELPERS
+# ===========================================================================
+
+_panel_hostname_valid() {
+  local host="${1:-}" old_ifs label
+  local -a labels=()
+
+  [[ -n "$host" ]] || return 1
+  [[ "$host" == "${host,,}" ]] || return 1
+  [[ ${#host} -le 253 ]] || return 1
+  [[ "$host" == *.* ]] || return 1
+  [[ "$host" != .* && "$host" != *. ]] || return 1
+  [[ "$host" != *..* ]] || return 1
+  [[ "$host" =~ ^[a-z0-9.-]+$ ]] || return 1
+
+  old_ifs="$IFS"
+  IFS='.'
+  read -ra labels <<< "$host"
+  IFS="$old_ifs"
+
+  for label in "${labels[@]}"; do
+    [[ -n "$label" ]] || return 1
+    [[ ${#label} -le 63 ]] || return 1
+    [[ "$label" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || return 1
+  done
+
+  return 0
+}
+
+_panel_config_get() {
+  local path="$1" key="$2" default="${3:-}"
+  local line value="" found=0
+
+  [[ -f "$path" ]] || { printf '%s\n' "$default"; return 0; }
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == "${key}="* ]]; then
+      value="${line#*=}"
+      found=1
+    fi
+  done < "$path"
+
+  if [[ "$found" -eq 1 ]]; then
+    printf '%s\n' "$value"
+  else
+    printf '%s\n' "$default"
+  fi
+}
+
+_panel_config_set() {
+  local path="$1" key="$2" value="$3"
+  local dir tmp line found=0
+
+  [[ "$key" =~ ^[A-Z0-9_]+$ ]] || return 1
+  dir=$(dirname "$path")
+  mkdir -p "$dir"
+  tmp=$(mktemp "${dir}/.panel-conf.XXXXXX")
+
+  {
+    if [[ -f "$path" ]]; then
+      while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" == "${key}="* ]]; then
+          if [[ "$found" -eq 0 ]]; then
+            printf '%s=%s\n' "$key" "$value"
+            found=1
+          fi
+        else
+          printf '%s\n' "$line"
+        fi
+      done < "$path"
+    fi
+    if [[ "$found" -eq 0 ]]; then
+      printf '%s=%s\n' "$key" "$value"
+    fi
+  } > "$tmp"
+
+  if [[ -f "$path" ]]; then
+    chmod --reference="$path" "$tmp" 2>/dev/null || chmod 0640 "$tmp" 2>/dev/null || true
+    chown --reference="$path" "$tmp" 2>/dev/null || true
+  else
+    chmod 0640 "$tmp" 2>/dev/null || true
+  fi
+  mv "$tmp" "$path"
+}
+
+_panel_server_name_line() {
+  local hostname="${1:-}"
+  if [[ -n "$hostname" ]]; then
+    printf '    server_name %s _;\n' "$hostname"
+  else
+    printf '    server_name _;\n'
+  fi
+}
+
+_panel_acme_conf_render() {
+  local hostname="$1" webroot="${2:-${PANEL_ACME_WEBROOT:-/var/www/letsencrypt}}"
+  local fullchain="${3:-}" privkey="${4:-}"
+
+  # :80 — the ACME HTTP-01 challenge is always served here. Once a certificate
+  # exists, send all other traffic to HTTPS; before that, reject it.
+  printf 'server {\n    listen 80;\n    listen [::]:80;\n    server_name %s;\n\n' "$hostname"
+  printf '    location /.well-known/acme-challenge/ { root %s; }\n' "$webroot"
+  if [[ -z "$fullchain" || -z "$privkey" ]]; then
+    printf '    location / { return 404; }\n}\n'
+    return 0
+  fi
+  printf '    location = / { return 301 https://%s/login; }\n' "$hostname"
+  printf '    location / { return 301 https://%s$request_uri; }\n}\n' "$hostname"
+
+  # :443 — serve the panel itself on the bare domain (CloudPanel-style). The
+  # server_name is EXACT (no "_"), so this only answers the panel hostname; the
+  # IP / unmatched SNI and user sites are unaffected, and the :8443 vhost stays as
+  # a recovery route.
+  printf '\nserver {\n    listen 443 ssl;\n    listen [::]:443 ssl;\n    http2 on;\n    server_name %s;\n\n' "$hostname"
+  printf '    ssl_certificate %s;\n    ssl_certificate_key %s;\n' "$fullchain" "$privkey"
+  cat <<'NGINX'
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    root /opt/aidipanel/public;
+    index index.php index.html;
+
+    location ~* ^/(login|auth) {
+        limit_req zone=aidipanel_req burst=10 nodelay;
+        try_files $uri $uri/ /index.php?$args;
+    }
+    location / { try_files $uri $uri/ /index.php?$args; }
+    location ~ \.php$ {
+        try_files $uri =404;
+        fastcgi_pass unix:/run/aidipanel-fpm.sock;
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        include fastcgi_params;
+        fastcgi_read_timeout 300;
+    }
+    location ~* \.(conf|sh|env|bak|sql)$ { deny all; }
+    location ~ /\. { deny all; }
+}
+NGINX
+}
+
+_panel_vhost_rewrite_server_name() {
+  local vhost="$1" hostname="${2:-}"
+  local replacement
+  replacement=$(_panel_server_name_line "$hostname")
+  awk -v replacement="$replacement" '
+    BEGIN { changed = 0 }
+    !changed && $0 ~ /^[[:space:]]*server_name[[:space:]]+/ {
+      print replacement
+      changed = 1
+      next
+    }
+    { print }
+    END { if (!changed) exit 2 }
+  ' "$vhost"
+}
+
+# Decide whether a mainstream client would accept this certificate without a
+# warning. Covering the hostname is not enough: Let's Encrypt *staging* certs
+# chain to an untrusted test root, self-signed certs are in no trust store, and
+# expired certs are rejected outright. This is the trust signal the Settings UI
+# will surface, so it must mean "a real browser trusts it", not just "name match".
+_panel_cert_publicly_trusted() {
+  local cert_state="$1" issuer="$2" days_left="$3"
+  [[ "$cert_state" == "self-signed" ]] && return 1
+  case "$issuer" in
+    *'(STAGING)'*|*'Fake LE'*) return 1 ;;
+  esac
+  [[ -n "$days_left" ]] || return 1
+  [[ "$days_left" =~ ^-?[0-9]+$ ]] || return 1
+  (( days_left > 0 )) || return 1
+  return 0
+}
+
+# True when a certificate was issued by the Let's Encrypt *staging* environment
+# (an untrusted test root). Used to force a re-issue when switching staging<->prod,
+# because certbot otherwise sees a not-yet-due cert and silently keeps the old one.
+_panel_cert_is_staging() {
+  local cert_path="$1" issuer
+  [[ -f "$cert_path" ]] || return 1
+  issuer=$(openssl x509 -issuer -noout -in "$cert_path" 2>/dev/null || true)
+  case "$issuer" in
+    *'(STAGING)'*|*'Fake LE'*) return 0 ;;
+  esac
+  return 1
+}
+
+_panel_bare_https_active() {
+  local acme_path="$1" hostname="$2" cert_path="$3" escaped
+  [[ -n "$hostname" && -f "$acme_path" ]] || return 1
+  escaped="${hostname//./\\.}"
+  grep -Eq '^[[:space:]]*listen[[:space:]]+443[[:space:]]+ssl;' "$acme_path" || return 1
+  grep -Eq "^[[:space:]]*server_name[[:space:]]+${escaped}[[:space:]]*;" "$acme_path" || return 1
+  grep -Fq "ssl_certificate ${cert_path};" "$acme_path" || return 1
+  grep -Fq 'fastcgi_pass unix:/run/aidipanel-fpm.sock;' "$acme_path" || return 1
+  return 0
+}
+
+_panel_status_collect() {
+  local conf_path="${1:-$PANEL_CONF}" vhost_path="${2:-$PANEL_VHOST}" acme_path="${3:-$PANEL_ACME_CONF}"
+  local hostname port vhost_exists=0 server_name_ok=0 fallback_ok=0 cert_state="self-signed"
+  local cert_path="/etc/ssl/aidipanel/aidipanel.crt" expiry="" days_left="" issuer="" trusted=0 acme_conf_exists=0 bare_https_ok=0 error=""
+  local cert_from_vhost enddate expiry_epoch now_epoch
+
+  hostname=$(_panel_config_get "$conf_path" PANEL_HOSTNAME "")
+  port=$(_panel_config_get "$conf_path" PANEL_PORT "8443")
+  [[ -f "$vhost_path" ]] && vhost_exists=1 || error="missing_vhost"
+  [[ -f "$acme_path" ]] && acme_conf_exists=1
+
+  if [[ "$vhost_exists" -eq 1 ]]; then
+    if [[ -n "$hostname" ]]; then
+      grep -Eq "^[[:space:]]*server_name[[:space:]]+${hostname//./\\.}[[:space:]]+_;" "$vhost_path" \
+        && server_name_ok=1 || error="${error:-server_name_mismatch}"
+    else
+      grep -Eq '^[[:space:]]*server_name[[:space:]]+_;' "$vhost_path" \
+        && server_name_ok=1 || error="${error:-server_name_mismatch}"
+    fi
+    grep -Eq '^[[:space:]]*server_name[[:space:]].*([[:space:]]|^)_([[:space:]]*;|[[:space:]])' "$vhost_path" \
+      && fallback_ok=1 || error="${error:-missing_fallback}"
+
+    cert_from_vhost=$(awk '
+      $1 == "ssl_certificate" {
+        gsub(/;$/, "", $2)
+        print $2
+        exit
+      }
+    ' "$vhost_path")
+    [[ -n "$cert_from_vhost" ]] && cert_path="$cert_from_vhost"
+    if [[ "$cert_path" == *"/live/${hostname}/fullchain.pem" || "$cert_path" == /etc/letsencrypt/live/*/fullchain.pem ]]; then
+      cert_state="letsencrypt"
+    elif [[ "$cert_path" == /etc/ssl/aidipanel-custom/* ]]; then
+      cert_state="custom"
+    else
+      cert_state="self-signed"
+    fi
+    if [[ -n "$hostname" ]] && _panel_bare_https_active "$acme_path" "$hostname" "$cert_path"; then
+      bare_https_ok=1
+    fi
+
+    if [[ -f "$cert_path" ]]; then
+      if openssl x509 -noout -in "$cert_path" >/dev/null 2>&1; then
+        enddate=$(openssl x509 -enddate -noout -in "$cert_path" 2>/dev/null | cut -d= -f2- || true)
+        expiry="$enddate"
+        if [[ -n "$enddate" ]]; then
+          expiry_epoch=$(date -u -d "$enddate" +%s 2>/dev/null || true)
+          now_epoch=$(date -u +%s 2>/dev/null || true)
+          if [[ -n "$expiry_epoch" && -n "$now_epoch" ]]; then
+            days_left=$(( (expiry_epoch - now_epoch) / 86400 ))
+          fi
+        fi
+        issuer=$(openssl x509 -issuer -noout -in "$cert_path" 2>/dev/null | sed -E 's/^issuer=//I' || true)
+        if [[ -n "$hostname" ]] && _panel_cert_covers_hostname "$cert_path" "$hostname"; then
+          if _panel_cert_publicly_trusted "$cert_state" "$issuer" "$days_left"; then
+            if [[ "$bare_https_ok" -eq 1 ]]; then
+              trusted=1
+            else
+              error="${error:-bare_https_missing}"
+            fi
+          fi
+        elif [[ "$cert_state" == "letsencrypt" ]]; then
+          error="${error:-cert_mismatch}"
+        fi
+      else
+        error="${error:-cert_invalid}"
+      fi
+    elif [[ "$cert_state" == "letsencrypt" || "$cert_state" == "custom" ]]; then
+      error="${error:-cert_missing}"
+    fi
+  fi
+
+  printf 'hostname=%s\n' "$hostname"
+  printf 'port=%s\n' "$port"
+  printf 'vhost_exists=%s\n' "$vhost_exists"
+  printf 'server_name_ok=%s\n' "$server_name_ok"
+  printf 'fallback_ok=%s\n' "$fallback_ok"
+  printf 'cert_state=%s\n' "$cert_state"
+  printf 'cert_path=%s\n' "$cert_path"
+  printf 'expiry=%s\n' "$expiry"
+  printf 'days_left=%s\n' "$days_left"
+  printf 'issuer=%s\n' "$issuer"
+  printf 'trusted=%s\n' "$trusted"
+  printf 'acme_conf_exists=%s\n' "$acme_conf_exists"
+  printf 'bare_https_ok=%s\n' "$bare_https_ok"
+  printf 'error=%s\n' "$error"
+}
+
+_panel_cert_name_matches() {
+  local hostname="${1,,}" name base sub
+  shift
+  for name in "$@"; do
+    name="${name,,}"
+    [[ "$name" == "$hostname" ]] && return 0
+    if [[ "$name" == \*.* ]]; then
+      base="${name#\*.}"
+      if [[ "$hostname" == *".$base" ]]; then
+        sub="${hostname%.$base}"
+        [[ -n "$sub" && "$sub" != *.* ]] && return 0
+      fi
+    fi
+  done
+  return 1
+}
+
+_panel_cert_covers_hostname() {
+  local cert_path="$1" hostname="$2"
+  local cn san
+  local -a cert_names=()
+
+  cn=$(openssl x509 -in "$cert_path" -noout -subject 2>/dev/null \
+       | grep -oiE 'CN *= *[A-Za-z0-9.*_-]+' | sed -E 's/^CN *= *//I' | head -1 || true)
+  [[ -n "$cn" ]] && cert_names+=("$cn")
+  while IFS= read -r san; do
+    [[ -n "$san" ]] && cert_names+=("$san")
+  done < <(openssl x509 -in "$cert_path" -noout -ext subjectAltName 2>/dev/null \
+           | grep -oiE 'DNS:[A-Za-z0-9.*_-]+' | sed -E 's/^DNS://I' || true)
+
+  [[ ${#cert_names[@]} -gt 0 ]] || return 1
+  _panel_cert_name_matches "$hostname" "${cert_names[@]}"
+}
+
+_panel_point_vhost_cert() {
+  local vhost_path="$1" fullchain="$2" privkey="$3"
+  local hostname="${4:-}" acme_path="${5:-}" webroot="${6:-${PANEL_ACME_WEBROOT:-/var/www/letsencrypt}}"
+  local tmpdir vhost_backup acme_backup vhost_candidate acme_candidate log_path acme_existed=0
+
+  [[ -s "$fullchain" ]] || { printf 'Certificate file not found: %s\n' "$fullchain" >&2; return 1; }
+  [[ -s "$privkey" ]] || { printf 'Private key file not found: %s\n' "$privkey" >&2; return 1; }
+  [[ -f "$vhost_path" ]] || { printf 'Panel vhost not found: %s\n' "$vhost_path" >&2; return 1; }
+
+  tmpdir=$(mktemp -d)
+  vhost_backup="${tmpdir}/aidipanel-ui.conf.bak"
+  acme_backup="${tmpdir}/aidipanel-panel-acme.conf.bak"
+  vhost_candidate="${tmpdir}/aidipanel-ui.conf.new"
+  acme_candidate="${tmpdir}/aidipanel-panel-acme.conf.new"
+  log_path="${CLI_LOG:-/dev/null}"
+  cp "$vhost_path" "$vhost_backup"
+  [[ -n "$acme_path" && -f "$acme_path" ]] && { cp "$acme_path" "$acme_backup"; acme_existed=1; }
+
+  sed -E \
+    -e "s#^([[:space:]]*ssl_certificate)[[:space:]]+[^;]+;#\1 ${fullchain};#" \
+    -e "s#^([[:space:]]*ssl_certificate_key)[[:space:]]+[^;]+;#\1 ${privkey};#" \
+    "$vhost_path" > "$vhost_candidate"
+
+  grep -Eq "^[[:space:]]*ssl_certificate[[:space:]]+${fullchain//\//\\/};" "$vhost_candidate" \
+    || { rm -rf "$tmpdir"; printf 'Could not render panel certificate candidate.\n' >&2; return 1; }
+  grep -Eq "^[[:space:]]*ssl_certificate_key[[:space:]]+${privkey//\//\\/};" "$vhost_candidate" \
+    || { rm -rf "$tmpdir"; printf 'Could not render panel private-key candidate.\n' >&2; return 1; }
+
+  if [[ -n "$hostname" && -n "$acme_path" ]]; then
+    _panel_acme_conf_render "$hostname" "$webroot" "$fullchain" "$privkey" > "$acme_candidate"
+    mkdir -p "$(dirname "$acme_path")"
+    if ! cp "$acme_candidate" "$acme_path"; then
+      _panel_restore_file "$acme_backup" "$acme_path" "$acme_existed"
+      rm -rf "$tmpdir"
+      printf 'Could not update the panel ACME/HTTPS vhost; previous panel TLS files were restored.\n' >&2
+      return 1
+    fi
+  fi
+
+  if ! cp "$vhost_candidate" "$vhost_path"; then
+    if [[ -n "$acme_path" ]]; then
+      _panel_restore_file "$acme_backup" "$acme_path" "$acme_existed"
+    fi
+    rm -rf "$tmpdir"
+    printf 'Could not update the panel HTTPS vhost; previous panel TLS files were restored.\n' >&2
+    return 1
+  fi
+  if ! nginx -t >> "$log_path" 2>&1; then
+    cp "$vhost_backup" "$vhost_path"
+    if [[ -n "$acme_path" ]]; then
+      _panel_restore_file "$acme_backup" "$acme_path" "$acme_existed"
+    fi
+    nginx -t >> "$log_path" 2>&1 || true
+    systemctl reload nginx >> "$log_path" 2>&1 || true
+    rm -rf "$tmpdir"
+    printf 'Nginx rejected the panel certificate update; previous panel TLS files were restored.\n' >&2
+    return 1
+  fi
+
+  if ! systemctl reload nginx >> "$log_path" 2>&1; then
+    cp "$vhost_backup" "$vhost_path"
+    if [[ -n "$acme_path" ]]; then
+      _panel_restore_file "$acme_backup" "$acme_path" "$acme_existed"
+    fi
+    nginx -t >> "$log_path" 2>&1 || true
+    systemctl reload nginx >> "$log_path" 2>&1 || true
+    rm -rf "$tmpdir"
+    printf 'Nginx reload failed after panel certificate update; previous panel TLS files were restored.\n' >&2
+    return 1
+  fi
+
+  rm -rf "$tmpdir"
+  return 0
+}
+
+_panel_restore_file() {
+  local backup="$1" target="$2" existed="$3"
+  if [[ "$existed" -eq 1 ]]; then
+    cp "$backup" "$target"
+  else
+    rm -f "$target"
+  fi
+}
+
+_panel_domain_conflict_check() {
+  local hostname="$1" panel_vhost="$2" enabled_dir="${3:-}" available_dir="${4:-}"
+  local escaped conf resolved panel_resolved
+
+  escaped="${hostname//./\\.}"
+  panel_resolved=$(readlink -f "$panel_vhost" 2>/dev/null || printf '%s\n' "$panel_vhost")
+
+  for conf in "${enabled_dir}"/*.conf "${available_dir}"/*.conf; do
+    [[ -e "$conf" ]] || continue
+    resolved=$(readlink -f "$conf" 2>/dev/null || printf '%s\n' "$conf")
+    [[ "$resolved" == "$panel_resolved" ]] && continue
+    [[ "$(basename "$resolved")" == "$(basename "$panel_vhost")" ]] && continue
+    if grep -Eq "^[[:space:]]*server_name[[:space:]].*([[:space:]]|^)${escaped}([[:space:];]|$)" "$conf"; then
+      printf 'Panel hostname is already used by: %s\n' "$conf" >&2
+      return 1
+    fi
+  done
+
+  return 0
+}
+
+_panel_ssl_issue() {
+  local email="${1:-}" staging="${2:-}" conf_path="${3:-$PANEL_CONF}"
+  local vhost_path="${4:-$PANEL_VHOST}" acme_path="${5:-$PANEL_ACME_CONF}"
+  local enabled_dir="${6:-${NGINX_ENABLED_DIR:-}}" live_base="${7:-/etc/letsencrypt/live}"
+  local webroot_arg="${8:-}"
+  local hostname webroot fullchain privkey log_path
+  local -a certbot_args=()
+
+  hostname=$(_panel_config_get "$conf_path" PANEL_HOSTNAME "")
+  _panel_hostname_valid "$hostname" || { printf 'Set a valid panel hostname first.\n' >&2; return 1; }
+  command -v certbot >/dev/null 2>&1 || { printf 'Certbot is not installed.\n' >&2; return 1; }
+  getent hosts "$hostname" >/dev/null 2>&1 \
+    || { printf 'Panel hostname does not resolve in DNS: %s\n' "$hostname" >&2; return 1; }
+  _progress 10 panel_ssl_preflight "Checking DNS and panel configuration"
+
+  webroot="${webroot_arg:-${PANEL_ACME_WEBROOT:-/var/www/letsencrypt}}"
+  log_path="${CLI_LOG:-/dev/null}"
+  mkdir -p "$webroot"
+
+  _panel_domain_set "$hostname" "$conf_path" "$vhost_path" "$acme_path" "$enabled_dir" "" \
+    || return 1
+
+  printf 'HTTP-01 must reach this server on TCP 80; users need TCP 8443 open for the panel.\n' >&2
+  printf 'If Cloudflare proxy mode is enabled, the HTTP-01 challenge path must still reach the origin.\n' >&2
+
+  certbot_args=(
+    certbot certonly
+    --webroot
+    -w "$webroot"
+    --non-interactive
+    --agree-tos
+    --cert-name "$hostname"
+    -d "$hostname"
+  )
+  if [[ -n "$email" ]]; then
+    certbot_args+=(--email "$email")
+  else
+    certbot_args+=(--register-unsafely-without-email)
+  fi
+  [[ -n "$staging" ]] && certbot_args+=(--test-cert)
+
+  # Renewal must reload nginx so the panel serves the fresh cert (the daily certbot
+  # cron renews via webroot but cannot reload on its own); store it on the lineage.
+  certbot_args+=(--deploy-hook "systemctl reload nginx")
+
+  fullchain="${live_base}/${hostname}/fullchain.pem"
+  privkey="${live_base}/${hostname}/privkey.pem"
+
+  # A certificate for this hostname may already exist in the *other* ACME
+  # environment. certbot would call it "not yet due for renewal" and keep it while
+  # still exiting 0, so a staging->production (or reverse) switch silently no-ops.
+  # Force the re-issue in that case so the requested environment takes effect.
+  if [[ -f "$fullchain" ]]; then
+    if _panel_cert_is_staging "$fullchain"; then
+      [[ -z "$staging" ]] && certbot_args+=(--force-renewal)
+    else
+      [[ -n "$staging" ]] && certbot_args+=(--force-renewal)
+    fi
+  fi
+
+  _progress 40 panel_ssl_request "Requesting the Let's Encrypt certificate"
+  "${certbot_args[@]}" >> "$log_path" 2>&1 \
+    || { printf 'Certbot could not issue the panel certificate.\n' >&2; return 1; }
+  [[ -s "$fullchain" ]] || { printf 'Issued certificate file is missing: %s\n' "$fullchain" >&2; return 1; }
+  [[ -s "$privkey" ]] || { printf 'Issued private key file is missing: %s\n' "$privkey" >&2; return 1; }
+  openssl x509 -noout -in "$fullchain" >/dev/null 2>&1 \
+    || { printf 'Issued certificate is not valid PEM.\n' >&2; return 1; }
+  openssl pkey -noout -in "$privkey" >/dev/null 2>&1 \
+    || { printf 'Issued private key is not valid PEM.\n' >&2; return 1; }
+  _panel_cert_covers_hostname "$fullchain" "$hostname" \
+    || { printf 'Issued certificate does not cover %s.\n' "$hostname" >&2; return 1; }
+  if [[ -z "$staging" ]] && _panel_cert_is_staging "$fullchain"; then
+    printf 'Production issuance requested but the active certificate is still a staging certificate.\n' >&2
+    return 1
+  fi
+
+  _progress 80 panel_ssl_install "Installing the certificate"
+  chmod 755 "$live_base" "$(dirname "$live_base")/archive" 2>/dev/null || true
+  _panel_point_vhost_cert "$vhost_path" "$fullchain" "$privkey" "$hostname" "$acme_path" "$webroot" || return 1
+  _progress 100 "done" "Panel certificate installed"
+}
+
+_panel_ssl_renew() {
+  local conf_path="${1:-$PANEL_CONF}" vhost_path="${2:-$PANEL_VHOST}" acme_path="${3:-$PANEL_ACME_CONF}"
+  local live_base="${4:-/etc/letsencrypt/live}" webroot="${5:-${PANEL_ACME_WEBROOT:-/var/www/letsencrypt}}"
+  local hostname fullchain privkey log_path
+
+  hostname=$(_panel_config_get "$conf_path" PANEL_HOSTNAME "")
+  _panel_hostname_valid "$hostname" || { printf 'Set a valid panel hostname first.\n' >&2; return 1; }
+  command -v certbot >/dev/null 2>&1 || { printf 'Certbot is not installed.\n' >&2; return 1; }
+  log_path="${CLI_LOG:-/dev/null}"
+  fullchain="${live_base}/${hostname}/fullchain.pem"
+  privkey="${live_base}/${hostname}/privkey.pem"
+
+  certbot renew --cert-name "$hostname" --non-interactive >> "$log_path" 2>&1 \
+    || { printf 'Certbot could not renew the panel certificate.\n' >&2; return 1; }
+  _panel_point_vhost_cert "$vhost_path" "$fullchain" "$privkey" "$hostname" "$acme_path" "$webroot" || return 1
+}
+
+_panel_domain_set() {
+  local hostname="$1" conf_path="${2:-$PANEL_CONF}" vhost_path="${3:-$PANEL_VHOST}"
+  local acme_path="${4:-$PANEL_ACME_CONF}" enabled_dir="${5:-${NGINX_ENABLED_DIR:-}}"
+  local available_dir="${6:-${NGINX_CONF_DIR:-}}"
+  local tmpdir conf_bak vhost_bak acme_bak conf_existed=0 vhost_existed=0 acme_existed=0
+  local vhost_candidate acme_candidate log_path acme_webroot
+
+  _panel_hostname_valid "$hostname" || { printf 'Invalid panel hostname: %s\n' "$hostname" >&2; return 1; }
+  [[ -f "$conf_path" ]] || { printf 'Panel config not found: %s\n' "$conf_path" >&2; return 1; }
+  [[ -f "$vhost_path" ]] || { printf 'Panel vhost not found: %s\n' "$vhost_path" >&2; return 1; }
+  _panel_domain_conflict_check "$hostname" "$vhost_path" "$enabled_dir" "$available_dir" || return 1
+
+  tmpdir=$(mktemp -d)
+  conf_bak="${tmpdir}/panel.conf.bak"
+  vhost_bak="${tmpdir}/aidipanel-ui.conf.bak"
+  acme_bak="${tmpdir}/aidipanel-panel-acme.conf.bak"
+  vhost_candidate="${tmpdir}/aidipanel-ui.conf.new"
+  acme_candidate="${tmpdir}/aidipanel-panel-acme.conf.new"
+  log_path="${CLI_LOG:-/dev/null}"
+  acme_webroot="${PANEL_ACME_WEBROOT:-/var/www/letsencrypt}"
+
+  [[ -f "$conf_path" ]] && { cp "$conf_path" "$conf_bak"; conf_existed=1; }
+  [[ -f "$vhost_path" ]] && { cp "$vhost_path" "$vhost_bak"; vhost_existed=1; }
+  [[ -f "$acme_path" ]] && { cp "$acme_path" "$acme_bak"; acme_existed=1; }
+
+  if ! _panel_vhost_rewrite_server_name "$vhost_path" "$hostname" > "$vhost_candidate"; then
+    rm -rf "$tmpdir"
+    printf 'Could not render panel vhost candidate.\n' >&2
+    return 1
+  fi
+  _panel_acme_conf_render "$hostname" "$acme_webroot" > "$acme_candidate"
+
+  if ! _panel_config_set "$conf_path" PANEL_HOSTNAME "$hostname"; then
+    rm -rf "$tmpdir"
+    printf 'Could not write panel config.\n' >&2
+    return 1
+  fi
+
+  mkdir -p "$(dirname "$acme_path")"
+  cp "$vhost_candidate" "$vhost_path"
+  cp "$acme_candidate" "$acme_path"
+
+  if ! nginx -t >> "$log_path" 2>&1; then
+    _panel_restore_file "$conf_bak" "$conf_path" "$conf_existed"
+    _panel_restore_file "$vhost_bak" "$vhost_path" "$vhost_existed"
+    _panel_restore_file "$acme_bak" "$acme_path" "$acme_existed"
+    nginx -t >> "$log_path" 2>&1 || true
+    systemctl reload nginx >> "$log_path" 2>&1 || true
+    rm -rf "$tmpdir"
+    printf 'Nginx rejected the panel hostname update; previous files were restored.\n' >&2
+    return 1
+  fi
+
+  if ! systemctl reload nginx >> "$log_path" 2>&1; then
+    _panel_restore_file "$conf_bak" "$conf_path" "$conf_existed"
+    _panel_restore_file "$vhost_bak" "$vhost_path" "$vhost_existed"
+    _panel_restore_file "$acme_bak" "$acme_path" "$acme_existed"
+    nginx -t >> "$log_path" 2>&1 || true
+    systemctl reload nginx >> "$log_path" 2>&1 || true
+    rm -rf "$tmpdir"
+    printf 'Nginx reload failed after panel hostname update; previous files were restored.\n' >&2
+    return 1
+  fi
+
+  rm -rf "$tmpdir"
+  return 0
+}
+
+_panel_domain_clear() {
+  local conf_path="${1:-$PANEL_CONF}" vhost_path="${2:-$PANEL_VHOST}" acme_path="${3:-$PANEL_ACME_CONF}"
+  local cert_path="${4:-/etc/ssl/aidipanel/aidipanel.crt}" key_path="${5:-/etc/ssl/aidipanel/aidipanel.key}"
+  local tmpdir conf_bak vhost_bak acme_bak conf_existed=0 vhost_existed=0 acme_existed=0
+  local named_candidate vhost_candidate log_path
+
+  [[ -f "$conf_path" ]] || { printf 'Panel config not found: %s\n' "$conf_path" >&2; return 1; }
+  [[ -f "$vhost_path" ]] || { printf 'Panel vhost not found: %s\n' "$vhost_path" >&2; return 1; }
+
+  tmpdir=$(mktemp -d)
+  conf_bak="${tmpdir}/panel.conf.bak"
+  vhost_bak="${tmpdir}/aidipanel-ui.conf.bak"
+  acme_bak="${tmpdir}/aidipanel-panel-acme.conf.bak"
+  named_candidate="${tmpdir}/aidipanel-ui.named.conf"
+  vhost_candidate="${tmpdir}/aidipanel-ui.conf.new"
+  log_path="${CLI_LOG:-/dev/null}"
+
+  [[ -f "$conf_path" ]] && { cp "$conf_path" "$conf_bak"; conf_existed=1; }
+  [[ -f "$vhost_path" ]] && { cp "$vhost_path" "$vhost_bak"; vhost_existed=1; }
+  [[ -f "$acme_path" ]] && { cp "$acme_path" "$acme_bak"; acme_existed=1; }
+
+  if ! _panel_vhost_rewrite_server_name "$vhost_path" "" > "$named_candidate"; then
+    rm -rf "$tmpdir"
+    printf 'Could not render panel vhost candidate.\n' >&2
+    return 1
+  fi
+  sed -E \
+    -e "s#^([[:space:]]*ssl_certificate)[[:space:]]+[^;]+;#\1 ${cert_path};#" \
+    -e "s#^([[:space:]]*ssl_certificate_key)[[:space:]]+[^;]+;#\1 ${key_path};#" \
+    "$named_candidate" > "$vhost_candidate"
+
+  if ! _panel_config_set "$conf_path" PANEL_HOSTNAME ""; then
+    _panel_restore_file "$conf_bak" "$conf_path" "$conf_existed"
+    rm -rf "$tmpdir"
+    printf 'Could not write panel config.\n' >&2
+    return 1
+  fi
+  cp "$vhost_candidate" "$vhost_path"
+  rm -f "$acme_path"
+
+  if ! nginx -t >> "$log_path" 2>&1; then
+    _panel_restore_file "$conf_bak" "$conf_path" "$conf_existed"
+    _panel_restore_file "$vhost_bak" "$vhost_path" "$vhost_existed"
+    _panel_restore_file "$acme_bak" "$acme_path" "$acme_existed"
+    nginx -t >> "$log_path" 2>&1 || true
+    systemctl reload nginx >> "$log_path" 2>&1 || true
+    rm -rf "$tmpdir"
+    printf 'Nginx rejected the panel hostname clear; previous files were restored.\n' >&2
+    return 1
+  fi
+
+  if ! systemctl reload nginx >> "$log_path" 2>&1; then
+    _panel_restore_file "$conf_bak" "$conf_path" "$conf_existed"
+    _panel_restore_file "$vhost_bak" "$vhost_path" "$vhost_existed"
+    _panel_restore_file "$acme_bak" "$acme_path" "$acme_existed"
+    nginx -t >> "$log_path" 2>&1 || true
+    systemctl reload nginx >> "$log_path" 2>&1 || true
+    rm -rf "$tmpdir"
+    printf 'Nginx reload failed after panel hostname clear; previous files were restored.\n' >&2
+    return 1
+  fi
+
+  rm -rf "$tmpdir"
+  return 0
+}
+
+_panel_domain() {
+  _parse_opts "$@"
+  local action hostname
+  action=$(_opt "action" "status")
+  hostname=$(_opt "set" "")
+
+  if [[ -n "$hostname" ]]; then
+    action="set"
+  fi
+
+  case "$action" in
+    status)
+      _panel_status_collect
+      ;;
+    set)
+      _require_root "panel:domain"
+      hostname="${hostname,,}"
+      _panel_domain_set "$hostname" \
+        || die "Panel hostname was not changed."
+      ok "Panel hostname set: ${hostname}"
+      ;;
+    clear)
+      _require_root "panel:domain"
+      _panel_domain_clear \
+        || die "Panel hostname was not cleared."
+      ok "Panel hostname cleared."
+      ;;
+    *)
+      die "Usage: panel:domain --action status|clear OR panel:domain --set panel.example.com"
+      ;;
+  esac
+}
+
+_panel_ssl() {
+  _parse_opts "$@"
+  local action email staging
+  action=$(_opt "action" "status")
+
+  case "$action" in
+    status)
+      _panel_status_collect
+      ;;
+    issue)
+      _require_root "panel:ssl"
+      email=$(_opt "email" "")
+      staging=$(_opt "staging" "")
+      _panel_ssl_issue "$email" "$staging" \
+        || die "Panel SSL certificate was not issued."
+      ok "Panel SSL certificate installed."
+      ;;
+    renew)
+      _require_root "panel:ssl"
+      _panel_ssl_renew \
+        || die "Panel SSL certificate was not renewed."
+      ok "Panel SSL certificate renewed."
+      ;;
+    *)
+      die "Usage: panel:ssl --action status|issue|renew"
+      ;;
+  esac
+}
+
 # Does any of the given cert names cover $domain? Exact match or wildcard
 # (*.example.com matches a single-label subdomain). Case-insensitive.
 _cert_covers_domain() {
@@ -8619,6 +9368,7 @@ main() {
     db:pma-credentials) _db_pma_credentials "$@" ;;
     db:pma-install) _db_pma_install "$@" ;;
     db:backup)      _db_backup "$@" ;;
+    db:server-info) _db_server_info "$@" ;;
 
     # PHP
     php:install)    _php_install "$@" ;;
@@ -8637,6 +9387,8 @@ main() {
     ssl:autorenew)  _ssl_autorenew "$@" ;;
     ssl:check)      _ssl_check "$@" ;;
     ssl:use)        _ssl_use "$@" ;;
+    panel:domain)   _panel_domain "$@" ;;
+    panel:ssl)      _panel_ssl "$@" ;;
 
     # Service
     service:status)  _service_status "$@" ;;

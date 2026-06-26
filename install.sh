@@ -1258,6 +1258,7 @@ _create_panel_scaffold() {
 
 PANEL_VERSION=${PANEL_VERSION}
 PANEL_PORT=${PANEL_PORT}
+PANEL_HOSTNAME=
 PANEL_DIR=${PANEL_DIR}
 SITES_DIR=${SITES_DIR}
 NGINX_CACHE_DIR=${NGINX_CACHE_DIR}
@@ -1712,10 +1713,44 @@ case "$cmd" in
         ;;
     esac
     ;;
+  panel:domain)
+    if [[ "$#" -eq 1 ]]; then
+      :
+    elif [[ "$#" -eq 3 && "${2:-}" == "--action" && "${3:-}" =~ ^(status|clear)$ ]]; then
+      :
+    elif [[ "$#" -eq 3 && "${2:-}" == "--set" && "${3:-}" == *.* \
+          && "${3:-}" =~ ^[a-z0-9][a-z0-9.-]*[a-z0-9]$ \
+          && "${3:-}" != *..* ]]; then
+      :
+    else
+      echo "AidiPanel web command not allowed: panel:domain needs status, clear, or --set <hostname>" >&2
+      exit 126
+    fi
+    ;;
+  panel:ssl)
+    panel_ssl_count="$#"
+    panel_ssl_args=("$@")
+    if [[ "$panel_ssl_count" -gt 1 && "${panel_ssl_args[$((panel_ssl_count - 1))]}" == "--progress" ]]; then
+      panel_ssl_count=$((panel_ssl_count - 1))
+    fi
+    if [[ "$panel_ssl_count" -eq 1 ]]; then
+      :
+    elif [[ "$panel_ssl_count" -eq 3 && "${panel_ssl_args[1]}" == "--action" && "${panel_ssl_args[2]}" == "status" ]]; then
+      :
+    elif [[ "$panel_ssl_count" -eq 3 && "${panel_ssl_args[1]}" == "--action" && "${panel_ssl_args[2]}" == "issue" ]]; then
+      :
+    elif [[ "$panel_ssl_count" -eq 5 && "${panel_ssl_args[1]}" == "--action" && "${panel_ssl_args[2]}" == "issue" \
+          && "${panel_ssl_args[3]}" == "--email" && "${panel_ssl_args[4]}" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]; then
+      :
+    else
+      echo "AidiPanel web command not allowed: panel:ssl supports status or issue only" >&2
+      exit 126
+    fi
+    ;;
   site:add|site:delete|site:list|vhost:save|\
   cache:page|cache:redis|cache:zone|cache:status|cache:purge|cache:enable|cache:disable|\
   cache:config|cache:redis-enable|cache:redis-disable|cache:redis-flush|cache:opcache-restart|\
-  db:add|db:delete|db:list|db:users|db:user-add|db:user-edit|db:user-delete|db:pma-install|db:pma-credentials|db:backup|\
+  db:add|db:delete|db:list|db:users|db:user-add|db:user-edit|db:user-delete|db:pma-install|db:pma-credentials|db:backup|db:server-info|\
   php:list|php:version|php:restart|php:install|\
   ssl:install|ssl:renew|ssl:status|ssl:import|\
   ssl:force-https|ssl:hsts|ssl:autorenew|ssl:check|ssl:use|\
@@ -1840,7 +1875,7 @@ SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
 # Renew Let's Encrypt certificates daily at 2:30 AM
-30 2 * * * root certbot renew --quiet --nginx >> /var/log/aidipanel-certbot.log 2>&1
+30 2 * * * root certbot renew --quiet >> /var/log/aidipanel-certbot.log 2>&1
 
 # Purge FastCGI cache older than 1 day
 0 4 * * * root find /var/cache/nginx/fastcgi -type f -atime +1 -delete >> /var/log/aidipanel-install.log 2>&1

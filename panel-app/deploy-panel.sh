@@ -186,10 +186,44 @@ case "$cmd" in
         ;;
     esac
     ;;
+  panel:domain)
+    if [[ "$#" -eq 1 ]]; then
+      :
+    elif [[ "$#" -eq 3 && "${2:-}" == "--action" && "${3:-}" =~ ^(status|clear)$ ]]; then
+      :
+    elif [[ "$#" -eq 3 && "${2:-}" == "--set" && "${3:-}" == *.* \
+          && "${3:-}" =~ ^[a-z0-9][a-z0-9.-]*[a-z0-9]$ \
+          && "${3:-}" != *..* ]]; then
+      :
+    else
+      echo "AidiPanel web command not allowed: panel:domain needs status, clear, or --set <hostname>" >&2
+      exit 126
+    fi
+    ;;
+  panel:ssl)
+    panel_ssl_count="$#"
+    panel_ssl_args=("$@")
+    if [[ "$panel_ssl_count" -gt 1 && "${panel_ssl_args[$((panel_ssl_count - 1))]}" == "--progress" ]]; then
+      panel_ssl_count=$((panel_ssl_count - 1))
+    fi
+    if [[ "$panel_ssl_count" -eq 1 ]]; then
+      :
+    elif [[ "$panel_ssl_count" -eq 3 && "${panel_ssl_args[1]}" == "--action" && "${panel_ssl_args[2]}" == "status" ]]; then
+      :
+    elif [[ "$panel_ssl_count" -eq 3 && "${panel_ssl_args[1]}" == "--action" && "${panel_ssl_args[2]}" == "issue" ]]; then
+      :
+    elif [[ "$panel_ssl_count" -eq 5 && "${panel_ssl_args[1]}" == "--action" && "${panel_ssl_args[2]}" == "issue" \
+          && "${panel_ssl_args[3]}" == "--email" && "${panel_ssl_args[4]}" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]; then
+      :
+    else
+      echo "AidiPanel web command not allowed: panel:ssl supports status or issue only" >&2
+      exit 126
+    fi
+    ;;
   site:add|site:delete|site:list|vhost:save|\
   cache:page|cache:redis|cache:zone|cache:status|cache:purge|cache:enable|cache:disable|\
   cache:config|cache:redis-enable|cache:redis-disable|cache:redis-flush|cache:opcache-restart|\
-  db:add|db:delete|db:list|db:users|db:user-add|db:user-edit|db:user-delete|db:pma-install|db:pma-credentials|db:backup|\
+  db:add|db:delete|db:list|db:users|db:user-add|db:user-edit|db:user-delete|db:pma-install|db:pma-credentials|db:backup|db:server-info|\
   php:list|php:version|php:restart|php:install|\
   ssl:install|ssl:renew|ssl:status|ssl:import|\
   ssl:force-https|ssl:hsts|ssl:autorenew|ssl:check|ssl:use|\
@@ -292,11 +326,18 @@ SERVER_IP=$(ip route get 8.8.8.8 2>/dev/null \
     || echo "<server-ip>")
 PANEL_PORT=$(grep '^PANEL_PORT=' "${PANEL_DIR}/config/panel.conf" 2>/dev/null \
     | cut -d= -f2 || echo "8443")
+PANEL_HOSTNAME=$(grep '^PANEL_HOSTNAME=' "${PANEL_DIR}/config/panel.conf" 2>/dev/null \
+    | tail -1 | cut -d= -f2- || true)
 
 echo ""
 echo -e "  ${BOLD}${GREEN}AidiPanel v1.2.0-rc1 deployed!${RESET}"
 echo ""
-echo -e "  Panel URL  : https://${SERVER_IP}:${PANEL_PORT}"
+if [[ -n "$PANEL_HOSTNAME" ]]; then
+  echo -e "  Panel URL  : https://${PANEL_HOSTNAME}"
+  echo -e "  Recovery   : https://${SERVER_IP}:${PANEL_PORT}"
+else
+  echo -e "  Panel URL  : https://${SERVER_IP}:${PANEL_PORT}"
+fi
 echo -e "  Login      : admin"
 echo -e "  ${BOLD}${RED}Password   : ${PANEL_ADMIN_PASS}${RESET}  ← SAVE THIS NOW"
 echo ""
