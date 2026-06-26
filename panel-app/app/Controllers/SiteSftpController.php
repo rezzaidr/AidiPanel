@@ -16,7 +16,20 @@ class SiteSftpController extends BaseController
     public function status(array $params = []): never
     {
         $domain = $this->site($params);
-        $this->reply(run_cli('sftp:status', ['--domain', $domain]));
+        $r = run_cli('sftp:status', ['--domain', $domain]);
+        if ($r['success']) {
+            $data = json_decode((string) $r['output'], true);
+            if (is_array($data)) {
+                // Show the public IPv4 (same source as the header/dashboard) rather
+                // than the CLI's first NIC address: VPC/NAT hosts list a private
+                // 10.x/192.168.x first, and on NAT clouds only this helper's external
+                // echo can resolve the reachable IP. Falls back to the CLI host.
+                $ip = server_public_ip();
+                if ($ip !== '') { $data['host'] = $ip; }
+                $this->json(['success' => true, 'data' => $data]);
+            }
+        }
+        $this->reply($r);
     }
 
     /** POST enable — provision the sshd block + chroot, add the user to the group. */

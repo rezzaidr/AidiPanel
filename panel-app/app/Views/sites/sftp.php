@@ -57,7 +57,7 @@ $sftpReady = !empty($site['site_user']);
           <div class="min-w-0">
             <p class="text-[10px] uppercase tracking-wide text-zinc-400"><?= e($cLabel) ?></p>
             <?php if ($cCopy): ?>
-            <button type="button" class="group inline-flex max-w-full items-center gap-1.5 text-left text-[13px] mono text-zinc-700 hover:text-indigo-600" @click="copy(String(<?= $cExpr ?>))" title="<?= e('Copy ' . $cLabel) ?>">
+            <button type="button" class="group inline-flex max-w-full items-center gap-1.5 text-left text-[13px] mono text-zinc-700 hover:text-indigo-600" @click="copy(String(<?= $cExpr ?>), $event)" title="<?= e('Copy ' . $cLabel) ?>">
               <span class="truncate min-w-0" x-text="<?= $cExpr ?>"></span>
               <?= icon('copy', 'text-[11px] text-zinc-300 group-hover:text-indigo-400 shrink-0') ?>
             </button>
@@ -87,7 +87,7 @@ $sftpReady = !empty($site['site_user']);
               <p class="text-[10px] uppercase tracking-wide text-amber-700"><?= e(t('site.sftp.pw_show_once')) ?></p>
               <code class="text-[13px] mono text-amber-900 break-all" x-text="generated"></code>
             </div>
-            <button type="button" class="btn btn-ghost btn-sm shrink-0" @click="copy(generated)"><?= icon('copy', 'text-sm') ?></button>
+            <button type="button" class="btn btn-ghost btn-sm shrink-0" @click="copy(generated, $event)"><?= icon('copy', 'text-sm') ?></button>
           </div>
         </template>
         <div class="flex flex-wrap gap-2">
@@ -241,9 +241,19 @@ $sftpReady = !empty($site['site_user']);
         const a = new Uint32Array(n); (window.crypto || window.msCrypto).getRandomValues(a);
         let s = ''; for (let i = 0; i < n; i++) s += c[a[i] % c.length]; return s;
       },
-      copy(t) {
+      copy(t, ev) {
         if (!t) return;
-        const done = () => window.AidiToast('success', 'Copied.');
+        // Match the dashboard / top-bar copy pattern: flip the clicked button's icon
+        // to a check for a moment (no toast).
+        const btn = ev && ev.currentTarget ? ev.currentTarget : null;
+        const done = () => {
+          if (!btn) return;
+          const ic = btn.querySelector('svg');
+          if (!ic) return;
+          const prev = ic.outerHTML;
+          ic.outerHTML = window.AidiIcons.copyDone;
+          setTimeout(() => { const cur = btn.querySelector('svg'); if (cur) cur.outerHTML = prev; }, 1500);
+        };
         if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(t).then(done).catch(() => {}); return; }
         try { const e = document.createElement('textarea'); e.value = t; document.body.appendChild(e); e.select(); document.execCommand('copy'); document.body.removeChild(e); done(); } catch (_) {}
       },
