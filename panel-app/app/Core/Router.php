@@ -125,6 +125,10 @@ class Router
             '/php/restart',
             // Global cache op: restarts a PHP version's OPcache system-wide (reads 'php', not a domain):
             '/cache/opcache-restart',
+            // Raw server-level CLI bridge (site:list / db:list / system:info etc.) — admin only.
+            // The demo viewer still reaches it: the demo POST guard exempts /api/cli, and
+            // canAccessAdminArea() allows demo_mode + viewer. No panel UI calls this.
+            '/api/cli',
         ];
         if (in_array($routePath, $adminArea, true)) {
             if (!\Core\Access::canAccessAdminArea()) {
@@ -149,8 +153,13 @@ class Router
             return;
         }
 
-        // 5. Per-site cache ops — domain travels in the request body, not the path.
-        if (str_starts_with($routePath, '/cache/')) {
+        // 5. Per-site cache/ssl ops — the domain travels in the request (POST body or
+        // GET query), not the path. Covers the POST /cache/* actions AND the GET
+        // /api/cache/* + /api/ssl/check reads (which carry ?domain=), so a client can
+        // only read cache/SSL state for sites they are assigned to.
+        if (str_starts_with($routePath, '/cache/')
+            || str_starts_with($routePath, '/api/cache/')
+            || $routePath === '/api/ssl/check') {
             $domain = (string) ($this->request->post('domain') ?? $this->request->get('domain') ?? '');
             if ($domain === '' || !\Core\Access::canManageSite($domain)) {
                 $this->deny(404, 'Not found.');

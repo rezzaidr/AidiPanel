@@ -242,7 +242,19 @@ class DashboardController extends BaseController
 
     private function getTopSites(): array
     {
-        $sites = $this->db->rows('SELECT * FROM sites ORDER BY created_at DESC LIMIT 5');
+        // Scope to the signed-in user (admin/manager/viewer see all; a client sees
+        // only assigned sites; a client with none sees nothing) — same rule as the
+        // /sites list, so the dashboard never leaks other tenants' sites.
+        $ids = \Core\Access::visibleSiteIds();
+        if ($ids === []) {
+            return [];
+        }
+        if ($ids === null) {
+            $sites = $this->db->rows('SELECT * FROM sites ORDER BY created_at DESC LIMIT 5');
+        } else {
+            $place = implode(',', array_fill(0, count($ids), '?'));
+            $sites = $this->db->rows("SELECT * FROM sites WHERE id IN ({$place}) ORDER BY created_at DESC LIMIT 5", $ids);
+        }
         foreach ($sites as &$site) {
             $logFile = '/var/log/nginx/' . $site['domain'] . '-access.log';
             $site['req_today'] = 0;

@@ -42,7 +42,9 @@ class Access
     /** Site IDs this user may see. null = all (admin/manager); a list = client assignments. */
     public static function visibleSiteIds(): ?array
     {
-        if (Auth::isAdmin() || Auth::isManager()) {
+        // admin/manager see every site. The public demo viewer (role 'viewer') also
+        // sees all sites (read-only — the Router demo guard blocks every write).
+        if (Auth::isAdmin() || Auth::isManager() || (demo_mode() && Auth::role() === 'viewer')) {
             return null;
         }
         $uid = (int) (Auth::user()['id'] ?? 0);
@@ -59,7 +61,7 @@ class Access
     /** May this user manage the given site (by domain)? Admin/manager always; client iff assigned. */
     public static function canManageSite(string $domain): bool
     {
-        if (Auth::isAdmin() || Auth::isManager()) {
+        if (Auth::isAdmin() || Auth::isManager() || (demo_mode() && Auth::role() === 'viewer')) {
             return true;
         }
         $ids = self::visibleSiteIds();
