@@ -230,6 +230,10 @@ summary:focus-visible,
    — app.css loads after tailwind.css, so bump specificity to keep room for the
    absolute search icon (otherwise the icon overlaps the placeholder text). */
 .inp.pl-9 { padding-left: 2.25rem; }
+/* Trailing-icon field (e.g. the show/hide eye on a password input): .inp's padding
+   shorthand would otherwise override Tailwind's pr-10 (app.css loads after tailwind),
+   so the icon would sit on the text. Bump specificity, same as .inp.pl-9. */
+.inp.pr-10 { padding-right: 2.5rem; }
 .inp:focus       { border-color: var(--ink); box-shadow: 0 0 0 2px var(--ink-pale); }
 .inp::placeholder{ color: var(--text-muted); }
 .inp-soon        { background: var(--surface-2); border-style: dashed; color: var(--text-muted); cursor: not-allowed; }

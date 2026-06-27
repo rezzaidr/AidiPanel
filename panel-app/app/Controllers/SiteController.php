@@ -9,7 +9,19 @@ class SiteController extends BaseController
         // Sync: add to the DB if present in Nginx but not yet in the DB
         $this->syncSitesFromFilesystem();
 
-        $sites = $this->db->rows('SELECT * FROM sites ORDER BY created_at DESC');
+        // Scope: admin/manager see all sites; a client sees only assigned sites.
+        $ids = \Core\Access::visibleSiteIds();
+        if ($ids === null) {
+            $sites = $this->db->rows('SELECT * FROM sites ORDER BY created_at DESC');
+        } elseif ($ids === []) {
+            $sites = [];
+        } else {
+            $place = implode(',', array_fill(0, count($ids), '?'));
+            $sites = $this->db->rows(
+                "SELECT * FROM sites WHERE id IN ({$place}) ORDER BY created_at DESC",
+                $ids
+            );
+        }
         $this->view('sites/index', compact('sites'));
     }
 

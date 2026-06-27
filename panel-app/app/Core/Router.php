@@ -79,9 +79,8 @@ class Router
                 AuthMiddleware::handle();
             }
 
-            if ($this->requiresAdmin($method, $routePath)) {
-                $this->enforceAdmin();
-            }
+            // Authorization (roles + per-site access). Replaces the old binary requiresAdmin.
+            $this->authorize($method, $routePath, $params);
 
             // CSRF check for POST requests
             if ($method === 'POST') {
@@ -95,35 +94,90 @@ class Router
         abort(404, 'Page not found.');
     }
 
-    private function requiresAdmin(string $method, string $routePath): bool
+    /**
+     * Central authorization for the matched route. Called after auth, before CSRF.
+     * One place classifies every route: admin-area (admin only), self-service
+     * (any user), /sites/add + /sites/{domain}/delete (admin+manager), other
+     * /sites/{domain}/* (canManageSite), /cache/* (per-site, domain in the body).
+     * Manager/client cannot reach the admin area; clients cannot reach sites they
+     * are not assigned to. The demo viewer keeps its admin-read browsability via
+     * Access::canAccessAdminArea(); the demo POST guard (dispatch) still blocks writes.
+     */
+    private function authorize(string $method, string $routePath, array $params): void
     {
-        if ($method === 'POST' && !in_array($routePath, $this->publicRoutes, true)) {
-            return true;
-        }
-
-        // Read-only demo: let the viewer browse the admin-only READ pages too (file
-        // manager, panel users, nginx view, sftp status) — every write is blocked by the
-        // demo POST guard above. EXCEPT /logs, which can carry login IPs/paths, so it
-        // stays admin-only (hidden in the demo).
-        if (demo_mode()) {
-            return $routePath === '/logs';
-        }
-
-        return $method === 'GET'
-            && in_array($routePath, $this->adminOnlyGetRoutes, true);
-    }
-
-    private function enforceAdmin(): void
-    {
-        if (Auth::isAdmin()) {
+        // 1. Self-service — any authenticated user manages their OWN account.
+        $selfService = [
+            '/settings/profile', '/settings/password',
+            '/settings/2fa/start', '/settings/2fa/cancel', '/settings/2fa/enable',
+            '/settings/2fa/disable', '/settings/2fa/recovery',
+        ];
+        if (in_array($routePath, $selfService, true)) {
             return;
         }
 
-        if ($this->request->isAjax()) {
-            json(['success' => false, 'message' => 'Administrator privileges required.'], 403);
+        // 2. Admin area — admin only (Users, Logs, Settings, services, PHP, global cache).
+        //    /cache/* is NOT here: it is per-site (domain in the body) — handled at #5.
+        $adminArea = [
+            '/users', '/users/add', '/users/edit', '/users/delete', '/users/passwd',
+            '/logs',
+            '/admin', '/admin/settings', '/admin/settings/domain', '/admin/settings/domain/clear',
+            '/services', '/services/action',
+            '/php/restart',
+            // Global cache op: restarts a PHP version's OPcache system-wide (reads 'php', not a domain):
+            '/cache/opcache-restart',
+        ];
+        if (in_array($routePath, $adminArea, true)) {
+            if (!\Core\Access::canAccessAdminArea()) {
+                $this->deny(403, 'Administrator access required.');
+            }
+            return;
         }
 
-        abort(403, 'Administrator privileges required.');
+        // 3. Site add (GET picker/forms + POST create) — admin or manager.
+        if ($routePath === '/sites/add' || $routePath === '/sites/add/{type}') {
+            if (!\Core\Access::canAddSite()) {
+                $this->deny(403, 'You cannot add sites.');
+            }
+            return;
+        }
+
+        // 4. Site delete — admin or manager (never client).
+        if ($routePath === '/sites/{domain}/delete') {
+            if (!\Core\Access::canDeleteSite()) {
+                $this->deny(403, 'You cannot delete sites.');
+            }
+            return;
+        }
+
+        // 5. Per-site cache ops — domain travels in the request body, not the path.
+        if (str_starts_with($routePath, '/cache/')) {
+            $domain = (string) ($this->request->post('domain') ?? $this->request->get('domain') ?? '');
+            if ($domain === '' || !\Core\Access::canManageSite($domain)) {
+                $this->deny(404, 'Not found.');
+            }
+            return;
+        }
+
+        // 6. Any other /sites/{domain}/* — manage-site (admin/manager always; client iff assigned).
+        if (str_starts_with($routePath, '/sites/{domain}')) {
+            $domain = (string) ($params['domain'] ?? '');
+            if ($domain === '' || !\Core\Access::canManageSite($domain)) {
+                $this->deny(404, 'Not found.');   // 404: don't leak other clients' sites.
+            }
+            return;
+        }
+
+        // 7. Everything else (sites list /, /dashboard, read APIs, /settings GET, /logout):
+        //    any authenticated user. The sites LIST is scoped in SiteController::index().
+    }
+
+    /** AJAX-aware denial: JSON for fetch callers, an error page for full navigations. */
+    private function deny(int $code, string $message): never
+    {
+        if ($this->request->isAjax()) {
+            json(['success' => false, 'message' => $message], $code);
+        }
+        abort($code, $message);
     }
 
     /**

@@ -112,6 +112,14 @@ class DB
                 used_at   TEXT,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS user_sites (
+                user_id INTEGER NOT NULL,
+                site_id INTEGER NOT NULL,
+                PRIMARY KEY (user_id, site_id),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE
+            );
         ");
 
         // Additive migrations (CREATE TABLE IF NOT EXISTS won't alter an existing table).

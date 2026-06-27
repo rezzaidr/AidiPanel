@@ -1250,6 +1250,7 @@ $tabs = [
       <?php endif; ?>
     </div>
 
+    <?php if (\Core\Access::canDeleteSite()): ?>
     <!-- Danger zone -->
     <?php $siteUser = (string)($site['site_user'] ?? ''); $webRoot = $siteUser !== '' ? "/home/{$siteUser}/htdocs/{$domain}" : ''; ?>
     <div class="card border-red-200 overflow-hidden" x-data="{ open:false, typed:'' }">
@@ -1291,6 +1292,7 @@ $tabs = [
         </div>
       </div>
     </div>
+    <?php endif; ?>
 
   </div>
 
@@ -1645,7 +1647,7 @@ $tabs = [
   $defDb     = $dbPrefix !== '' ? $dbPrefix . 'app'  : '';
   $defUser   = $dbPrefix !== '' ? $dbPrefix . 'user' : '';
 ?>
-  <div x-data="{ modal:null, createUser:true, editName:'', editDb:'', editPerm:'rw', editRegen:false, delName:'', delKind:'', typed:'' }">
+  <div x-data="{ modal:null, createUser:true, editName:'', editDb:'', editPerm:'rw', editRegen:false, dbEditShow:false, delName:'', delKind:'', typed:'' }">
 
     <?php if ($creds): ?>
     <!-- Show-once credentials -->
@@ -1872,7 +1874,7 @@ $tabs = [
             </div>
             <div>
               <label class="lbl"><?= e(t('site.database.f.password')) ?> <span class="text-zinc-400"><?= e(t('site.database.pass_optional')) ?></span></label>
-              <input type="text" name="pass" class="inp w-full mono" autocomplete="off" spellcheck="false" placeholder="<?= e(t('site.database.pass_generate')) ?>">
+              <div class="relative" x-data="{ show:false }"><input type="password" name="pass" :type="show ? 'text' : 'password'" class="inp w-full mono pr-10" style="padding-right:2.5rem" autocomplete="off" spellcheck="false" placeholder="<?= e(t('site.database.pass_generate')) ?>"><button type="button" @click="show=!show" tabindex="-1" class="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700" :title="show ? <?= e(json_encode(t('users.hide'))) ?> : <?= e(json_encode(t('users.show'))) ?>"><span x-show="!show"><?= icon('eye', 'text-base') ?></span><span x-show="show" x-cloak><?= icon('eye-off', 'text-base') ?></span></button></div>
             </div>
             <div>
               <label class="lbl"><?= e(t('site.database.f.permissions')) ?></label>
@@ -1914,7 +1916,7 @@ $tabs = [
           </div>
           <div>
             <label class="lbl"><?= e(t('site.database.f.password')) ?> <span class="text-zinc-400"><?= e(t('site.database.pass_optional')) ?></span></label>
-            <input type="text" name="pass" class="inp w-full mono" autocomplete="off" spellcheck="false" placeholder="<?= e(t('site.database.pass_generate')) ?>">
+            <div class="relative" x-data="{ show:false }"><input type="password" name="pass" :type="show ? 'text' : 'password'" class="inp w-full mono pr-10" style="padding-right:2.5rem" autocomplete="off" spellcheck="false" placeholder="<?= e(t('site.database.pass_generate')) ?>"><button type="button" @click="show=!show" tabindex="-1" class="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700" :title="show ? <?= e(json_encode(t('users.hide'))) ?> : <?= e(json_encode(t('users.show'))) ?>"><span x-show="!show"><?= icon('eye', 'text-base') ?></span><span x-show="show" x-cloak><?= icon('eye-off', 'text-base') ?></span></button></div>
           </div>
           <div>
             <label class="lbl"><?= e(t('site.database.f.permissions')) ?></label>
@@ -1959,7 +1961,7 @@ $tabs = [
           </div>
           <div>
             <label class="lbl"><?= e(t('site.database.f.new_password')) ?> <span class="text-zinc-400"><?= e(t('site.database.pass_optional_keep')) ?></span></label>
-            <input type="text" name="pass" class="inp w-full mono" autocomplete="off" spellcheck="false" :disabled="editRegen" placeholder="••••••••">
+            <div class="relative"><input type="password" name="pass" :type="dbEditShow ? 'text' : 'password'" class="inp w-full mono pr-10" style="padding-right:2.5rem" autocomplete="off" spellcheck="false" :disabled="editRegen" placeholder="••••••••"><button type="button" @click="dbEditShow=!dbEditShow" tabindex="-1" class="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700" :title="dbEditShow ? <?= e(json_encode(t('users.hide'))) ?> : <?= e(json_encode(t('users.show'))) ?>"><span x-show="!dbEditShow"><?= icon('eye', 'text-base') ?></span><span x-show="dbEditShow" x-cloak><?= icon('eye-off', 'text-base') ?></span></button></div>
             <label class="flex items-center gap-2 text-xs text-zinc-500 mt-2">
               <input type="checkbox" name="regenerate" value="1" x-model="editRegen" class="rounded border-zinc-300">
               <?= e(t('site.database.generate_new')) ?>
@@ -2219,8 +2221,7 @@ $tabs = [
 
             <div>
               <label class="lbl"><?= e(t('site.security.password_label')) ?></label>
-              <input type="password" name="password" class="inp w-full mono" maxlength="1024"
-                     autocomplete="new-password" spellcheck="false" placeholder="••••••••••••">
+              <div class="relative" x-data="{ show:false }"><input type="password" name="password" maxlength="1024" :type="show ? 'text' : 'password'" class="inp w-full mono pr-10" style="padding-right:2.5rem" autocomplete="new-password" spellcheck="false" placeholder="••••••••••••"><button type="button" @click="show=!show" tabindex="-1" class="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700" :title="show ? <?= e(json_encode(t('users.hide'))) ?> : <?= e(json_encode(t('users.show'))) ?>"><span x-show="!show"><?= icon('eye', 'text-base') ?></span><span x-show="show" x-cloak><?= icon('eye-off', 'text-base') ?></span></button></div>
               <p class="text-[11px] mt-1 <?= $baHasPassword ? 'text-emerald-600' : 'text-zinc-400' ?>">
                 <?= e($baHasPassword ? t('site.security.password_keep') : t('site.security.password_new')) ?>
               </p>

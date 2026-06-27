@@ -85,16 +85,16 @@
         <div class="px-5 py-4 space-y-4">
           <div>
             <label class="lbl"><?= e(t('settings.f.current_password')) ?></label>
-            <input type="password" name="current_password" required class="inp w-full" autocomplete="current-password">
+            <div class="relative" x-data="{ show:false }"><input type="password" name="current_password" required :type="show ? 'text' : 'password'" class="inp w-full pr-10" style="padding-right:2.5rem" autocomplete="current-password"><button type="button" @click="show=!show" tabindex="-1" class="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700" :title="show ? <?= e(json_encode(t('users.hide'))) ?> : <?= e(json_encode(t('users.show'))) ?>"><span x-show="!show"><?= icon('eye', 'text-base') ?></span><span x-show="show" x-cloak><?= icon('eye-off', 'text-base') ?></span></button></div>
           </div>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label class="lbl"><?= e(t('settings.f.new_password')) ?></label>
-              <input type="password" name="new_password" required minlength="8" class="inp w-full" autocomplete="new-password">
+              <div class="relative" x-data="{ show:false }"><input type="password" name="new_password" required minlength="8" :type="show ? 'text' : 'password'" class="inp w-full pr-10" style="padding-right:2.5rem" autocomplete="new-password"><button type="button" @click="show=!show" tabindex="-1" class="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700" :title="show ? <?= e(json_encode(t('users.hide'))) ?> : <?= e(json_encode(t('users.show'))) ?>"><span x-show="!show"><?= icon('eye', 'text-base') ?></span><span x-show="show" x-cloak><?= icon('eye-off', 'text-base') ?></span></button></div>
             </div>
             <div>
               <label class="lbl"><?= e(t('settings.f.confirm_password')) ?></label>
-              <input type="password" name="confirm_password" required minlength="8" class="inp w-full" autocomplete="new-password">
+              <div class="relative" x-data="{ show:false }"><input type="password" name="confirm_password" required minlength="8" :type="show ? 'text' : 'password'" class="inp w-full pr-10" style="padding-right:2.5rem" autocomplete="new-password"><button type="button" @click="show=!show" tabindex="-1" class="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700" :title="show ? <?= e(json_encode(t('users.hide'))) ?> : <?= e(json_encode(t('users.show'))) ?>"><span x-show="!show"><?= icon('eye', 'text-base') ?></span><span x-show="show" x-cloak><?= icon('eye-off', 'text-base') ?></span></button></div>
             </div>
           </div>
         </div>
@@ -169,7 +169,7 @@
               <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
               <p class="text-sm text-zinc-600"><?= e(t('settings.2fa.disable_warn')) ?></p>
               <label class="lbl"><?= e(t('settings.f.current_password')) ?></label>
-              <input type="password" name="current_password" required class="inp w-full" autocomplete="current-password">
+              <div class="relative" x-data="{ show:false }"><input type="password" name="current_password" required :type="show ? 'text' : 'password'" class="inp w-full pr-10" style="padding-right:2.5rem" autocomplete="current-password"><button type="button" @click="show=!show" tabindex="-1" class="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700" :title="show ? <?= e(json_encode(t('users.hide'))) ?> : <?= e(json_encode(t('users.show'))) ?>"><span x-show="!show"><?= icon('eye', 'text-base') ?></span><span x-show="show" x-cloak><?= icon('eye-off', 'text-base') ?></span></button></div>
               <div class="flex justify-end gap-2 pt-1">
                 <button type="button" @click="modal=null" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
                 <button type="submit" class="btn btn-danger"><?= e(t('settings.2fa.disable_btn')) ?></button>
@@ -190,7 +190,7 @@
               <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
               <p class="text-sm text-zinc-600"><?= e(t('settings.2fa.regen_warn')) ?></p>
               <label class="lbl"><?= e(t('settings.f.current_password')) ?></label>
-              <input type="password" name="current_password" required class="inp w-full" autocomplete="current-password">
+              <div class="relative" x-data="{ show:false }"><input type="password" name="current_password" required :type="show ? 'text' : 'password'" class="inp w-full pr-10" style="padding-right:2.5rem" autocomplete="current-password"><button type="button" @click="show=!show" tabindex="-1" class="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700" :title="show ? <?= e(json_encode(t('users.hide'))) ?> : <?= e(json_encode(t('users.show'))) ?>"><span x-show="!show"><?= icon('eye', 'text-base') ?></span><span x-show="show" x-cloak><?= icon('eye-off', 'text-base') ?></span></button></div>
               <div class="flex justify-end gap-2 pt-1">
                 <button type="button" @click="modal=null" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
                 <button type="submit" class="btn btn-primary"><?= e(t('settings.2fa.regen_btn')) ?></button>

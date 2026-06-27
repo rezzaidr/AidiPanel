@@ -31,7 +31,9 @@ $usesPhp = static function (string $type): bool {
     <h1 class="font-head font-bold text-[22px] text-zinc-900 leading-none"><?= e(t('nav.sites')) ?></h1>
     <p class="text-sm text-zinc-400 mt-1.5"><?= e(t('sites.subtitle', ['n' => $count])) ?></p>
   </div>
+  <?php if (\Core\Access::canAddSite()): ?>
   <a href="/sites/add" class="btn btn-primary"><?= icon('plus', 'text-sm') ?> <?= e(t('sites.new')) ?></a>
+  <?php endif; ?>
 </div>
 
 <?php if (empty($sites)): ?>
@@ -40,7 +42,9 @@ $usesPhp = static function (string $type): bool {
   <?= icon('world', 'text-5xl text-zinc-200 block mb-3') ?>
   <p class="text-sm font-medium text-zinc-700 mb-1"><?= e(t('sites.empty')) ?></p>
   <p class="text-xs text-zinc-400 mb-5"><?= e(t('sites.add_first')) ?></p>
+  <?php if (\Core\Access::canAddSite()): ?>
   <a href="/sites/add" class="btn btn-primary"><?= icon('plus', 'text-sm') ?> <?= e(t('sites.new')) ?></a>
+  <?php endif; ?>
 </div>
 
 <?php else: ?>

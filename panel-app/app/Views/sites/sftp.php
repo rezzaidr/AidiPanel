@@ -138,7 +138,7 @@ $sftpReady = !empty($site['site_user']);
       <form @submit.prevent="doSetPassword()" class="p-5 space-y-3">
         <div>
           <label class="lbl"><?= e(t('site.sftp.password')) ?></label>
-          <input x-ref="pwInput" x-model="form.pw" type="text" autocomplete="off" spellcheck="false" class="inp w-full mono" placeholder="<?= e(t('site.sftp.pw_placeholder')) ?>">
+          <div class="relative"><input x-ref="pwInput" x-model="form.pw" type="password" :type="pwShow ? 'text' : 'password'" autocomplete="off" spellcheck="false" class="inp w-full mono pr-10" style="padding-right:2.5rem" placeholder="<?= e(t('site.sftp.pw_placeholder')) ?>"><button type="button" @click="pwShow=!pwShow" tabindex="-1" class="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700" :title="pwShow ? <?= e(json_encode(t('users.hide'))) ?> : <?= e(json_encode(t('users.show'))) ?>"><span x-show="!pwShow"><?= icon('eye', 'text-base') ?></span><span x-show="pwShow" x-cloak><?= icon('eye-off', 'text-base') ?></span></button></div>
         </div>
         <div class="flex justify-end gap-2 pt-1">
           <button type="button" @click="modal=null" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
@@ -178,6 +178,7 @@ $sftpReady = !empty($site['site_user']);
     return {
       loading: true, busy: false, modal: null, generated: '', newKey: '',
       form: { pw: '' },
+      pwShow: false,
       confirm: { open: false, title: '', message: '', label: '', fn: null },
       s: { enabled: false, password_set: false, keys: [], host: '', port: 22, user: '', path: '/htdocs', protocol: 'SFTP' },
 

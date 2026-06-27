@@ -149,6 +149,7 @@ $router->get('/users',             'UserController@index');
 $router->post('/users/add',        'UserController@add');
 $router->post('/users/delete',     'UserController@delete');
 $router->post('/users/passwd',     'UserController@changePassword');
+$router->post('/users/edit',       'UserController@edit');
 
 // Logs
 $router->get('/logs', 'SystemController@logs');

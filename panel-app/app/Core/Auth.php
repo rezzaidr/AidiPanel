@@ -49,6 +49,21 @@ class Auth
         return Session::get('role') === 'admin';
     }
 
+    public static function role(): string
+    {
+        return (string) (Session::get('role') ?? '');
+    }
+
+    public static function isManager(): bool
+    {
+        return self::role() === 'manager';
+    }
+
+    public static function isClient(): bool
+    {
+        return self::role() === 'client';
+    }
+
     /**
      * Validate username + password. Returns the user row on success (caller then
      * either logs in directly or starts a 2FA challenge), or null on failure.

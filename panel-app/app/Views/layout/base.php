@@ -106,7 +106,9 @@ $assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROO
   <nav class="flex items-center gap-1">
     <a href="/dashboard" class="topnav <?= $navDashboard ?>"<?= $navDashboard ? ' aria-current="page"' : '' ?>><?= icon('chart-line', 'text-base') ?> <?= e(t('nav.dashboard')) ?></a>
     <a href="/sites" class="topnav <?= $navSites ?>"<?= $navSites ? ' aria-current="page"' : '' ?>><?= icon('world', 'text-base') ?> <?= e(t('nav.sites')) ?></a>
+    <?php if (\Core\Access::canAccessAdminArea()): ?>
     <a href="/admin" class="topnav <?= $navAdmin ?>"<?= $navAdmin ? ' aria-current="page"' : '' ?>><?= icon('server-cog', 'text-base') ?> <?= e(t('nav.admin')) ?></a>
+    <?php endif; ?>
   </nav>
 
   <div class="ml-auto flex items-center gap-2.5">
@@ -137,7 +139,15 @@ $assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROO
            class="absolute right-0 mt-2 w-48 bg-white border border-zinc-200 rounded-xl shadow-lg py-1.5 z-50">
         <div class="px-3.5 py-2 border-b border-zinc-100">
           <p class="text-sm font-semibold text-zinc-900 truncate"><?= e($_username) ?></p>
-          <p class="text-[11px] text-zinc-400"><?= !empty($_is_admin) ? 'Administrator' : 'Read-only' ?></p>
+          <p class="text-[11px] text-zinc-400"><?php
+            $roleLabel = match (\Core\Auth::role()) {
+                'admin'   => 'Administrator',
+                'manager' => 'Site manager',
+                'client'  => 'Client',
+                default   => (demo_mode() ? 'Read-only' : 'User'),
+            };
+            echo e($roleLabel);
+          ?></p>
         </div>
         <a href="/settings" class="flex items-center gap-2 px-3.5 py-2 text-sm text-zinc-600 hover:bg-zinc-50">
           <?= icon('settings', 'text-base text-zinc-400') ?> <?= e(t('topbar.settings')) ?>

@@ -68,11 +68,19 @@
 
       <div class="mb-6">
         <label class="block text-xs font-medium text-zinc-700 mb-1.5" for="password">Password</label>
-        <div class="relative">
+        <div class="relative" x-data="{ show:false }">
           <?= icon('lock', 'absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400') ?>
           <input type="password" id="password" name="password" required
-            class="w-full pl-9 pr-3 py-2.5 text-sm text-zinc-900 bg-white border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3C3489] focus:border-transparent"
+            :type="show ? 'text' : 'password'"
+            class="w-full pl-9 pr-10 py-2.5 text-sm text-zinc-900 bg-white border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3C3489] focus:border-transparent"
+            style="padding-right:2.5rem"
             placeholder="••••••••">
+          <button type="button" @click="show=!show" tabindex="-1"
+            class="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700"
+            :title="show ? <?= e(json_encode(t('users.hide'))) ?> : <?= e(json_encode(t('users.show'))) ?>">
+            <span x-show="!show"><?= icon('eye', 'text-base') ?></span>
+            <span x-show="show" x-cloak><?= icon('eye-off', 'text-base') ?></span>
+          </button>
         </div>
       </div>
 
@@ -86,5 +94,6 @@
   <p class="text-center text-xs text-zinc-500 mt-6">Manage fast LEMP sites without the bloat</p>
 </div>
 
+  <script defer src="/assets/vendor/alpine.min.js"></script>
 </body>
 </html>
