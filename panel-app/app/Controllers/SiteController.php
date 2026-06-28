@@ -566,6 +566,127 @@ class SiteController extends BaseController
         $this->success("PHP version changed to {$phpVer} for {$domain}.", "/sites/{$domain}");
     }
 
+    /** Sensible PHP defaults shown for a site with no saved settings. */
+    public static function phpSettingsDefaults(): array
+    {
+        return [
+            'memory_limit'         => '128M',
+            'upload_max_filesize'  => '2M',
+            'post_max_size'        => '8M',
+            'max_file_uploads'     => '20',
+            'max_execution_time'   => '300',
+            'max_input_time'       => '60',
+            'max_input_vars'       => '3000',
+            'date.timezone'        => 'UTC',
+        ];
+    }
+
+    /** POST /sites/{domain}/php-settings — save + apply the PHP tuning values + extra. */
+    public function phpSettings(array $params = []): void
+    {
+        $domain = $params['domain'] ?? '';
+        if (!\Core\Access::canEditSiteSettings()) {
+            $this->error('You cannot change PHP settings.');
+        }
+
+        $newVer = (string) $this->request->post('php_version', php_policy()['default']);
+        if (!in_array($newVer, php_policy()['available'], true)) {
+            $this->error('Invalid PHP version.');
+        }
+
+        $defaults = self::phpSettingsDefaults();
+        $settings = [];
+        foreach (array_keys($defaults) as $key) {
+            $settings[$key] = $this->_cleanPhpSetting($key, (string) $this->request->post($key, ''));
+        }
+        // post_max_size must be >= upload_max_filesize.
+        $up = _shorthand_bytes((string) $settings['upload_max_filesize']);
+        $po = _shorthand_bytes((string) $settings['post_max_size']);
+        if ($up > 0 && $po > 0 && $po < $up) {
+            $this->error('post_max_size must be greater than or equal to upload_max_filesize.');
+        }
+
+        $extra = (string) $this->request->post('php_extra', '');
+        foreach (preg_split('/\r\n|\r|\n/', $extra) as $line) {
+            $line = trim($line);
+            if ($line === '' || str_starts_with($line, ';')) {
+                continue;
+            }
+            if (!preg_match('/^\s*[A-Za-z0-9_.]+\s*=\s*.+\s*$/', $line)) {
+                $this->error("Additional configuration has an invalid line: {$line}");
+            }
+        }
+
+        $row = $this->db->row('SELECT site_user, php_version FROM sites WHERE domain = ?', [$domain]);
+        $currentVer = (string) ($row['php_version'] ?? php_policy()['default']);
+
+        // Streamed: version change (possibly install) — stream the switch, then apply + commit DB.
+        if ($this->request->post('stream') === '1' && $newVer !== $currentVer) {
+            $this->streamCli('php:version', ['--domain', $domain, '--set', $newVer], function ($r) use ($domain, $newVer, $settings, $extra) {
+                $this->_writePhpSettingsFile($domain, $settings, $extra);
+                $apply = run_cli('php:settings', ['--domain', $domain, '--php', $newVer]);
+                if (!$apply['success']) {
+                    \Core\DB::log('php:settings', "Apply failed for {$domain}: " . $apply['output']);
+                    return ['redirect' => "/sites/{$domain}?tab=settings", 'message' => 'PHP version changed, but settings could not be applied: ' . $apply['output']];
+                }
+                $this->db->run('UPDATE sites SET php_version = ?, php_settings = ?, php_extra = ? WHERE domain = ?',
+                    [$newVer, json_encode($settings, JSON_FORCE_OBJECT), $extra, $domain]);
+                \Core\DB::log('php:settings', "Updated PHP settings + version {$newVer} for {$domain}");
+                return ['redirect' => "/sites/{$domain}?tab=settings", 'message' => "PHP settings saved (version {$newVer})."];
+            });
+        }
+
+        // Normal: tuning-only (no version change) — write file, apply, then commit DB.
+        $this->_writePhpSettingsFile($domain, $settings, $extra);
+        $r = run_cli('php:settings', ['--domain', $domain, '--php', $currentVer]);
+        if (!$r['success']) {
+            \Core\DB::log('php:settings', "Apply failed for {$domain}: " . $r['output']);
+            $this->error('Could not apply PHP settings: ' . $r['output']);
+        }
+        $this->db->run('UPDATE sites SET php_settings = ?, php_extra = ? WHERE domain = ?',
+            [json_encode($settings, JSON_FORCE_OBJECT), $extra, $domain]);
+        \Core\DB::log('php:settings', "Updated PHP settings for {$domain}");
+        $this->success("PHP settings updated for {$domain}.", "/sites/{$domain}?tab=settings");
+    }
+
+    private function _writePhpSettingsFile(string $domain, array $settings, string $extra): void
+    {
+        $rendered = render_php_pool_settings($settings, $extra);
+        $dir = rtrim((string) (defined('STORAGE_ROOT') ? STORAGE_ROOT : '/opt/aidipanel/storage'), '/') . '/php-settings';
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0775, true);
+        }
+        $siteUser = (string) ($this->db->row('SELECT site_user FROM sites WHERE domain = ?', [$domain])['site_user'] ?? '');
+        if ($siteUser !== '') {
+            $written = @file_put_contents("{$dir}/{$siteUser}.conf", $rendered);
+            if ($written === false) {
+                throw new \RuntimeException("Could not write PHP settings file for {$siteUser}");
+            }
+        }
+    }
+
+    /** Validate one structured setting against its rule; return the cleaned value (or default). */
+    private function _cleanPhpSetting(string $key, string $value): string
+    {
+        $value = trim($value);
+        $defaults = self::phpSettingsDefaults();
+        if ($value === '') {
+            return $defaults[$key];
+        }
+        $rules = [
+            'memory_limit'        => fn() => preg_match('/^\d+(\.\d+)?[KMG]?$/i', $value) ? strtoupper($value) : null,
+            'upload_max_filesize' => fn() => preg_match('/^\d+(\.\d+)?[KMG]?$/i', $value) ? strtoupper($value) : null,
+            'post_max_size'       => fn() => preg_match('/^\d+(\.\d+)?[KMG]?$/i', $value) ? strtoupper($value) : null,
+            'max_file_uploads'    => fn() => filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 100]]) !== false ? $value : null,
+            'max_execution_time'  => fn() => filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 30, 'max_range' => 3600]]) !== false ? $value : null,
+            'max_input_time'      => fn() => filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 30, 'max_range' => 3600]]) !== false ? $value : null,
+            'max_input_vars'      => fn() => filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1000, 'max_range' => 10000]]) !== false ? $value : null,
+            'date.timezone'       => fn() => in_array($value, \DateTimeZone::listIdentifiers(), true) ? $value : null,
+        ];
+        $clean = isset($rules[$key]) ? $rules[$key]() : null;
+        return $clean ?? $defaults[$key];
+    }
+
     public function nginxEditor(array $params = []): void
     {
         $domain   = $params['domain'] ?? '';
@@ -620,7 +741,7 @@ class SiteController extends BaseController
         }
 
         \Core\DB::log('nginx:save', "Saved Nginx config for {$domain}");
-        $this->success('Nginx configuration saved and reloaded.', "/sites/{$domain}");
+        $this->success('Nginx configuration saved and reloaded.', "/sites/{$domain}?tab=settings");
     }
 
     /** Decode a --json CLI result into an array, isolating the JSON in case of stray output. */

@@ -71,6 +71,7 @@ $router->post('/sites/add',          'SiteController@add');
 $router->get('/sites/{domain}',      'SiteController@detail');
 $router->post('/sites/{domain}/delete', 'SiteController@delete');
 $router->post('/sites/{domain}/php', 'SiteController@changePhp');
+$router->post('/sites/{domain}/php-settings', 'SiteController@phpSettings');
 $router->get('/sites/{domain}/nginx','SiteController@nginxEditor');
 $router->post('/sites/{domain}/nginx','SiteController@saveNginx');
 $router->post('/sites/{domain}/ssl/install', 'SiteSslController@install');

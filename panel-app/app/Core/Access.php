@@ -39,6 +39,13 @@ class Access
         return Auth::isAdmin() || Auth::isManager();
     }
 
+    /** Edit PHP settings (version + tuning + additional config): admin or manager.
+     *  Clients are read-only for the whole PHP settings card. */
+    public static function canEditSiteSettings(): bool
+    {
+        return Auth::isAdmin() || Auth::isManager();
+    }
+
     /** Site IDs this user may see. null = all (admin/manager); a list = client assignments. */
     public static function visibleSiteIds(): ?array
     {

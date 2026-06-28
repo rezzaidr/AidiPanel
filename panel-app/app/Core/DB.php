@@ -125,6 +125,11 @@ class DB
         // Additive migrations (CREATE TABLE IF NOT EXISTS won't alter an existing table).
         $this->addColumnIfMissing('sites', 'site_user', 'TEXT');
 
+        // Per-site PHP settings tuning (JSON of the 8 fields) + free-form additional
+        // php.ini directives. Rendered to storage/php-settings/<site_user>.conf on save.
+        $this->addColumnIfMissing('sites', 'php_settings', 'TEXT');
+        $this->addColumnIfMissing('sites', 'php_extra', 'TEXT');
+
         // Account-settings profile fields (self-service Settings → Profile tab).
         $this->addColumnIfMissing('users', 'email',      'TEXT');
         $this->addColumnIfMissing('users', 'first_name', 'TEXT');

@@ -1166,69 +1166,123 @@ $tabs = [
 <?php elseif ($activeTab === 'settings'): ?>
 <!-- ─────────────────────────── SETTINGS ─────────────────────────────────── -->
 
-  <div class="space-y-5 max-w-2xl">
+  <div class="space-y-5">
 
     <?php if ($type !== 'static' && $type !== 'proxy'): ?>
-    <!-- PHP version -->
-    <div class="card p-5">
-      <h2 class="font-head font-semibold text-sm text-zinc-900 mb-1"><?= e(t('site.set.php_title')) ?></h2>
-      <p class="text-[11px] text-zinc-400 mb-4"><?= e(t('site.set.php_hint')) ?></p>
-      <form method="POST" action="/sites/<?= e($domain) ?>/php"
-            x-data="phpSwitchForm()" @submit="onSubmit($event)" x-ref="form">
-        <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
-        <div data-op-fields class="flex items-end gap-3">
-          <div class="flex-1">
-            <label class="lbl">PHP version</label>
-            <select name="php_version" class="inp" data-phpselect>
-              <?php foreach (php_versions_status() as $v => $s): ?>
-              <option value="<?= e($v) ?>"
-                <?= $phpVer === $v ? 'selected' : '' ?>
-                <?= $s['installed'] ? '' : 'data-needs-install="1"' ?>>PHP <?= e($v) ?><?= $s['installed'] ? '' : ' — ' . e(t('php.will_install')) ?></option>
-              <?php endforeach; ?>
-            </select>
-            <p class="hint mt-1"><?= e(t('site.set.php_autoinstall_hint')) ?></p>
+    <!-- PHP settings (version + tuning + additional configuration) -->
+    <?php
+      $phpSaved    = (array) json_decode((string) ($site['php_settings'] ?? ''), true);
+      $phpSet      = array_merge(\Controllers\SiteController::phpSettingsDefaults(), $phpSaved);
+      $phpExtra    = (string) ($site['php_extra'] ?? '');
+      $phpCanEdit  = \Core\Access::canEditSiteSettings();
+      $phpTzGroups = tz_grouped();
+      $phpTuning   = [
+        ['memory_limit', 'text', '64M'], ['upload_max_filesize', 'text', '2M'],
+        ['post_max_size', 'text', '8M'], ['max_file_uploads', 'text', '20'],
+        ['max_execution_time', 'text', '300'], ['max_input_time', 'text', '60'],
+        ['max_input_vars', 'text', '3000'],
+      ];
+    ?>
+    <div class="card overflow-hidden">
+      <div class="card-head">
+        <div class="flex items-center gap-2.5">
+          <?= icon('brand-php', 'text-lg text-zinc-400') ?>
+          <div>
+            <h2 class="card-title"><?= e(t('site.set.php_title')) ?></h2>
+            <p class="text-[11px] text-zinc-400 mt-0.5"><?= e(t('site.set.php_hint')) ?></p>
           </div>
-          <button type="submit" class="btn btn-primary" :disabled="submitting">
-            <span x-show="!submitting"><?= e(t('site.set.php_apply')) ?></span>
-            <span x-show="submitting" x-cloak><?= icon('loader-2', 'text-sm spin') ?> <?= e(t('site.set.php_applying')) ?></span>
-          </button>
         </div>
-        <?php include APP_ROOT . '/Views/partials/op-progress.php'; ?>
+      </div>
+      <div class="p-5 space-y-4">
 
-        <!-- Modal: confirm on-demand PHP install before switching -->
-        <div x-show="confirmVer" x-cloak class="fixed inset-0 z-50">
-          <div class="absolute inset-0 bg-zinc-900/40"></div>
-          <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl text-left">
-            <div class="card-head flex items-center justify-between gap-3">
-              <div class="flex items-center gap-2">
-                <span class="w-8 h-8 rounded-lg bg-ink-pale flex items-center justify-center shrink-0">
-                  <?= icon('download', 'text-ink') ?>
-                </span>
-                <h3 class="card-title"><span x-text="'PHP ' + confirmVer"></span> <?= e(t('site.add.php_modal_title')) ?></h3>
-              </div>
-              <button type="button" @click="confirmVer=null" :disabled="submitting" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><?= icon('x') ?></button>
+        <form method="POST" action="/sites/<?= e($domain) ?>/php-settings"
+              x-data="phpSettingsForm('<?= e($phpVer) ?>')" @submit="onSubmit($event)" x-ref="form">
+          <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+          <div data-op-fields class="space-y-4">
+            <div>
+              <label class="lbl"><?= e(t('site.set.php_version')) ?></label>
+              <select name="php_version" class="inp w-full" data-phpselect <?= $phpCanEdit ? '' : 'disabled' ?>>
+                <?php foreach (php_versions_status() as $v => $s): ?>
+                <option value="<?= e($v) ?>" <?= $phpVer === $v ? 'selected' : '' ?><?= $s['installed'] ? '' : ' data-needs-install="1"' ?>>PHP <?= e($v) ?><?= $s['installed'] ? '' : ' — ' . e(t('php.will_install')) ?></option>
+                <?php endforeach; ?>
+              </select>
             </div>
-            <div class="p-5 space-y-4">
-              <p class="text-sm text-zinc-600"><?= e(t('site.add.php_modal_body')) ?></p>
-              <div class="flex items-start gap-2 bg-amber-50 border border-amber-200/70 rounded-lg px-3 py-2">
-                <?= icon('clock', 'text-amber-500 mt-0.5 text-sm') ?>
-                <p class="text-[11px] text-amber-800 leading-relaxed"><?= e(t('site.add.php_modal_eta')) ?></p>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <?php foreach ($phpTuning as [$k, $fType, $ph]): ?>
+              <div>
+                <label class="lbl"><?= e($k) ?></label>
+                <input type="<?= e($fType) ?>" name="<?= e($k) ?>" value="<?= e($phpSet[$k] ?? '') ?>" placeholder="<?= e($ph) ?>" class="inp w-full mono" <?= $phpCanEdit ? '' : 'disabled' ?>>
               </div>
-              <div x-show="submitting" x-cloak class="flex items-start gap-2 bg-ink-pale border border-ink/15 rounded-lg px-3 py-2">
-                <?= icon('loader-2', 'text-ink mt-0.5 text-sm spin') ?>
-                <p class="text-[11px] text-ink leading-relaxed"><?= e(t('site.add.php_installing_note')) ?></p>
+              <?php endforeach; ?>
+              <div>
+                <label class="lbl">date.timezone</label>
+                <select name="date.timezone" class="inp w-full" <?= $phpCanEdit ? '' : 'disabled' ?>>
+                  <?php foreach ($phpTzGroups as $continent => $zones): ?>
+                    <?php if ($continent === ''): ?>
+                      <?php foreach ($zones as $z): ?>
+                      <option value="<?= e($z['value']) ?>" <?= $phpSet['date.timezone'] === $z['value'] ? 'selected' : '' ?>><?= e($z['label']) ?></option>
+                      <?php endforeach; ?>
+                    <?php else: ?>
+                    <optgroup label="<?= e($continent) ?>">
+                      <?php foreach ($zones as $z): ?>
+                      <option value="<?= e($z['value']) ?>" <?= $phpSet['date.timezone'] === $z['value'] ? 'selected' : '' ?>><?= e($z['label']) ?></option>
+                      <?php endforeach; ?>
+                    </optgroup>
+                    <?php endif; ?>
+                  <?php endforeach; ?>
+                </select>
               </div>
-              <div class="flex justify-end gap-2 pt-1">
-                <button type="button" @click="confirmVer=null" :disabled="submitting" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
-                <button type="button" @click="proceed()" :disabled="submitting" class="btn btn-primary">
-                  <span x-show="!submitting"><?= icon('check', 'text-sm') ?> <?= e(t('site.set.php_modal_confirm')) ?></span>
-                  <span x-show="submitting" x-cloak><?= icon('loader-2', 'text-sm spin') ?> <?= e(t('site.set.php_applying')) ?></span>
-                </button>
+            </div>
+            <div>
+              <label class="lbl"><?= e(t('site.set.php_extra')) ?></label>
+              <textarea name="php_extra" rows="5" class="inp w-full mono text-[13px]" placeholder="<?= e(t('site.set.php_extra_ph')) ?>" <?= $phpCanEdit ? '' : 'disabled' ?>><?= e($phpExtra) ?></textarea>
+            </div>
+          </div>
+          <?php include APP_ROOT . '/Views/partials/op-progress.php'; ?>
+          <?php if ($phpCanEdit): ?>
+          <div class="flex items-center justify-between gap-4 pt-2">
+            <p class="text-[11px] text-zinc-400"><?= e(t('site.set.php_extra_hint')) ?></p>
+            <button type="submit" class="btn btn-primary shrink-0" :disabled="submitting">
+              <span x-show="!submitting"><?= icon('device-floppy', 'text-sm') ?> <?= e(t('site.set.php_save')) ?></span>
+              <span x-show="submitting" x-cloak><?= icon('loader-2', 'text-sm spin') ?> <?= e(t('site.set.php_applying')) ?></span>
+            </button>
+          </div>
+          <?php endif; ?>
+
+          <div x-show="confirmVer" x-cloak class="fixed inset-0 z-50">
+            <div class="absolute inset-0 bg-zinc-900/40"></div>
+            <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md card shadow-2xl text-left">
+              <div class="card-head flex items-center justify-between gap-3">
+                <div class="flex items-center gap-2">
+                  <span class="w-8 h-8 rounded-lg bg-ink-pale flex items-center justify-center shrink-0">
+                    <?= icon('download', 'text-ink') ?>
+                  </span>
+                  <h3 class="card-title"><span x-text="'PHP ' + confirmVer"></span> <?= e(t('site.add.php_modal_title')) ?></h3>
+                </div>
+                <button type="button" @click="confirmVer=null" :disabled="submitting" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"><?= icon('x') ?></button>
+              </div>
+              <div class="p-5 space-y-4">
+                <p class="text-sm text-zinc-600"><?= e(t('site.add.php_modal_body')) ?></p>
+                <div class="flex items-start gap-2 bg-amber-50 border border-amber-200/70 rounded-lg px-3 py-2">
+                  <?= icon('clock', 'text-amber-500 mt-0.5 text-sm') ?>
+                  <p class="text-[11px] text-amber-800 leading-relaxed"><?= e(t('site.add.php_modal_eta')) ?></p>
+                </div>
+                <div x-show="submitting" x-cloak class="flex items-start gap-2 bg-ink-pale border border-ink/15 rounded-lg px-3 py-2">
+                  <?= icon('loader-2', 'text-ink mt-0.5 text-sm spin') ?>
+                  <p class="text-[11px] text-ink leading-relaxed"><?= e(t('site.add.php_installing_note')) ?></p>
+                </div>
+                <div class="flex justify-end gap-2 pt-1">
+                  <button type="button" @click="confirmVer=null" :disabled="submitting" class="btn btn-ghost"><?= e(t('common.cancel')) ?></button>
+                  <button type="button" @click="proceed()" :disabled="submitting" class="btn btn-primary">
+                    <span x-show="!submitting"><?= icon('check', 'text-sm') ?> <?= e(t('site.set.php_modal_confirm')) ?></span>
+                    <span x-show="submitting" x-cloak><?= icon('loader-2', 'text-sm spin') ?> <?= e(t('site.set.php_applying')) ?></span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      </form>
+        </form>
+      </div>
     </div>
     <?php endif; ?>
 
@@ -2600,18 +2654,26 @@ $tabs = [
 </main>
 
 <script>
-function phpSwitchForm() {
+function phpSettingsForm(currentVer) {
   return {
     submitting: false,
     confirmVer: null,   // set to the version string when an in-app confirm is needed
     onSubmit(e) {
-      e.preventDefault();                  // always stream
-      var opt = this._selectedNeedsInstall();
-      if (opt && !this.confirmVer) {
-        this.confirmVer = opt.value;
+      e.preventDefault();
+      var sel = this.$root.querySelector('[data-phpselect]');
+      var opt = sel.selectedOptions[0];
+      var newVer = sel.value;
+      var needsInstall = opt && opt.dataset.needsInstall === '1' && newVer !== currentVer;
+      if (needsInstall && !this.confirmVer) {
+        this.confirmVer = newVer;
         return;
       }
-      this._stream();
+      this.confirmVer = null;
+      if (needsInstall) {
+        this._stream();
+      } else {
+        this.$root.submit();
+      }
     },
     proceed() {
       this.confirmVer = null;

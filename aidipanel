@@ -296,6 +296,11 @@ php_admin_value[session.save_path] = ${home}/tmp
 php_admin_value[error_log] = ${home}/logs/php-error.log
 php_admin_flag[log_errors] = on
 POOL
+  # Per-site PHP settings (rendered by the panel to storage/php-settings/<user>.conf).
+  # Appended AFTER the managed defaults so user values win (php-fpm = last value).
+  if [[ -f "/opt/aidipanel/storage/php-settings/${user}.conf" ]]; then
+    cat "/opt/aidipanel/storage/php-settings/${user}.conf" >> "$tmp"
+  fi
   cp "$tmp" "${pool_dir}/${user}.conf"; rm -f "$tmp"
   if ! "php-fpm${ver}" -t >> "$CLI_LOG" 2>&1; then
     rm -f "${pool_dir}/${user}.conf"
@@ -496,6 +501,7 @@ _usage() {
   echo "  php:list        List installed PHP versions"
   echo "  php:version     Get or set PHP version for a site"
   echo "  php:restart     Restart PHP-FPM (all or specific version)"
+  echo "  php:settings    Apply saved PHP settings to a site's pool (--domain, --php <ver>)"
   echo "  php:info        Show PHP info for a version"
 
   echo -e "\n${BOLD}${BLUE}SSL / TLS${RESET}"
@@ -1087,6 +1093,8 @@ _site_delete() {
     done
   fi
   _cache_purge_domain "$domain" 2>/dev/null || true
+  # Clean up the per-site PHP settings file (otherwise it leaks into a recreated site).
+  [[ -n "$site_user" ]] && rm -f "/opt/aidipanel/storage/php-settings/${site_user}.conf" 2>/dev/null || true
   _nginx_test_reload
 
   if [[ "$purge" == "true" && -n "$site_user" ]]; then
@@ -6769,6 +6777,20 @@ _php_list() {
   echo ""
 }
 
+# php:settings --domain X --php <ver>   — re-write the site's php-fpm pool so it picks
+# up the current current storage/php-settings/<site_user>.conf, then reload. (The panel
+# renders that file; this just rebuilds the pool via _write_fpm_pool.)
+_php_settings() {
+  _require_root "php:settings"; _parse_opts "$@"
+  local domain ver; domain=$(_opt "domain"); ver=$(_opt "php")
+  _require_arg "domain" "$domain" "php:settings --domain X --php <ver>"
+  _require_arg "php"   "$ver"    "php:settings --domain X --php <ver>"
+  _files_resolve "$domain"
+  _write_fpm_pool "$FILES_USER" "$ver" || die "Could not apply PHP settings for ${domain}."
+  ok "PHP settings applied for ${domain}."
+  return 0
+}
+
 _php_version() {
   _require_root "php:version"
   _parse_opts "$@"
@@ -9378,6 +9400,7 @@ main() {
     php:list)       _php_list "$@" ;;
     php:version)    _php_version "$@" ;;
     php:restart)    _php_restart "$@" ;;
+    php:settings)   _php_settings "$@" ;;
     php:info)       _php_info "$@" ;;
 
     # SSL

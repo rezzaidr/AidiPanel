@@ -292,7 +292,7 @@ function web_cli_allowed_commands(): array
         'cache:config', 'cache:redis-enable', 'cache:redis-disable', 'cache:redis-flush', 'cache:opcache-restart',
         'db:add', 'db:delete', 'db:list', 'db:users', 'db:user-add', 'db:user-edit', 'db:user-delete', 'db:pma-install', 'db:pma-credentials', 'db:backup', 'db:server-info',
         'panel:domain', 'panel:ssl',
-        'php:list', 'php:version', 'php:restart', 'php:install',
+        'php:list', 'php:version', 'php:restart', 'php:install', 'php:settings',
         'ssl:install', 'ssl:renew', 'ssl:status', 'ssl:import',
         'ssl:force-https', 'ssl:hsts', 'ssl:autorenew', 'ssl:check', 'ssl:use',
         'security:status', 'security:basic-auth', 'cloudflare:realip', 'security:ip-block', 'security:cloudflare-only',
@@ -1217,6 +1217,53 @@ function tz_grouped(): array
         $groups[$continent][] = ['value' => $id, 'label' => tz_label($id)];
     }
     return $groups;
+}
+
+/**
+ * Render a site's PHP pool-settings file content (php_admin_value/flag lines).
+ * Structured fields first, then the parsed additional-config directives (which win,
+ * since php-fpm uses the last value for a key). Booleans (On/Off) become php_admin_flag.
+ */
+function render_php_pool_settings(array $settings, string $extra): string
+{
+    $out = '';
+    foreach ($settings as $key => $value) {
+        if ($value === '' || $value === null) {
+            continue;
+        }
+        $out .= _php_pool_line((string) $key, (string) $value);
+    }
+    foreach (preg_split('/\r\n|\r|\n/', $extra) as $line) {
+        $line = trim($line);
+        if ($line === '' || str_starts_with($line, ';')) {
+            continue;   // blank or comment
+        }
+        if (!preg_match('/^\s*([A-Za-z0-9_.]+)\s*=\s*(.*?)\s*$/', $line, $m)) {
+            continue;   // controller validates; skip unparseable defensively
+        }
+        $out .= _php_pool_line($m[1], $m[2]);
+    }
+    return trim($out) . "\n";
+}
+
+function _php_pool_line(string $key, string $value): string
+{
+    $low = strtolower($value);
+    if ($low === 'on' || $low === 'off') {
+        return "php_admin_flag[{$key}] = {$low}\n";
+    }
+    return "php_admin_value[{$key}] = {$value}\n";
+}
+
+/** Parse PHP shorthand bytes (e.g. "256M", "2G") to an integer. */
+function _shorthand_bytes(string $v): int
+{
+    if (preg_match('/^(\d+(?:\.\d+)?)\s*([KMG])?$/i', trim($v), $m)) {
+        $n = (int) $m[1];
+        $mult = ['' => 1, 'K' => 1024, 'M' => 1024 ** 2, 'G' => 1024 ** 3][strtoupper($m[2] ?? '')];
+        return (int) ($n * $mult);
+    }
+    return (int) $v;
 }
 
 /**

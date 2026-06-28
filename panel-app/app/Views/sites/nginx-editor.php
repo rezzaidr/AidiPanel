@@ -2,7 +2,7 @@
 
 <!-- page header -->
 <div class="mb-5">
-  <a href="/sites/<?= e($site['domain']) ?>"
+  <a href="/sites/<?= e($site['domain']) ?>?tab=settings"
      class="text-xs text-zinc-400 hover:text-ink flex items-center gap-1 mb-2">
     <?= icon('arrow-left', 'text-sm') ?> <?= e($site['domain']) ?>
   </a>
@@ -38,7 +38,7 @@
       <button type="submit" class="btn btn-primary">
         <?= icon('device-floppy', 'text-sm') ?> <?= e(t('nginx.editor.save')) ?>
       </button>
-      <a href="/sites/<?= e($site['domain']) ?>" class="btn btn-ghost"><?= e(t('common.cancel')) ?></a>
+      <a href="/sites/<?= e($site['domain']) ?>?tab=settings" class="btn btn-ghost"><?= e(t('common.cancel')) ?></a>
       <span class="ml-auto text-[11px] text-zinc-400"><?= e(t('nginx.editor.note')) ?></span>
     </div>
   </form>

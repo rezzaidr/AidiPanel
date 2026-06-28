@@ -153,6 +153,14 @@ class Router
             return;
         }
 
+        // 4b. PHP settings (version switch + tuning) — admin/manager only (client read-only).
+        if ($routePath === '/sites/{domain}/php' || $routePath === '/sites/{domain}/php-settings') {
+            if (!\Core\Access::canEditSiteSettings()) {
+                $this->deny(403, 'You cannot change PHP settings.');
+            }
+            return;
+        }
+
         // 5. Per-site cache/ssl ops — the domain travels in the request (POST body or
         // GET query), not the path. Covers the POST /cache/* actions AND the GET
         // /api/cache/* + /api/ssl/check reads (which carry ?domain=), so a client can
