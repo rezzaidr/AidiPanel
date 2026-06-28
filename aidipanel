@@ -496,6 +496,12 @@ _usage() {
   echo "  db:backup       Backup a database to file"
   echo "  db:server-info  Show the local database server (engine/version/port/active)"
 
+  echo -e "\n${BOLD}${BLUE}Backups${RESET}"
+  echo "  backup:create    Create a local backup of a site (--domain, [--keep N])"
+  echo "  backup:list      List a site's backups as JSON (--domain)"
+  echo "  backup:download  Stream a backup archive (--domain; name on stdin)"
+  echo "  backup:delete    Delete one backup archive (--domain; name on stdin)"
+
   echo -e "\n${BOLD}${BLUE}PHP Management${RESET}"
   echo "  php:install     Install a supported PHP version on-demand"
   echo "  php:list        List installed PHP versions"
@@ -1601,6 +1607,229 @@ _files_download() {
   [[ -f "$file" ]] || die "Not a regular file."
   _files_run cat -- "$file"
   return 0
+}
+
+# ─── Backups (per-site, local archives in ~/backups) ────────────────────────
+# Pure helpers (unit-tested by _private/tests/unit/backup_helpers_test.sh).
+_backup_name_valid() {
+  [[ "$1" =~ ^[A-Za-z0-9._-]+\.tar\.gz$ ]]
+}
+
+# Build the JSON array string for db names (zero args -> empty string -> renders as "[]").
+# MUST return 0 even with no args (called as dbjson=$(...) under set -e in _backup_create).
+_backup_dbjson() {
+  if (( $# > 0 )); then printf '"%s",' "$@" | sed 's/,$//'; fi
+}
+
+# Read a newest-first path list on stdin; print the paths to DELETE so the newest <keep>
+# remain (the just-written <final> counts as #1 and is never deleted, even with keep=0).
+_backup_prune_set() {
+  local keep="$1" final="$2" i=0 pf
+  while IFS= read -r pf; do
+    i=$((i + 1))
+    if (( i > keep )) && [[ "$pf" != "$final" ]]; then printf '%s\n' "$pf"; fi
+  done
+}
+
+# Emit the backup manifest JSON. Args: domain user site_type php_ver dbjson files_dir version.
+_backup_manifest() {
+  local domain="$1" user="$2" site_type="$3" php_ver="$4" dbjson="$5" files_dir="$6" version="$7"
+  local f n s first=1
+  {
+    printf '{\n'
+    printf '  "schema_version": 1,\n'
+    printf '  "created_at": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '  "domain": "%s",\n' "$domain"
+    printf '  "site_user": "%s",\n' "$user"
+    printf '  "site_type": "%s",\n' "$site_type"
+    printf '  "php_version": "%s",\n' "$php_ver"
+    printf '  "databases": [%s],\n' "$dbjson"
+    printf '  "files": ['
+    for f in "$files_dir"/*; do
+      n=$(basename "$f"); s=$(stat -c %s "$f" 2>/dev/null || echo 0)
+      (( first )) || printf ','; first=0
+      printf '{"name":"%s","bytes":%s}' "$n" "$s"
+    done
+    printf '],\n'
+    printf '  "aidipanel_version": "%s"\n' "$version"
+    printf '}\n'
+  }
+}
+
+# backup:list --domain <d> : JSON list of this site's valid backups (newest first).
+_backup_list() {
+  _require_root "backup:list"; _parse_opts "$@"
+  local domain; domain=$(_opt "domain")
+  _require_arg "domain" "$domain" "backup:list --domain <d>"
+  _files_resolve "$domain"
+  local dir="${FILES_HOME}/backups"
+  _files_run python3 - "$dir" "${domain}_" <<'PY'
+import json, os, sys
+d, pre = sys.argv[1], sys.argv[2]
+entries = []
+try:
+    for n in os.listdir(d):
+        if n.startswith(pre) and n.endswith(".tar.gz"):
+            st = os.stat(os.path.join(d, n))
+            entries.append({"name": n, "size": st.st_size, "mtime": int(st.st_mtime)})
+except FileNotFoundError:
+    pass
+entries.sort(key=lambda e: e["mtime"], reverse=True)
+print(json.dumps({"path": d, "entries": entries}))
+PY
+}
+
+# _backup_resolve <domain> <name> : validate + contain a backup filename; sets BACKUP_FILE.
+_backup_resolve() {
+  local domain="$1" name="$2"
+  _files_resolve "$domain"
+  local dir="${FILES_HOME}/backups"
+  _backup_name_valid "$name" || die "Invalid backup name."
+  [[ "$name" == "${domain}_"* ]] || die "Backup not found."
+  local full="${dir}/${name}"
+  local realdir realfile
+  realdir=$(realpath -e "$dir" 2>/dev/null) || die "Backup not found."
+  realfile=$(realpath -e "$full" 2>/dev/null) || die "Backup not found."
+  [[ "$realfile" == "$realdir/$name" ]] || die "Backup not found."   # containment: no symlink escape
+  BACKUP_FILE="$full"
+}
+
+# backup:download --domain <d> (name on stdin) : stream one archive as the site user.
+_backup_download() {
+  _require_root "backup:download"; _parse_opts "$@"
+  local domain; domain=$(_opt "domain")
+  _require_arg "domain" "$domain" "backup:download --domain <d>"
+  local name; name=$(cat)
+  _backup_resolve "$domain" "$name"
+  _files_run cat -- "$BACKUP_FILE"
+}
+
+# backup:delete --domain <d> (name on stdin) : delete one archive as the site user.
+_backup_delete() {
+  _require_root "backup:delete"; _parse_opts "$@"
+  local domain; domain=$(_opt "domain")
+  _require_arg "domain" "$domain" "backup:delete --domain <d>"
+  local name; name=$(cat)
+  _backup_resolve "$domain" "$name"
+  _files_run rm -f -- "$BACKUP_FILE"
+  ok "Deleted backup: ${name}"
+}
+
+# backup:create --domain <d> [--keep N] : build one local .tar.gz (webroot + DBs).
+_backup_create() {
+  _require_root "backup:create"; _parse_opts "$@"
+  local domain keep; domain=$(_opt "domain"); keep=$(_opt "keep" "5")
+  _require_arg "domain" "$domain" "backup:create --domain <d> [--keep N]"
+  [[ "$keep" =~ ^[0-9]+$ ]] || die "--keep must be a positive integer."
+
+  _backup_progress() { printf '@@PROGRESS %s\n' "$1"; }
+
+  # Per-domain lock: no parallel runs for the same site. flock is auto-released by the
+  # kernel on exit or crash, so a killed run never leaves a stale lock.
+  local lock="/tmp/aidipanel-backup-${domain//[!A-Za-z0-9.-]/_}.lock"
+  exec 9>"$lock"
+  flock -n 9 || die "Backup is already running for this site."
+
+  _files_resolve "$domain"
+  local user="$FILES_USER"
+  BACKUP_HOME="${FILES_HOME}"                       # global: the cleanup trap reads it
+  local htdocs="${BACKUP_HOME}/htdocs"
+  local webroot_base="${htdocs}/${domain}"
+  local backups="${BACKUP_HOME}/backups"
+  local vconf="${NGINX_CONF_DIR}/${domain}.conf"
+  local site_type php_ver
+  site_type=$(grep -oP '# Type: \K\w+' "$vconf" 2>/dev/null || echo "")
+  php_ver=$(grep -oP 'php\K[0-9.]+(?=-fpm)' "$vconf" 2>/dev/null || echo "")
+
+  # Self-heal ~/backups and ~/tmp (same FS => the final mv is atomic).
+  mkdir -p "$backups" "${BACKUP_HOME}/tmp"
+  chown "${user}:${user}" "$backups" "${BACKUP_HOME}/tmp"
+  chmod 750 "$backups" "${BACKUP_HOME}/tmp"
+
+  # Disk-space precheck (heuristic: max(1 GiB, 2 x webroot bytes)).
+  local wbytes need free
+  wbytes=$(du -sb "$webroot_base" 2>/dev/null | cut -f1); wbytes=${wbytes:-0}
+  need=$(( wbytes * 2 )); (( need < 1073741824 )) && need=1073741824
+  free=$(df -B1 --output=avail "$backups" | awk 'NR==2{print $1}')
+  (( free < need )) && die "Insufficient disk space: ${free} bytes free on $(df --output=target "$backups" | awk 'NR==2{print $1}'); need at least ${need} bytes."
+
+  # Staging dir on the same FS as ~/backups (global so the trap can guard + remove it).
+  BACKUP_STAGING=$(mktemp -d -p "${BACKUP_HOME}/tmp")
+  BACKUP_DUMP="${BACKUP_STAGING}/.my.cnf"
+  chown "${user}:${user}" "$BACKUP_STAGING"; chmod 700 "$BACKUP_STAGING"
+
+  # Guarded cleanup trap: remove staging (only if under ~/tmp/) and the creds file.
+  _backup_create_cleanup() {
+    if [[ -n "${BACKUP_STAGING:-}" && "$BACKUP_STAGING" == "${BACKUP_HOME}/tmp/"* ]]; then
+      rm -rf "$BACKUP_STAGING"
+    fi
+    rm -f "$BACKUP_DUMP" 2>/dev/null || true
+  }
+  trap _backup_create_cleanup EXIT INT TERM
+
+  # Phase 1: tar webroot as the site-user (source = htdocs/<domain>, NOT /public).
+  # Top-level entry inside webroot.tar.gz is <domain>/; ~/backups is a sibling, never included.
+  _backup_progress "tarring files"
+  ( cd "$htdocs" && sudo -u "$user" tar czf "${BACKUP_STAGING}/webroot.tar.gz" "$domain" ) \
+    || die "Failed to archive webroot."
+
+  # Phase 2: dump DB(s) as root via a mode-0600 defaults file (password never in argv/environ).
+  _backup_progress "dumping database"
+  _load_credentials
+  local dbc; dbc=$(_db_binary)
+  printf '[client]\nuser=root\npassword=%s\n' "$MYSQL_ROOT_PASSWORD" > "$BACKUP_DUMP"
+  chmod 600 "$BACKUP_DUMP"
+  local dbs=() db
+  while IFS= read -r db; do
+    [[ -n "$db" ]] && dbs+=("$db")
+  done < <("$dbc" --defaults-extra-file="$BACKUP_DUMP" -sN \
+    -e "SELECT schema_name FROM information_schema.schemata \
+        WHERE schema_name NOT IN ('information_schema','mysql','performance_schema','sys') \
+          AND schema_name LIKE '${user}_%'" 2>/dev/null || true)
+
+  if (( ${#dbs[@]} == 0 )); then
+    log "No databases for ${domain}; files-only backup."
+  else
+    for db in "${dbs[@]}"; do
+      [[ "$db" =~ ^[A-Za-z0-9_]+$ ]] || die "Invalid database name: $db"
+      ( set -o pipefail; mysqldump --defaults-extra-file="$BACKUP_DUMP" \
+          --single-transaction --quick --lock-tables=false \
+          --routines --triggers --events --default-character-set=utf8mb4 \
+          "$db" | gzip > "${BACKUP_STAGING}/db_${db}.sql.gz" ) \
+        || die "Failed to dump database: $db"
+      chown "${user}:${user}" "${BACKUP_STAGING}/db_${db}.sql.gz"
+    done
+  fi
+
+  # Phase 3: manifest (dotfiles such as .my.cnf are skipped by the glob).
+  local members=("webroot.tar.gz") dbjson
+  for db in "${dbs[@]}"; do members+=("db_${db}.sql.gz"); done
+  members+=("manifest.json")
+  dbjson=$(_backup_dbjson "${dbs[@]}")
+  _backup_manifest "$domain" "$user" "$site_type" "$php_ver" "$dbjson" "$BACKUP_STAGING" "$CLI_VERSION" \
+    > "${BACKUP_STAGING}/manifest.json"
+  chown "${user}:${user}" "${BACKUP_STAGING}/manifest.json"
+
+  # Phase 4: bundle as the site-user (explicit member list; no literal glob).
+  _backup_progress "bundling"
+  sudo -u "$user" tar czf "${BACKUP_STAGING}/bundle.tar.gz" -C "${BACKUP_STAGING}" "${members[@]}" \
+    || die "Failed to build bundle."
+
+  # Atomic commit into ~/backups (same-FS mv), then chmod 600 + owner assert.
+  local final="${backups}/${domain}_$(date +%Y%m%d_%H%M%S)_$$.tar.gz"
+  sudo -u "$user" mv "${BACKUP_STAGING}/bundle.tar.gz" "$final" || die "Failed to commit backup."
+  chmod 600 "$final"
+  [[ "$(stat -c %U "$final")" == "$user" ]] || die "Backup archive owner mismatch."
+
+  # Phase 5: prune to newest N (only after a successful commit).
+  _backup_progress "pruning"
+  local pf
+  while IFS= read -r pf; do
+    rm -f "$pf" 2>/dev/null || sudo -u "$user" rm -f "$pf" 2>/dev/null || true
+  done < <(printf '%s\n' "${backups}/${domain}_"*.tar.gz | sort -r | _backup_prune_set "$keep" "$final")
+
+  _backup_progress "done"
+  ok "Backup created: ${final} ($(du -h "$final" | cut -f1))"
 }
 
 # files:rename --domain X   (line1=path, line2=newName)
@@ -9368,6 +9597,10 @@ main() {
     files:download-many) _files_download_many "$@" ;;
     files:upload-chunk)  _files_upload_chunk "$@" ;;
     files:upload-cancel) _files_upload_cancel "$@" ;;
+    backup:list)      _backup_list "$@" ;;
+    backup:download)  _backup_download "$@" ;;
+    backup:delete)    _backup_delete "$@" ;;
+    backup:create)    _backup_create "$@" ;;
     sftp:status)    _sftp_status "$@" ;;
     sftp:enable)    _sftp_enable "$@" ;;
     sftp:disable)   _sftp_disable "$@" ;;
