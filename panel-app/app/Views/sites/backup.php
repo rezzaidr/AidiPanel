@@ -5,12 +5,13 @@
  * Available here (set by SiteController::detail): $domain, $backupEntries (each
  * ['name','size','mtime']), $_csrf_token, plus helpers e()/t()/icon()/format_bytes().
  * Backups are local archives in the site-user's ~/backups; create/download/delete go
- * through the backup:* CLI (root → drop to site-user). Read-only demo: actions hidden.
+ * through the backup:* CLI (root → drop to site-user). In the read-only demo,
+ * create is hidden while download/delete remain visible and are blocked by Router.
  *
  * One Alpine scope (x-data="{ deleteName }") wraps the table + the delete modal so the
  * row action menu and the (teleported) modal share state — mirrors the cron tab.
  */
-$canBackup = !demo_mode() && \Core\Access::canManageSite($domain);
+$canCreateBackup = !demo_mode() && \Core\Access::canManageSite($domain);
 ?>
 <div class="space-y-5" x-data="{ deleteName: null }">
 
@@ -27,7 +28,7 @@ $canBackup = !demo_mode() && \Core\Access::canManageSite($domain);
 
     <div class="p-5 space-y-4">
 
-      <?php if ($canBackup): ?>
+      <?php if ($canCreateBackup): ?>
       <!-- Backup now (streamed with live progress) -->
       <form method="POST" action="/sites/<?= e($domain) ?>/backups/create"
             x-data="backupCreateForm()" @submit="onSubmit($event)" x-ref="form">
@@ -81,9 +82,7 @@ $canBackup = !demo_mode() && \Core\Access::canManageSite($domain);
                     <button type="button" @click="row=!row" aria-label="<?= e(t('common.actions')) ?>" class="w-8 h-8 rounded-lg hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700"><?= icon('dots-vertical') ?></button>
                     <div x-show="row" x-cloak x-transition.opacity class="absolute right-0 mt-1 w-44 bg-white border border-zinc-200 rounded-lg shadow-lg py-1 z-30 text-left">
                       <a href="/sites/<?= urlencode($domain) ?>/backups/download?name=<?= urlencode($bname) ?>" @click="row=false" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left"><?= icon('download', 'text-sm text-zinc-400') ?> <?= e(t('site.backup.download')) ?></a>
-                      <?php if ($canBackup): ?>
                       <button type="button" @click="row=false; deleteName = <?= $bjname ?>" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 text-left"><?= icon('trash', 'text-sm') ?> <?= e(t('site.backup.delete')) ?></button>
-                      <?php endif; ?>
                     </div>
                   </div>
                 </td>
@@ -96,7 +95,6 @@ $canBackup = !demo_mode() && \Core\Access::canManageSite($domain);
     </div>
   </div>
 
-  <?php if ($canBackup): ?>
   <!-- Delete confirmation modal (teleported to body; shares deleteName with the table). -->
   <template x-teleport="body">
     <div x-show="deleteName" x-cloak class="fixed inset-0 z-50">
@@ -121,14 +119,13 @@ $canBackup = !demo_mode() && \Core\Access::canManageSite($domain);
       </div>
     </div>
   </template>
-  <?php endif; ?>
 
 </div>
 
-<?php if ($canBackup): ?>
+<?php if ($canCreateBackup): ?>
 <script>
 // Stream backup:create (SSE @@PROGRESS) like the PHP-settings create form. Gated out of
-// the read-only demo ($canBackup above), so it never runs there.
+// the read-only demo ($canCreateBackup above), so it never runs there.
 function backupCreateForm() {
   return {
     submitting: false,

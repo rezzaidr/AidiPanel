@@ -346,6 +346,7 @@ function web_cli_readonly_commands(): array
         'security:status', 'cloudflare:realip',
         'service:status',
         'cron:list',
+        'backup:list',
         'files:list', 'files:read', 'files:download', 'files:download-many',
         'sftp:status',
         'system:info',

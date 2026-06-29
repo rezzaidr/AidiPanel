@@ -42,7 +42,7 @@ $cacheable  = (int) ($analytics['cached'] ?? 0) + (int) ($analytics['origin'] ??
 $hasSeries  = !empty($analytics['series']['labels']);   // cacheable traffic to plot
 $memTotal   = format_bytes((int) ($vps['mem_total'] ?? 0));
 $diskTotal  = format_bytes((int) ($metrics['disk']['total'] ?? 0));
-$coreLabel  = $vps['cores'] ? ($vps['cores'] . ' CPU') : '—';
+$coreLabel  = !empty($vps['cores']) ? ($vps['cores'] . ' CPU') : '—';
 
 // Monitoring time ranges (value = key understood by /api/metrics/history)
 $ranges = [
@@ -63,6 +63,7 @@ $range = $history['range'] ?? '1h';
   </div>
 </div>
 
+<?php if (!empty($showServerMetrics)): ?>
 <!-- VPS status -->
 <div class="card p-5 mb-5">
   <div class="flex items-center justify-between mb-4">
@@ -255,10 +256,11 @@ $range = $history['range'] ?? '1h';
     <div id="chartDio"></div>
   </div>
 </div>
+<?php endif; ?>
 
 <!-- top sites + needs attention -->
-<div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
-  <div class="card lg:col-span-2 overflow-hidden">
+<div class="grid grid-cols-1 <?= !empty($showServerMetrics) ? 'lg:grid-cols-3' : '' ?> gap-5">
+  <div class="card <?= !empty($showServerMetrics) ? 'lg:col-span-2' : '' ?> overflow-hidden">
     <div class="card-head">
       <h2 class="card-title"><?= icon('flame', 'text-amber-500') ?> <?= e(t('dash.top_sites')) ?> <span class="text-zinc-300 font-sans font-normal text-xs">· <?= e(t('dash.top_sites.hint')) ?></span></h2>
       <a href="/sites" class="btn btn-sm btn-ghost"><?= e(t('sites.view_all')) ?> →</a>
@@ -267,7 +269,9 @@ $range = $history['range'] ?? '1h';
       <div class="px-6 py-12 text-center">
         <?= icon('world', 'text-4xl text-zinc-200 block mb-2') ?>
         <p class="text-sm font-medium text-zinc-600"><?= e(t('sites.empty')) ?></p>
+        <?php if (\Core\Access::canAddSite()): ?>
         <a href="/sites/add" class="btn btn-primary btn-sm mt-3 inline-flex"><?= icon('plus', 'text-sm') ?> <?= e(t('sites.add_first')) ?></a>
+        <?php endif; ?>
       </div>
     <?php else: ?>
       <table class="tbl">
@@ -306,6 +310,7 @@ $range = $history['range'] ?? '1h';
     <?php endif; ?>
   </div>
 
+  <?php if (!empty($showServerMetrics)): ?>
   <div class="card overflow-hidden flex flex-col">
     <div class="card-head">
       <h2 class="card-title"><?= icon('bell', 'text-amber-500') ?> <?= e(t('dash.attention')) ?></h2>
@@ -328,8 +333,10 @@ $range = $history['range'] ?? '1h';
       </div>
     <?php endif; ?>
   </div>
+  <?php endif; ?>
 </div>
 
+<?php if (!empty($showServerMetrics)): ?>
 <script src="/assets/vendor/apexcharts.min.js"></script>
 <script>
 (function () {
@@ -415,3 +422,4 @@ $range = $history['range'] ?? '1h';
   <?php endif; ?>
 })();
 </script>
+<?php endif; ?>

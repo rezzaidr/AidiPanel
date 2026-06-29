@@ -6,6 +6,7 @@ class DB
 {
     private static ?self $instance = null;
     private \PDO $pdo;
+    private bool $immediateTransactionActive = false;
 
     private function __construct()
     {
@@ -201,6 +202,33 @@ class DB
     public function lastInsertId(): string
     {
         return $this->pdo->lastInsertId();
+    }
+
+    /**
+     * Run an atomic SQLite write transaction while holding the writer lock from
+     * the first statement. This prevents two concurrent last-admin checks from
+     * both observing the same stale administrator count.
+     */
+    public function immediateTransaction(callable $callback): mixed
+    {
+        if ($this->immediateTransactionActive) {
+            return $callback($this);
+        }
+
+        $this->pdo->exec('BEGIN IMMEDIATE');
+        $this->immediateTransactionActive = true;
+        try {
+            $result = $callback($this);
+            $this->pdo->exec('COMMIT');
+            $this->immediateTransactionActive = false;
+            return $result;
+        } catch (\Throwable $e) {
+            if ($this->immediateTransactionActive) {
+                $this->pdo->exec('ROLLBACK');
+                $this->immediateTransactionActive = false;
+            }
+            throw $e;
+        }
     }
 
     public static function log(string $action, string $detail = ''): void

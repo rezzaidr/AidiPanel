@@ -6,13 +6,20 @@ class DashboardController extends BaseController
 {
     public function index(array $params = []): void
     {
-        $metrics   = $this->getMetrics();
-        $vps       = $this->getVpsStatus($metrics);
-        $services  = $this->getServicesStatus();
-        $analytics = $this->getTrafficAnalytics();
-        $history   = $this->getHistory((string) $this->request->get('range', '1h'));
-        $sites     = $this->getTopSites();
-        $alerts    = $this->getAlerts($metrics, $services);
+        // Server identity, capacity, traffic and service health are admin-area data.
+        // Managers/clients still get the dashboard shell plus their scoped site list,
+        // but we do not even collect the server-wide values for their request.
+        $showServerMetrics = \Core\Access::canAccessAdminArea();
+        $metrics = $vps = $analytics = $history = $alerts = [];
+        if ($showServerMetrics) {
+            $metrics   = $this->getMetrics();
+            $vps       = $this->getVpsStatus($metrics);
+            $services  = $this->getServicesStatus();
+            $analytics = $this->getTrafficAnalytics();
+            $history   = $this->getHistory((string) $this->request->get('range', '1h'));
+            $alerts    = $this->getAlerts($metrics, $services);
+        }
+        $sites = $this->getTopSites();
 
         $user    = \Core\Auth::user() ?? [];
         $profile = [];
@@ -28,7 +35,10 @@ class DashboardController extends BaseController
         $greetName  = $firstName !== '' ? $firstName : ($username !== '' ? $username : 'there');
         $welcomeKey = \Core\Auth::wasFirstLogin() ? 'dash.welcome_first' : 'dash.welcome_back';
 
-        $this->view('dashboard/index', compact('metrics', 'vps', 'analytics', 'history', 'sites', 'alerts', 'greetName', 'welcomeKey'));
+        $this->view('dashboard/index', compact(
+            'metrics', 'vps', 'analytics', 'history', 'sites', 'alerts',
+            'greetName', 'welcomeKey', 'showServerMetrics'
+        ));
     }
 
     public function apiMetrics(array $params = []): void

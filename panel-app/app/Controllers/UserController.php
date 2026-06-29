@@ -35,20 +35,23 @@ class UserController extends BaseController
     public function add(array $params = []): void
     {
         [$fields, $sites] = $this->readUserForm(true);
-
-        if ($this->db->row('SELECT id FROM users WHERE username = ?', [$fields['username']])) {
-            $this->error("Username already exists: {$fields['username']}");
-        }
-
         $hash = password_hash($fields['password'], PASSWORD_BCRYPT, ['cost' => 12]);
-        $this->db->run(
-            'INSERT INTO users (username, password_hash, email, first_name, last_name, role, active, timezone)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-            [$fields['username'], $hash, $fields['email'], $fields['first_name'], $fields['last_name'],
-             $fields['role'], $fields['active'], $fields['timezone']]
-        );
-        $newId = (int) $this->db->lastInsertId();
-        \Core\Access::syncUserSiteAssignments($newId, $fields['role'], $sites);
+        try {
+            $this->db->immediateTransaction(function (\Core\DB $db) use ($fields, $sites, $hash): void {
+                if ($db->row('SELECT id FROM users WHERE username = ?', [$fields['username']])) {
+                    throw new \DomainException("Username already exists: {$fields['username']}");
+                }
+                $db->run(
+                    'INSERT INTO users (username, password_hash, email, first_name, last_name, role, active, timezone)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                    [$fields['username'], $hash, $fields['email'], $fields['first_name'], $fields['last_name'],
+                     $fields['role'], $fields['active'], $fields['timezone']]
+                );
+                \Core\Access::syncUserSiteAssignments((int) $db->lastInsertId(), $fields['role'], $sites);
+            });
+        } catch (\DomainException $e) {
+            $this->error($e->getMessage());
+        }
 
         \Core\DB::log('user:add', "Created panel user: {$fields['username']} ({$fields['role']})");
         $this->success("User '{$fields['username']}' created.", '/users');
@@ -64,26 +67,38 @@ class UserController extends BaseController
 
         [$fields, $sites] = $this->readUserForm(false, $existing);
 
-        // Last-admin protection: cannot demote/deactivate the final admin.
-        if ($existing['role'] === 'admin'
-            && ($fields['role'] !== 'admin' || $fields['active'] != 1)
-            && \Core\Access::isLastAdmin($id)) {
-            $this->error('Cannot change the last administrator — at least one admin must remain active.');
-        }
+        $hash = $fields['password'] !== ''
+            ? password_hash($fields['password'], PASSWORD_BCRYPT, ['cost' => 12])
+            : null;
+        try {
+            $existing = $this->db->immediateTransaction(function (\Core\DB $db) use ($id, $fields, $sites, $hash): array {
+                $current = $db->row('SELECT * FROM users WHERE id = ?', [$id]);
+                if (!$current) {
+                    throw new \DomainException('User not found.');
+                }
+                if ($current['role'] === 'admin'
+                    && ($fields['role'] !== 'admin' || $fields['active'] !== 1)
+                    && \Core\Access::isLastAdmin($id)) {
+                    throw new \DomainException('Cannot change the last administrator — at least one admin must remain active.');
+                }
 
-        if ($fields['password'] !== '') {
-            $hash = password_hash($fields['password'], PASSWORD_BCRYPT, ['cost' => 12]);
-            $this->db->run(
-                'UPDATE users SET password_hash = ?, email = ?, first_name = ?, last_name = ?, role = ?, active = ?, timezone = ? WHERE id = ?',
-                [$hash, $fields['email'], $fields['first_name'], $fields['last_name'], $fields['role'], $fields['active'], $fields['timezone'], $id]
-            );
-        } else {
-            $this->db->run(
-                'UPDATE users SET email = ?, first_name = ?, last_name = ?, role = ?, active = ?, timezone = ? WHERE id = ?',
-                [$fields['email'], $fields['first_name'], $fields['last_name'], $fields['role'], $fields['active'], $fields['timezone'], $id]
-            );
+                if ($hash !== null) {
+                    $db->run(
+                        'UPDATE users SET password_hash = ?, email = ?, first_name = ?, last_name = ?, role = ?, active = ?, timezone = ? WHERE id = ?',
+                        [$hash, $fields['email'], $fields['first_name'], $fields['last_name'], $fields['role'], $fields['active'], $fields['timezone'], $id]
+                    );
+                } else {
+                    $db->run(
+                        'UPDATE users SET email = ?, first_name = ?, last_name = ?, role = ?, active = ?, timezone = ? WHERE id = ?',
+                        [$fields['email'], $fields['first_name'], $fields['last_name'], $fields['role'], $fields['active'], $fields['timezone'], $id]
+                    );
+                }
+                \Core\Access::syncUserSiteAssignments($id, $fields['role'], $sites);
+                return $current;
+            });
+        } catch (\DomainException $e) {
+            $this->error($e->getMessage());
         }
-        \Core\Access::syncUserSiteAssignments($id, $fields['role'], $sites);
 
         \Core\DB::log('user:edit', "Edited panel user: {$existing['username']} ({$fields['role']})");
         $this->success("User '{$existing['username']}' updated.", '/users');
@@ -98,16 +113,21 @@ class UserController extends BaseController
         if ($id <= 0) {
             $this->error('Invalid user.');
         }
-        if (\Core\Access::isLastAdmin($id)) {
-            $this->error('Cannot delete the last administrator.');
+        try {
+            $user = $this->db->immediateTransaction(function (\Core\DB $db) use ($id): array {
+                $current = $db->row('SELECT username FROM users WHERE id = ?', [$id]);
+                if (!$current) {
+                    throw new \DomainException('User not found.');
+                }
+                if (\Core\Access::isLastAdmin($id)) {
+                    throw new \DomainException('Cannot delete the last administrator.');
+                }
+                $db->run('DELETE FROM users WHERE id = ?', [$id]);
+                return $current;
+            });
+        } catch (\DomainException $e) {
+            $this->error($e->getMessage());
         }
-
-        $user = $this->db->row('SELECT username FROM users WHERE id = ?', [$id]);
-        if (!$user) {
-            $this->error('User not found.');
-        }
-
-        $this->db->run('DELETE FROM users WHERE id = ?', [$id]);   // user_sites cleaned by FK cascade
         \Core\DB::log('user:delete', "Deleted panel user: " . $user['username']);
         $this->success('User deleted.', '/users');
     }

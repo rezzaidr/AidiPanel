@@ -1814,7 +1814,8 @@ _backup_create() {
     || die "Failed to build bundle."
 
   # Atomic commit into ~/backups (same-FS mv), then chmod 600 + owner assert.
-  local final="${backups}/${domain}_$(date +%Y%m%d_%H%M%S)_$$.tar.gz"
+  local final
+  final="${backups}/${domain}_$(date +%Y%m%d_%H%M%S)_$$.tar.gz"
   sudo -u "$user" mv "${BACKUP_STAGING}/bundle.tar.gz" "$final" || die "Failed to commit backup."
   chmod 600 "$final"
   [[ "$(stat -c %U "$final")" == "$user" ]] || die "Backup archive owner mismatch."
@@ -1826,7 +1827,7 @@ _backup_create() {
     rm -f "$pf" 2>/dev/null || sudo -u "$user" rm -f "$pf" 2>/dev/null || true
   done < <(printf '%s\n' "${backups}/${domain}_"*.tar.gz | sort -r | _backup_prune_set "$keep" "$final")
 
-  _progress 100 done "Backup created"
+  _progress 100 "done" "Backup created"
   ok "Backup created: ${final} ($(du -h "$final" | cut -f1))"
 }
 

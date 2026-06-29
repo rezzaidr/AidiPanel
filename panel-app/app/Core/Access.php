@@ -114,8 +114,8 @@ class Access
     /** Is this user the last administrator? Used to prevent self-lockout. */
     public static function isLastAdmin(int $userId): bool
     {
-        $user = DB::instance()->row('SELECT role FROM users WHERE id = ?', [$userId]);
-        if (!$user || $user['role'] !== 'admin') {
+        $user = DB::instance()->row('SELECT role, active FROM users WHERE id = ?', [$userId]);
+        if (!$user || $user['role'] !== 'admin' || (int) $user['active'] !== 1) {
             return false;
         }
         $row = DB::instance()->row("SELECT COUNT(*) AS c FROM users WHERE role = 'admin' AND active = 1");
