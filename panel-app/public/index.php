@@ -119,6 +119,11 @@ $router->get('/sites/{domain}/files/download-many', 'SiteFileController@download
 $router->post('/sites/{domain}/files/upload-chunk', 'SiteFileController@uploadChunk');
 $router->post('/sites/{domain}/files/upload-cancel', 'SiteFileController@uploadCancel');
 
+// Per-site Backups (local, manual, download-only). Gated by canManageSite (Router step 6).
+$router->get ('/sites/{domain}/backups/download', 'SiteBackupController@download');
+$router->post('/sites/{domain}/backups/create',   'SiteBackupController@create');
+$router->post('/sites/{domain}/backups/delete',   'SiteBackupController@delete');
+
 // Per-site SFTP access
 $router->get('/sites/{domain}/sftp/status',         'SiteSftpController@status');
 $router->post('/sites/{domain}/sftp/enable',         'SiteSftpController@enable');

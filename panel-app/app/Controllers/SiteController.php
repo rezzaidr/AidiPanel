@@ -473,6 +473,16 @@ class SiteController extends BaseController
             }
         }
 
+        // Backup tab data (this site's local archives in ~/backups).
+        $backupEntries = [];
+        if ($activeTab === 'backup') {
+            $r = run_cli('backup:list', ['--domain', $domain]);
+            if (!empty($r['success'])) {
+                $d = json_decode((string) $r['output'], true);
+                if (is_array($d['entries'] ?? null)) { $backupEntries = $d['entries']; }
+            }
+        }
+
         // hasCache is still needed for the Overview tab cache card (cheap DB read)
         $hasCache = (bool) ($site['cache_enabled'] ?? false);
 
@@ -483,7 +493,8 @@ class SiteController extends BaseController
             'cacheConfig', 'lastPurge', 'cacheZoneSize', 'cacheShared', 'httpsOptions', 'certs',
             'databases', 'dbUsers', 'dbHost', 'dbPort', 'dbPrefix', 'pmaInstalled', 'pmaUrl', 'wpDbInfo',
             'basicAuthInfo', 'cloudflareInfo', 'ipBlockInfo', 'ipBlockList', 'cloudflareOnlyInfo',
-            'cronJobs', 'cronManualCount'
+            'cronJobs', 'cronManualCount',
+            'backupEntries'
         ) + ['_full_bleed' => true]);
     }
 
@@ -785,7 +796,7 @@ class SiteController extends BaseController
 
     private function sanitizeTab(string $raw): string
     {
-        $valid = ['overview', 'performance', 'ssl', 'database', 'security', 'cron', 'files', 'sftp', 'settings'];
+        $valid = ['overview', 'performance', 'ssl', 'database', 'security', 'cron', 'files', 'sftp', 'backup', 'settings'];
         return in_array($raw, $valid, true) ? $raw : 'overview';
     }
 

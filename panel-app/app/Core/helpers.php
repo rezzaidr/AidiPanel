@@ -301,6 +301,7 @@ function web_cli_allowed_commands(): array
         'files:list', 'files:read', 'files:write', 'files:mkdir', 'files:delete', 'files:download',
         'files:rename', 'files:copy', 'files:move', 'files:chmod', 'files:zip', 'files:unzip',
         'files:download-many', 'files:upload-chunk', 'files:upload-cancel',
+        'backup:create', 'backup:list', 'backup:download', 'backup:delete',
         'sftp:status', 'sftp:enable', 'sftp:disable', 'sftp:passwd', 'sftp:passwd-clear', 'sftp:key-add', 'sftp:key-delete',
         'system:info',
     ];

@@ -76,6 +76,7 @@ $tabs = [
     'cron'        => ['icon' => 'ti-clock-hour-4',  'label' => t('site.tab.cron')],
     'files'       => ['icon' => 'ti-folder',        'label' => t('site.tab.files')],
     'sftp'        => ['icon' => 'ti-key',           'label' => t('site.tab.sftp')],
+    'backup'      => ['icon' => 'ti-database-export', 'label' => t('site.tab.backup')],
     'settings'    => ['icon' => 'ti-settings',      'label' => t('site.tab.settings')],
 ];
 
@@ -1162,6 +1163,9 @@ $tabs = [
 
 <?php elseif ($activeTab === 'sftp'): ?>
 <?php require __DIR__ . '/sftp.php'; ?>
+
+<?php elseif ($activeTab === 'backup'): ?>
+<?php require __DIR__ . '/backup.php'; ?>
 
 <?php elseif ($activeTab === 'settings'): ?>
 <!-- ─────────────────────────── SETTINGS ─────────────────────────────────── -->

@@ -261,6 +261,24 @@ return [
     'site.tab.settings'     => 'Settings',
     'site.tab.soon'         => 'This section is coming soon.',
 
+    // Backup tab (per-site, local, manual, download-only)
+    'site.tab.backup'            => 'Backup',
+    'site.backup.title'          => 'Backup',
+    'site.backup.hint'           => 'On-demand local backup of this site (files + database).',
+    'site.backup.now'            => 'Backup now',
+    'site.backup.empty'          => 'No backups yet. Click "Backup now" to create one.',
+    'site.backup.demo_disabled'  => 'Backups are not available in the read-only demo.',
+    'site.backup.download'       => 'Download',
+    'site.backup.delete'         => 'Delete',
+    'site.backup.confirm_title'  => 'Delete this backup?',
+    'site.backup.confirm_body'   => 'This permanently removes the archive. This cannot be undone.',
+    'site.backup.retention_hint' => 'Keeps the 5 latest backups (oldest pruned automatically).',
+    'site.backup.privacy_warning'=> 'This archive contains site files and database dumps — keep it private.',
+    'site.backup.col_file'       => 'Backup',
+    'site.backup.col_date'       => 'Date',
+    'site.backup.col_size'       => 'Size',
+    'site.backup.col_action'     => 'Action',
+
     // Manage Site — Files
     'site.files.refresh'        => 'Refresh',
     'site.files.add_new'        => 'Add new',

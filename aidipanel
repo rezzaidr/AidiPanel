@@ -1722,8 +1722,6 @@ _backup_create() {
   _require_arg "domain" "$domain" "backup:create --domain <d> [--keep N]"
   [[ "$keep" =~ ^[0-9]+$ ]] || die "--keep must be a positive integer."
 
-  _backup_progress() { printf '@@PROGRESS %s\n' "$1"; }
-
   # Per-domain lock: no parallel runs for the same site. flock is auto-released by the
   # kernel on exit or crash, so a killed run never leaves a stale lock.
   local lock="/tmp/aidipanel-backup-${domain//[!A-Za-z0-9.-]/_}.lock"
@@ -1769,12 +1767,12 @@ _backup_create() {
 
   # Phase 1: tar webroot as the site-user (source = htdocs/<domain>, NOT /public).
   # Top-level entry inside webroot.tar.gz is <domain>/; ~/backups is a sibling, never included.
-  _backup_progress "tarring files"
+  _progress 10 tarring "Archiving webroot"
   ( cd "$htdocs" && sudo -u "$user" tar czf "${BACKUP_STAGING}/webroot.tar.gz" "$domain" ) \
     || die "Failed to archive webroot."
 
   # Phase 2: dump DB(s) as root via a mode-0600 defaults file (password never in argv/environ).
-  _backup_progress "dumping database"
+  _progress 35 dumping "Dumping database"
   _load_credentials
   local dbc; dbc=$(_db_binary)
   printf '[client]\nuser=root\npassword=%s\n' "$MYSQL_ROOT_PASSWORD" > "$BACKUP_DUMP"
@@ -1811,7 +1809,7 @@ _backup_create() {
   chown "${user}:${user}" "${BACKUP_STAGING}/manifest.json"
 
   # Phase 4: bundle as the site-user (explicit member list; no literal glob).
-  _backup_progress "bundling"
+  _progress 70 bundling "Building archive"
   sudo -u "$user" tar czf "${BACKUP_STAGING}/bundle.tar.gz" -C "${BACKUP_STAGING}" "${members[@]}" \
     || die "Failed to build bundle."
 
@@ -1822,13 +1820,13 @@ _backup_create() {
   [[ "$(stat -c %U "$final")" == "$user" ]] || die "Backup archive owner mismatch."
 
   # Phase 5: prune to newest N (only after a successful commit).
-  _backup_progress "pruning"
+  _progress 90 pruning "Pruning old backups"
   local pf
   while IFS= read -r pf; do
     rm -f "$pf" 2>/dev/null || sudo -u "$user" rm -f "$pf" 2>/dev/null || true
   done < <(printf '%s\n' "${backups}/${domain}_"*.tar.gz | sort -r | _backup_prune_set "$keep" "$final")
 
-  _backup_progress "done"
+  _progress 100 done "Backup created"
   ok "Backup created: ${final} ($(du -h "$final" | cut -f1))"
 }
 
