@@ -1664,6 +1664,12 @@ set -Eeuo pipefail
 export NO_COLOR=1
 cmd="${1:-}"
 case "$cmd" in
+  web-delivery:status)
+    [[ "$#" -eq 1 ]] || {
+      echo "AidiPanel web command not allowed: web-delivery:status takes no arguments" >&2
+      exit 126
+    }
+    ;;
   security:status)
     if [[ "$#" -ne 3 || "${2:-}" != "--domain" \
           || ! "${3:-}" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]; then

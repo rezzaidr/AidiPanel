@@ -24,7 +24,7 @@ $adminSections = [
     ['key' => 'users',    'icon' => 'ti-users',          'href' => '/users', 'admin' => true],
     ['key' => 'services', 'icon' => 'ti-stack-2',        'href' => '/services'],
     ['key' => 'logs',     'icon' => 'ti-file-text',      'href' => '/logs',  'admin' => true],
-    ['key' => 'tuning',   'icon' => 'ti-adjustments-bolt','href' => null,    'soon' => true],
+    ['key' => 'web_delivery', 'icon' => 'ti-world',       'href' => '/admin/web-delivery', 'admin' => true],
     ['key' => 'backups',  'icon' => 'ti-database-export','href' => '/admin/backups', 'admin' => true],
     ['key' => 'support',  'icon' => 'ti-lifebuoy',       'href' => 'https://github.com/rezzaidr/AidiPanel/issues', 'external' => true],
     ['key' => 'settings', 'icon' => 'ti-settings',       'href' => '/admin/settings', 'admin' => true],

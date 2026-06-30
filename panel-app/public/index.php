@@ -59,6 +59,7 @@ $router->get('/dashboard', 'DashboardController@index');
 
 // Admin Area (server-wide hub — collects services, users, logs; sidebar shell)
 $router->get('/admin', 'AdminController@index');
+$router->get('/admin/web-delivery', 'WebDeliveryController@index');
 $router->get('/admin/settings',         'AdminSettingsController@index');
 $router->post('/admin/settings/domain', 'AdminSettingsController@saveDomain');
 $router->post('/admin/settings/domain/clear', 'AdminSettingsController@clearDomain');

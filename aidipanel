@@ -537,6 +537,9 @@ _usage() {
   echo "  service:start   Start a service"
   echo "  service:stop    Stop a service"
 
+  echo -e "\n${BOLD}${BLUE}Web Delivery${RESET}"
+  echo "  web-delivery:status  Show read-only origin delivery diagnostics"
+
   echo -e "\n${BOLD}${BLUE}User Management${RESET}"
   echo "  user:add        Add a no-login site user (file ownership only)"
   echo "  user:delete     Delete a system user"
@@ -10271,6 +10274,254 @@ _cloudflare_realip() {
 }
 
 # ===========================================================================
+# WEB DELIVERY — READ-ONLY ORIGIN DIAGNOSTICS
+# ===========================================================================
+
+_web_delivery_gzip_status() {
+  local conf="$1" result
+  [[ -r "$conf" ]] || { echo unknown; return 0; }
+  if result=$(awk '
+    function delta(s, a, b, t) {
+      t=s; a=gsub(/\{/,"{",t)
+      t=s; b=gsub(/\}/,"}",t)
+      return a-b
+    }
+    BEGIN { depth=0; in_http=0; http_count=0; gzip_count=0; gzip_on=0; bad=0 }
+    {
+      line=$0
+      sub(/#[^\047\042]*$/, "", line)
+      if (!in_http && depth==0 && line ~ /^[[:space:]]*http[[:space:]]*\{/) {
+        in_http=1; http_count++; http_depth=depth+1
+      } else if (in_http && depth==http_depth && line ~ /^[[:space:]]*gzip[[:space:]]+(on|off)[[:space:]]*;/) {
+        gzip_count++
+        gzip_on=(line ~ /^[[:space:]]*gzip[[:space:]]+on[[:space:]]*;/)
+      }
+      depth+=delta(line)
+      if (depth<0) bad=1
+      if (in_http && depth<http_depth) in_http=0
+    }
+    END {
+      if (bad || in_http || depth!=0 || http_count!=1 || gzip_count>1) exit 42
+      print (gzip_count==1 && gzip_on ? "configured" : "not_configured")
+    }
+  ' "$conf" 2>/dev/null); then
+    printf '%s\n' "$result"
+  else
+    echo unknown
+  fi
+}
+
+_web_delivery_vhost_metrics() {
+  local conf="$1"
+  [[ -r "$conf" ]] || return 1
+  awk '
+    function delta(s, a, b, t) {
+      t=s; a=gsub(/\{/,"{",t)
+      t=s; b=gsub(/\}/,"}",t)
+      return a-b
+    }
+    function clear_block( i) { for (i in block) delete block[i]; n=0 }
+    function flush_block( i, line, lower, is_tls, h2, quic, altsvc) {
+      is_tls=0; h2=0; quic=0; altsvc=0
+      for (i=1; i<=n; i++) {
+        line=block[i]; sub(/#.*/, "", line); lower=tolower(line)
+        if (lower ~ /^[[:space:]]*listen[[:space:]]+(\[::\]:)?443[^;]*[[:space:]]ssl([[:space:]]|;)/) is_tls=1
+        if (lower ~ /^[[:space:]]*http2[[:space:]]+on[[:space:]]*;/ || \
+            lower ~ /^[[:space:]]*listen[[:space:]]+(\[::\]:)?443[^;]*[[:space:]]http2([[:space:]]|;)/) h2=1
+        if (lower ~ /^[[:space:]]*listen[[:space:]]+(\[::\]:)?443[^;]*[[:space:]]quic([[:space:]]|;)/) quic=1
+        if (lower ~ /^[[:space:]]*add_header[[:space:]]+alt-svc[[:space:]]+/ && lower ~ /h3[=\042\047]/) altsvc=1
+      }
+      if (is_tls) {
+        tls_count++
+        tls_h2=h2
+        tls_quic=quic
+        tls_altsvc=altsvc
+      }
+    }
+    BEGIN { depth=0; in_block=0; tls_count=0; bad=0 }
+    !in_block && /^[[:space:]]*server[[:space:]]*\{/ {
+      clear_block(); in_block=1; block[++n]=$0; depth=delta($0)
+      if (depth<=0) { flush_block(); in_block=0; depth=0 }
+      next
+    }
+    in_block {
+      block[++n]=$0; depth+=delta($0)
+      if (depth<=0) { flush_block(); in_block=0; depth=0 }
+      next
+    }
+    END {
+      if (in_block || bad || tls_count>1) exit 42
+      if (tls_count==0) {
+        print "https=0"; print "http2=0"; print "http3=not_configured"; exit
+      }
+      print "https=1"
+      print "http2=" (tls_h2 ? 1 : 0)
+      if (tls_quic && tls_altsvc) print "http3=configured"
+      else if (tls_quic || tls_altsvc) print "http3=partial"
+      else print "http3=not_configured"
+    }
+  ' "$conf"
+}
+
+_web_delivery_http2_metric_state() {
+  case "${1:-}" in
+    1) echo configured ;;
+    0) echo not_configured ;;
+    *) echo unknown ;;
+  esac
+}
+
+_web_delivery_brotli_module_state() {
+  local version_file="$1" config_file="$2" version_ok=0 config_ok=0
+  [[ -r "$version_file" ]] && version_ok=1
+  [[ -r "$config_file" ]] && config_ok=1
+  if [[ "$version_ok" == 1 ]] && grep -Eqi 'ngx(_http)?_brotli|ngx_brotli' "$version_file"; then
+    echo detected; return 0
+  fi
+  if [[ "$config_ok" == 1 ]] \
+      && grep -Eqi '^[[:space:]]*load_module[[:space:]]+[^;]*brotli[^;]*;' "$config_file"; then
+    echo detected; return 0
+  fi
+  if [[ "$version_ok" == 1 && "$config_ok" == 1 ]]; then echo not_detected; else echo unknown; fi
+}
+
+_web_delivery_brotli_config_state() {
+  local config_file="$1"
+  [[ -r "$config_file" ]] || { echo unknown; return 0; }
+  if grep -Eqi '(^|[;{])[[:space:]]*brotli[[:space:]]+on[[:space:]]*;' "$config_file"; then
+    echo configured
+  else
+    echo not_configured
+  fi
+}
+
+_web_delivery_http3_module_state() {
+  local version_file="$1"
+  [[ -r "$version_file" ]] || { echo unknown; return 0; }
+  if grep -Eq -- '--with-http_v3_module([[:space:]]|$)' "$version_file"; then echo detected; else echo not_detected; fi
+}
+
+_web_delivery_udp_state() {
+  local sockets_file="$1" bound
+  [[ -r "$sockets_file" ]] || { echo unknown; return 0; }
+  bound=$(grep -E '[[:space:]][^[:space:]]*:443[[:space:]]' "$sockets_file" 2>/dev/null || true)
+  [[ -n "$bound" ]] || { echo not_listening; return 0; }
+  if printf '%s\n' "$bound" | grep -qi 'nginx'; then echo listening; else echo unknown; fi
+}
+
+_web_delivery_managed_vhosts() {
+  local enabled_dir="$1" available_dir="$2" available_root link base domain target expected marker
+  [[ -d "$enabled_dir" && -d "$available_dir" ]] || return 0
+  available_root=$(cd -P -- "$available_dir" 2>/dev/null && pwd -P) || return 0
+  for link in "$enabled_dir"/*.conf; do
+    [[ -L "$link" ]] || continue
+    base=$(basename -- "$link")
+    [[ "$base" != aidipanel-ui.conf ]] || continue
+    domain=${base%.conf}
+    _domain_valid "$domain" || continue
+    target=$(readlink -f -- "$link" 2>/dev/null) || continue
+    expected="${available_root}/${base}"
+    [[ "$target" == "$expected" && -f "$target" ]] || continue
+    IFS= read -r marker < "$target" || continue
+    [[ "$marker" == "# AidiPanel — ${domain}" ]] || continue
+    printf '%s\n' "$target"
+  done
+}
+
+_web_delivery_capture() {
+  local target="$1" deadline="$2" remaining
+  shift 2
+  remaining=$((deadline - SECONDS))
+  (( remaining > 0 )) || { rm -f -- "$target"; return 1; }
+  (( remaining > 2 )) && remaining=2
+  if ( ulimit -f 4096 2>/dev/null || true; timeout "${remaining}s" "$@" ) > "$target" 2>&1; then
+    return 0
+  fi
+  rm -f -- "$target"
+  return 1
+}
+
+_web_delivery_status() {
+  _require_root "web-delivery:status"
+  [[ "$#" -eq 0 ]] || die "web-delivery:status does not accept arguments."
+  if [[ "${AIDIPANEL_WEB_DELIVERY_BOUNDED:-0}" != 1 ]] && command -v timeout >/dev/null 2>&1; then
+    local timeout_rc=0
+    AIDIPANEL_WEB_DELIVERY_BOUNDED=1 timeout --signal=TERM --kill-after=1s 5s \
+      "${AIDIPANEL_SELF:-$0}" web-delivery:status || timeout_rc=$?
+    return "$timeout_rc"
+  fi
+
+  (
+    local tmp deadline version_file config_file sockets_file
+    local gzip brotli_module brotli_config http3_module udp
+    local https_total=0 http2_configured=0 http2_unknown=0
+    local http3_configured=0 http3_partial=0 http3_not_configured=0 http3_unknown=0
+    local conf metrics https h2 h3
+    umask 077
+    tmp=$(mktemp -d /tmp/aidipanel-web-delivery.XXXXXX) || die "Status workspace unavailable."
+    chmod 700 "$tmp"
+    trap 'rm -rf -- "$tmp"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    deadline=$((SECONDS + 5))
+    version_file="${tmp}/nginx-v"
+    config_file="${tmp}/nginx-t"
+    sockets_file="${tmp}/ss"
+
+    _web_delivery_capture "$version_file" "$deadline" nginx -V || true
+    _web_delivery_capture "$config_file" "$deadline" nginx -T || true
+    _web_delivery_capture "$sockets_file" "$deadline" ss -H -lunp || true
+
+    gzip=$(_web_delivery_gzip_status /etc/nginx/nginx.conf)
+    brotli_module=$(_web_delivery_brotli_module_state "$version_file" "$config_file")
+    brotli_config=$(_web_delivery_brotli_config_state "$config_file")
+    http3_module=$(_web_delivery_http3_module_state "$version_file")
+    udp=$(_web_delivery_udp_state "$sockets_file")
+
+    while IFS= read -r conf; do
+      [[ -n "$conf" ]] || continue
+      if ! metrics=$(_web_delivery_vhost_metrics "$conf" 2>/dev/null); then
+        https_total=$((https_total + 1))
+        http2_unknown=$((http2_unknown + 1))
+        http3_unknown=$((http3_unknown + 1))
+        continue
+      fi
+      https=$(printf '%s\n' "$metrics" | awk -F= '$1=="https"{print $2}')
+      [[ "$https" == 1 ]] || continue
+      https_total=$((https_total + 1))
+      h2=$(printf '%s\n' "$metrics" | awk -F= '$1=="http2"{print $2}')
+      h3=$(printf '%s\n' "$metrics" | awk -F= '$1=="http3"{print $2}')
+      case "$(_web_delivery_http2_metric_state "$h2")" in
+        configured) http2_configured=$((http2_configured + 1)) ;;
+        unknown)    http2_unknown=$((http2_unknown + 1)) ;;
+      esac
+      case "$h3" in
+        configured)     http3_configured=$((http3_configured + 1)) ;;
+        partial)        http3_partial=$((http3_partial + 1)) ;;
+        not_configured) http3_not_configured=$((http3_not_configured + 1)) ;;
+        *)              http3_unknown=$((http3_unknown + 1)) ;;
+      esac
+    done < <(_web_delivery_managed_vhosts "$NGINX_ENABLED_DIR" "$NGINX_CONF_DIR")
+
+    printf 'schema=1\n'
+    printf 'checked_at=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    printf 'gzip=%s\n' "$gzip"
+    printf 'brotli_module=%s\n' "$brotli_module"
+    printf 'brotli_config=%s\n' "$brotli_config"
+    printf 'https_sites_total=%d\n' "$https_total"
+    printf 'http2_configured=%d\n' "$http2_configured"
+    printf 'http2_unknown=%d\n' "$http2_unknown"
+    printf 'http3_module=%s\n' "$http3_module"
+    printf 'http3_configured=%d\n' "$http3_configured"
+    printf 'http3_partial=%d\n' "$http3_partial"
+    printf 'http3_not_configured=%d\n' "$http3_not_configured"
+    printf 'http3_unknown=%d\n' "$http3_unknown"
+    printf 'udp_443=%s\n' "$udp"
+    printf 'external_reachability=not_tested\n'
+  )
+}
+
+# ===========================================================================
 # MAIN DISPATCHER
 # ===========================================================================
 main() {
@@ -10402,6 +10653,7 @@ main() {
     service:reload)  _service_action reload "$@" ;;
     service:start)   _service_action start "$@" ;;
     service:stop)    _service_action stop "$@" ;;
+    web-delivery:status) _web_delivery_status "$@" ;;
 
     # User
     user:add)       _user_add "$@" ;;

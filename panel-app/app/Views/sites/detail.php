@@ -1138,9 +1138,9 @@ $tabs = [
         </h2>
         <p class="text-[11px] text-zinc-400 mt-1"><?= e(t('perf.delivery.desc')) ?></p>
       </div>
-      <a href="/admin"
+      <a href="/admin/web-delivery"
          class="text-xs font-semibold text-ink hover:underline flex items-center gap-1 whitespace-nowrap shrink-0">
-        <?= e(t('perf.server_tuning')) ?> <?= icon('arrow-right', 'text-sm') ?>
+        <?= e(t('perf.web_delivery')) ?> <?= icon('arrow-right', 'text-sm') ?>
       </a>
     </div>
     <div class="flex flex-wrap items-center gap-2 mt-3">

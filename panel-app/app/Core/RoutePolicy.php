@@ -35,7 +35,7 @@ final class RoutePolicy
         $admin = [
             '/users', '/users/add', '/users/edit', '/users/delete', '/users/passwd',
             '/logs',
-            '/admin', '/admin/settings', '/admin/settings/domain', '/admin/settings/domain/clear',
+            '/admin', '/admin/web-delivery', '/admin/settings', '/admin/settings/domain', '/admin/settings/domain/clear',
             '/admin/backups', '/admin/backups/test', '/admin/backups/destination',
             '/admin/backups/policy', '/admin/backups/run',
             '/services', '/services/action', '/api/services',
