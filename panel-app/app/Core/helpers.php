@@ -306,7 +306,7 @@ function web_cli_allowed_commands(): array
         'remote-backup:save-policy', 'remote-backup:run',
         'web-delivery:status',
         'sftp:status', 'sftp:enable', 'sftp:disable', 'sftp:passwd', 'sftp:passwd-clear', 'sftp:key-add', 'sftp:key-delete',
-        'system:info',
+        'system:cloud-metadata', 'system:info',
     ];
 }
 
@@ -407,6 +407,10 @@ function is_web_cli_invocation_allowed(string $command, array $args): bool
     // Router's blanket block on mutating POST routes).
     if (demo_mode() && !in_array($command, web_cli_readonly_commands(), true)) {
         return false;
+    }
+
+    if ($command === 'system:cloud-metadata') {
+        return $args === [];
     }
 
     if ($command === 'web-delivery:status') {

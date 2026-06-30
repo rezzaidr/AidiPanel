@@ -42,6 +42,10 @@ $cacheable  = (int) ($analytics['cached'] ?? 0) + (int) ($analytics['origin'] ??
 $hasSeries  = !empty($analytics['series']['labels']);   // cacheable traffic to plot
 $memTotal   = format_bytes((int) ($vps['mem_total'] ?? 0));
 $diskTotal  = format_bytes((int) ($metrics['disk']['total'] ?? 0));
+$computeParts = [];
+if (!empty($vps['cores'])) $computeParts[] = t('vps.cores', ['n' => $vps['cores']]);
+if (!empty($vps['mem_total'])) $computeParts[] = $memTotal . ' RAM';
+$computeLabel = $computeParts ? implode(' · ', $computeParts) : '—';
 $coreLabel  = !empty($vps['cores']) ? ($vps['cores'] . ' CPU') : '—';
 
 // Monitoring time ranges (value = key understood by /api/metrics/history)
@@ -85,38 +89,37 @@ $range = $history['range'] ?? '1h';
       <p class="text-sm font-medium text-zinc-800 mono"><?= e($vps['hostname']) ?></p>
     </div>
     <div>
-      <p class="eyebrow mb-1"><?= e(t('vps.cpu')) ?></p>
-      <p class="text-sm font-medium text-zinc-800"><?= $vps['cores'] ? e(t('vps.cores', ['n' => $vps['cores']])) : '<span class="text-zinc-300">—</span>' ?></p>
-    </div>
-    <div>
-      <p class="eyebrow mb-1"><?= e(t('vps.memory')) ?></p>
-      <p class="text-sm font-medium text-zinc-800"><?= e($memTotal) ?></p>
-    </div>
-    <div>
-      <p class="eyebrow mb-1"><?= e(t('vps.cloud')) ?></p>
-      <p class="text-sm font-medium text-zinc-800 flex items-center gap-1.5"><?php if ($vps['provider']): ?><?= icon('cloud', 'text-sky-500 text-base shrink-0') ?> <?= e($vps['provider']) ?><?php else: ?><span class="text-zinc-300">—</span><?php endif; ?></p>
-    </div>
-    <div>
-      <p class="eyebrow mb-1"><?= e(t('vps.droplet')) ?></p>
-      <p class="text-sm font-medium text-zinc-800 mono"><?= $vps['droplet_id'] ? e($vps['droplet_id']) : '<span class="text-zinc-300 font-sans">—</span>' ?></p>
-    </div>
-    <div>
-      <p class="eyebrow mb-1"><?= e(t('vps.region')) ?></p>
-      <p class="text-sm font-medium text-zinc-800"><?= $vps['region'] ? e(strtoupper((string) $vps['region'])) : '<span class="text-zinc-300">—</span>' ?></p>
+      <p class="eyebrow mb-1"><?= e(t('vps.compute')) ?></p>
+      <p class="text-sm font-medium text-zinc-800"><?= e($computeLabel) ?></p>
     </div>
     <div>
       <p class="eyebrow mb-1"><?= e(t('vps.ipv4')) ?></p>
       <?php if ($vps['ipv4']): ?>
-      <div class="flex items-center gap-1.5">
-        <p class="text-sm font-medium text-zinc-800 mono"><?= e($vps['ipv4']) ?></p>
-        <button onclick="navigator.clipboard.writeText('<?= e($vps['ipv4']) ?>');this.innerHTML=window.AidiIcons.copyDone;setTimeout(()=>this.innerHTML=window.AidiIcons.copyIdle,1500)"
-                title="Copy IP" class="text-zinc-300 hover:text-zinc-500 transition-colors p-0.5 rounded"><?= icon('copy', 'text-sm') ?></button>
-      </div>
+      <button type="button" data-copy-ip="<?= e($vps['ipv4']) ?>" x-data="{ copied: false }"
+              @click="navigator.clipboard && navigator.clipboard.writeText($el.dataset.copyIp).then(() => { copied = true; setTimeout(() => copied = false, 1500) }).catch(() => {})"
+              title="<?= e(t('topbar.copy_ip')) ?>"
+              class="group inline-flex max-w-full items-center gap-1.5 text-left text-sm font-medium mono text-zinc-800 hover:text-indigo-600 transition-colors">
+        <span class="truncate min-w-0"><?= e($vps['ipv4']) ?></span>
+        <span x-show="!copied"><?= icon('copy', 'text-[11px] text-zinc-300 group-hover:text-indigo-400 shrink-0') ?></span>
+        <span x-show="copied" x-cloak><?= icon('check', 'text-emerald-500 text-sm shrink-0') ?></span>
+      </button>
       <?php else: ?>
       <span class="text-zinc-300">—</span>
       <?php endif; ?>
     </div>
   </div>
+  <?php if (!empty($vps['provider'])): ?>
+  <p data-cloud-summary class="mt-4 pt-3 border-t border-zinc-100 text-[11px] leading-relaxed text-zinc-400">
+    <span class="font-semibold text-zinc-500"><?= e(t('vps.cloud')) ?></span>
+    <span class="font-medium text-zinc-700"><?= e($vps['provider']) ?></span>
+    <span class="mx-1.5 text-zinc-300" aria-hidden="true">·</span>
+    <span class="font-semibold text-zinc-500"><?= e(t('vps.instance')) ?></span>
+    <span class="mono text-zinc-600 break-all"><?= $vps['instance_id'] ? e($vps['instance_id']) : '—' ?></span>
+    <span class="mx-1.5 text-zinc-300" aria-hidden="true">·</span>
+    <span class="font-semibold text-zinc-500"><?= e(t('vps.region')) ?></span>
+    <span class="font-medium text-zinc-700"><?= $vps['region'] ? e(strtoupper((string) $vps['region'])) : '—' ?></span>
+  </p>
+  <?php endif; ?>
 </div>
 
 <!-- KPI row — performance-led -->

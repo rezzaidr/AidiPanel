@@ -289,21 +289,17 @@ class DashboardController extends BaseController
         $cores = (int) trim((string) @shell_exec('nproc 2>/dev/null'));
         $cloud = $this->cloudMetadata();
 
-        // Public IP is the field users copy into DNS, so it must be routable on
-        // every host. Cloud metadata wins when present; otherwise resolve it
-        // universally (handles NAT clouds where the NIC only has a private IP).
-        $ipv4 = $cloud['ipv4'] ?? '';
-        if ($ipv4 === '') {
-            $ipv4 = server_public_ip();
-        }
+        // Public IP remains provider-independent and also handles NAT clouds.
+        $ipv4 = server_public_ip();
 
         return [
             'os'         => $os,
             'hostname'   => gethostname() ?: 'server',
             'cores'      => $cores > 0 ? $cores : null,
             'mem_total'  => $metrics['memory']['total'] ?? 0,
+            'cloud_status' => $cloud['status'] ?? 'unknown',
             'provider'   => $cloud['provider'] ?? null,
-            'droplet_id' => $cloud['droplet_id'] ?? null,
+            'instance_id' => $cloud['instance_id'] ?? null,
             'region'     => $cloud['region'] ?? null,
             'ipv4'       => $ipv4 !== '' ? $ipv4 : null,
             'uptime'     => $metrics['uptime'] ?? '',
@@ -312,20 +308,13 @@ class DashboardController extends BaseController
 
     private function cloudMetadata(): array
     {
-        if (!filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN)) {
-            return [];
+        if (demo_mode()) {
+            return \Core\CloudInstanceMetadata::unknown();
         }
-        $ctx = stream_context_create(['http' => ['timeout' => 0.4, 'ignore_errors' => true]]);
-        $raw = @file_get_contents('http://169.254.169.254/metadata/v1.json', false, $ctx);
-        if ($raw === false) return [];
-        $d = json_decode($raw, true);
-        if (!is_array($d)) return [];
-        return [
-            'provider'   => 'DigitalOcean',
-            'droplet_id' => isset($d['droplet_id']) ? (string) $d['droplet_id'] : null,
-            'region'     => $d['region'] ?? null,
-            'ipv4'       => $d['interfaces']['public'][0]['ipv4']['ip_address'] ?? '',
-        ];
+        $result = run_cli('system:cloud-metadata');
+        return $result['success']
+            ? \Core\CloudInstanceMetadata::parse((string) $result['output'])
+            : \Core\CloudInstanceMetadata::unknown();
     }
 
     private function getAlerts(array $metrics, array $services): array

@@ -137,6 +137,12 @@ set -Eeuo pipefail
 export NO_COLOR=1
 cmd="${1:-}"
 case "$cmd" in
+  system:cloud-metadata)
+    [[ "$#" -eq 1 ]] || {
+      echo "AidiPanel web command not allowed: system:cloud-metadata takes no arguments" >&2
+      exit 126
+    }
+    ;;
   web-delivery:status)
     [[ "$#" -eq 1 ]] || {
       echo "AidiPanel web command not allowed: web-delivery:status takes no arguments" >&2

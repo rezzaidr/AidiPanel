@@ -552,6 +552,7 @@ _usage() {
   echo "  demo:disable    Turn the read-only demo off (panel fully editable again)"
 
   echo -e "\n${BOLD}${BLUE}System${RESET}"
+  echo "  system:cloud-metadata  Detect cached cloud instance metadata"
   echo "  system:info     Show server and panel information"
   echo "  log:tail        Tail Nginx or PHP logs for a domain"
   echo "  self:update     Update AidiPanel CLI to latest version"
@@ -9361,6 +9362,247 @@ _demo_disable() {
 # SYSTEM COMMANDS
 # ===========================================================================
 
+_cloud_provider_key() {
+  local raw="${1:-}"
+  raw="${raw#"${raw%%[![:space:]]*}"}"
+  raw="${raw%"${raw##*[![:space:]]}"}"
+  raw="${raw,,}"
+  raw="${raw//_/-}"
+  case "$raw" in
+    aws|ec2|amazon|amazon-ec2)                   printf 'aws\n' ;;
+    azure|microsoft-azure)                       printf 'azure\n' ;;
+    gce|gcp|google|google-cloud)                 printf 'gcp\n' ;;
+    digitalocean|digital-ocean)                 printf 'digitalocean\n' ;;
+    hetzner|hetzner-cloud)                       printf 'hetzner\n' ;;
+    oracle|oci|oracle-cloud)                     printf 'oracle\n' ;;
+    vultr)                                       printf 'vultr\n' ;;
+    akamai|linode|akamai-linode)                 printf 'linode\n' ;;
+    alibaba|aliyun|alibaba-cloud)                printf 'alibaba\n' ;;
+    openstack)                                   printf 'openstack\n' ;;
+    scaleway)                                    printf 'scaleway\n' ;;
+    upcloud)                                     printf 'upcloud\n' ;;
+    exoscale)                                    printf 'exoscale\n' ;;
+    *)                                           return 1 ;;
+  esac
+}
+
+_cloud_id_valid() {
+  local value="${1:-}"
+  case "${value,,}" in null|none|unknown) return 1 ;; esac
+  [[ ${#value} -ge 1 && ${#value} -le 128 \
+    && "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]]
+}
+
+_cloud_region_valid() {
+  local value="${1:-}"
+  case "${value,,}" in null|none|unknown) return 1 ;; esac
+  [[ ${#value} -ge 1 && ${#value} -le 64 \
+    && "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+}
+
+_cloud_init_values() {
+  command -v cloud-init >/dev/null 2>&1 || return 1
+  local raw provider instance_id region
+  raw="$(timeout 1s cloud-init query v1.cloud_name 2>/dev/null)" || return 1
+  provider="$(_cloud_provider_key "$raw")" || return 1
+  instance_id="$(timeout 1s cloud-init query v1.instance_id 2>/dev/null || true)"
+  region="$(timeout 1s cloud-init query v1.region 2>/dev/null || true)"
+  _cloud_id_valid "$instance_id" || instance_id=""
+  _cloud_region_valid "$region" || region=""
+  printf '%s|%s|%s\n' "$provider" "$instance_id" "$region"
+}
+
+_cloud_http() {
+  local method="${1:-GET}" url="${2:-}"
+  shift 2 || true
+  command -v curl >/dev/null 2>&1 || return 1
+  curl --noproxy '*' --silent --show-error --fail \
+    --connect-timeout 0.2 --max-time 0.45 --max-filesize 65536 \
+    --proto '=http' --request "$method" "$@" "$url" 2>/dev/null
+}
+
+_cloud_probe_provider() {
+  local provider="${1:-}" base='http://169.254.169.254'
+  local instance_id="" region="" zone="" token=""
+  case "$provider" in
+    digitalocean)
+      instance_id="$(_cloud_http GET "$base/metadata/v1/id")" || return 1
+      region="$(_cloud_http GET "$base/metadata/v1/region" || true)"
+      ;;
+    hetzner)
+      instance_id="$(_cloud_http GET "$base/hetzner/v1/metadata/instance-id")" || return 1
+      region="$(_cloud_http GET "$base/hetzner/v1/metadata/region" || true)"
+      ;;
+    azure)
+      instance_id="$(_cloud_http GET "$base/metadata/instance/compute/vmId?api-version=2025-04-07&format=text" -H 'Metadata: true')" || return 1
+      region="$(_cloud_http GET "$base/metadata/instance/compute/location?api-version=2025-04-07&format=text" -H 'Metadata: true' || true)"
+      ;;
+    gcp)
+      instance_id="$(_cloud_http GET "$base/computeMetadata/v1/instance/id" -H 'Metadata-Flavor: Google')" || return 1
+      zone="$(_cloud_http GET "$base/computeMetadata/v1/instance/zone" -H 'Metadata-Flavor: Google' || true)"
+      zone="${zone##*/}"
+      [[ "$zone" =~ ^[A-Za-z0-9._-]+-[A-Za-z]$ ]] && region="${zone%-?}"
+      ;;
+    oracle)
+      instance_id="$(_cloud_http GET "$base/opc/v2/instance/id" -H 'Authorization: Bearer Oracle')" || return 1
+      region="$(_cloud_http GET "$base/opc/v2/instance/canonicalRegionName" -H 'Authorization: Bearer Oracle' || true)"
+      ;;
+    aws)
+      token="$(_cloud_http PUT "$base/latest/api/token" -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')" || return 1
+      [[ ${#token} -ge 1 && ${#token} -le 4096 \
+        && "$token" =~ ^[A-Za-z0-9._~+/:=-]+$ ]] || return 1
+      instance_id="$(_cloud_http GET "$base/latest/meta-data/instance-id" -H "X-aws-ec2-metadata-token: $token")" || return 1
+      region="$(_cloud_http GET "$base/latest/meta-data/placement/region" -H "X-aws-ec2-metadata-token: $token" || true)"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+  _cloud_id_valid "$instance_id" || return 1
+  _cloud_region_valid "$region" || region=""
+  printf '%s|%s|%s\n' "$provider" "$instance_id" "$region"
+}
+
+_cloud_provider_hint() {
+  local raw="" key="" dmi=""
+  if command -v cloud-id >/dev/null 2>&1; then
+    raw="$(timeout 1s cloud-id 2>/dev/null || true)"
+    key="$(_cloud_provider_key "$raw" 2>/dev/null || true)"
+    [[ -n "$key" ]] && { printf '%s\n' "$key"; return 0; }
+  fi
+  dmi="$(cat /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/product_name 2>/dev/null || true)"
+  dmi="${dmi,,}"
+  case "$dmi" in
+    *amazon*ec2*|*amazon-web-services*) printf 'aws\n' ;;
+    *google*)                           printf 'gcp\n' ;;
+    *microsoft*virtual-machine*)        printf 'azure\n' ;;
+    *digitalocean*)                     printf 'digitalocean\n' ;;
+    *hetzner*)                          printf 'hetzner\n' ;;
+    *oraclecloud*|*oracle-cloud*)       printf 'oracle\n' ;;
+    *vultr*)                            printf 'vultr\n' ;;
+    *)                                  return 1 ;;
+  esac
+}
+
+_cloud_detect_uncached() {
+  local values="" provider="" instance_id="" region="" source="none"
+  local direct="" direct_provider="" direct_id="" direct_region="" hint=""
+  if values="$(_cloud_init_values 2>/dev/null)"; then
+    IFS='|' read -r provider instance_id region <<< "$values"
+    source="cloud-init"
+  fi
+
+  if [[ -n "$provider" && ( -z "$instance_id" || -z "$region" ) ]]; then
+    if direct="$(_cloud_probe_provider "$provider" 2>/dev/null)"; then
+      IFS='|' read -r direct_provider direct_id direct_region <<< "$direct"
+      if [[ "$direct_provider" == "$provider" ]]; then
+        [[ -z "$instance_id" ]] && instance_id="$direct_id"
+        [[ -z "$region" ]] && region="$direct_region"
+        source="mixed"
+      fi
+    fi
+  elif [[ -z "$provider" ]]; then
+    hint="$(_cloud_provider_hint 2>/dev/null || true)"
+    if [[ -n "$hint" ]]; then
+      direct="$(_cloud_probe_provider "$hint" 2>/dev/null || true)"
+    else
+      local candidate
+      for candidate in digitalocean hetzner azure gcp oracle aws; do
+        direct="$(_cloud_probe_provider "$candidate" 2>/dev/null || true)"
+        [[ -n "$direct" ]] && break
+      done
+    fi
+    if [[ -n "$direct" ]]; then
+      IFS='|' read -r provider instance_id region <<< "$direct"
+      source="metadata"
+    fi
+  fi
+
+  printf '%s|%s|%s|%s\n' "$provider" "$instance_id" "$region" "$source"
+}
+
+_cloud_cache_ttl() {
+  case "${1:-unknown}" in
+    detected) printf '86400\n' ;;
+    partial)  printf '3600\n' ;;
+    *)        printf '300\n' ;;
+  esac
+}
+
+_cloud_cache_fresh() {
+  local file="${1:-}" status="" ttl=0 mtime=0 now=0
+  [[ -r "$file" ]] || return 1
+  status="$(awk -F= '$1=="status"{print $2; exit}' "$file" 2>/dev/null)"
+  ttl="$(_cloud_cache_ttl "$status")"
+  mtime="$(stat -c %Y "$file" 2>/dev/null)" || return 1
+  now="$(date +%s)"
+  [[ "$mtime" =~ ^[0-9]+$ && "$now" =~ ^[0-9]+$ ]] || return 1
+  (( now >= mtime && now - mtime < ttl ))
+}
+
+_cloud_record() {
+  local status="${1:-unknown}" provider="${2:-}" instance_id="${3:-}"
+  local region="${4:-}" source="${5:-none}" checked_at="${6:-}"
+  printf 'schema=1\nstatus=%s\nprovider=%s\ninstance_id=%s\nregion=%s\nsource=%s\nchecked_at=%s\n' \
+    "$status" "$provider" "$instance_id" "$region" "$source" "$checked_at"
+}
+
+_system_cloud_metadata() {
+  _require_root "system:cloud-metadata"
+  [[ "$#" -eq 0 ]] || die "system:cloud-metadata does not accept arguments."
+  if [[ "${AIDIPANEL_CLOUD_BOUNDED:-0}" != 1 ]] && command -v timeout >/dev/null 2>&1; then
+    local timeout_rc=0
+    AIDIPANEL_CLOUD_BOUNDED=1 timeout --signal=TERM --kill-after=1s 5s \
+      "${AIDIPANEL_SELF:-$0}" system:cloud-metadata || timeout_rc=$?
+    return "$timeout_rc"
+  fi
+
+  local cache_override="${AIDIPANEL_CLOUD_CACHE_FILE:-}"
+  local cache="${cache_override:-/var/cache/aidipanel/cloud-metadata.cache}"
+  local cache_dir cache_ready=0
+  cache_dir="$(dirname -- "$cache")"
+  if [[ -n "$cache_override" ]]; then
+    mkdir -p -- "$cache_dir" 2>/dev/null && cache_ready=1
+  elif [[ ! -L "$cache_dir" ]] \
+      && install -d -m 700 -o root -g root -- "$cache_dir" 2>/dev/null; then
+    cache_ready=1
+  fi
+
+  if (( cache_ready == 1 )) && _cloud_cache_fresh "$cache"; then
+    cat -- "$cache"
+    return 0
+  fi
+
+  local values provider="" instance_id="" region="" source="none"
+  local status="unknown" checked_at record tmp=""
+  values="$(_cloud_detect_uncached 2>/dev/null || true)"
+  IFS='|' read -r provider instance_id region source <<< "$values"
+  _cloud_provider_key "$provider" >/dev/null 2>&1 || provider=""
+  _cloud_id_valid "$instance_id" || instance_id=""
+  _cloud_region_valid "$region" || region=""
+  case "$source" in cloud-init|metadata|mixed) ;; *) source="none" ;; esac
+
+  if [[ -n "$provider" && -n "$instance_id" && -n "$region" ]]; then
+    status="detected"
+  elif [[ -n "$provider" ]]; then
+    status="partial"
+  else
+    provider=""; instance_id=""; region=""; source="none"
+  fi
+  checked_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  record="$(_cloud_record "$status" "$provider" "$instance_id" "$region" "$source" "$checked_at")"
+
+  umask 077
+  if (( cache_ready == 1 )) \
+      && tmp="$(mktemp "${cache}.tmp.XXXXXX" 2>/dev/null)"; then
+    printf '%s\n' "$record" > "$tmp"
+    chmod 600 "$tmp" 2>/dev/null || true
+    mv -f -- "$tmp" "$cache"
+  fi
+  [[ -n "$tmp" && -e "$tmp" ]] && rm -f -- "$tmp"
+  printf '%s\n' "$record"
+}
+
 _system_info() {
   _parse_opts "$@"
   local hostname; hostname=$(hostname)
@@ -10667,6 +10909,7 @@ main() {
     demo:disable)   _demo_disable "$@" ;;
 
     # System
+    system:cloud-metadata) _system_cloud_metadata "$@" ;;
     system:info)    _system_info "$@" ;;
     log:tail)       _log_tail "$@" ;;
     self:update)    _self_update "$@" ;;
