@@ -21,19 +21,16 @@ $navSites     = str_starts_with($uri, '/sites') ? 'active' : '';
 // entries only show to administrators. Server-wide PHP/Cache/SSL pages were removed
 // (those live per-site now), so they are intentionally absent here.
 $adminSections = [
-    ['key' => 'users',    'icon' => 'ti-users',          'href' => '/users', 'admin' => true],
-    ['key' => 'services', 'icon' => 'ti-stack-2',        'href' => '/services'],
-    ['key' => 'logs',     'icon' => 'ti-file-text',      'href' => '/logs',  'admin' => true],
+    ['key' => 'users',    'icon' => 'ti-users',          'href' => '/admin/users', 'admin' => true],
+    ['key' => 'services', 'icon' => 'ti-stack-2',        'href' => '/admin/services', 'admin' => true],
+    ['key' => 'logs',     'icon' => 'ti-file-text',      'href' => '/admin/logs',  'admin' => true],
     ['key' => 'web_delivery', 'icon' => 'ti-world',       'href' => '/admin/web-delivery', 'admin' => true],
     ['key' => 'backups',  'icon' => 'ti-database-export','href' => '/admin/backups', 'admin' => true],
     ['key' => 'support',  'icon' => 'ti-lifebuoy',       'href' => 'https://github.com/rezzaidr/AidiPanel/issues', 'external' => true],
     ['key' => 'settings', 'icon' => 'ti-settings',       'href' => '/admin/settings', 'admin' => true],
 ];
 
-$navAdmin = '';
-foreach (['/admin', '/services', '/logs', '/users'] as $p) {
-    if (str_starts_with($uri, $p)) { $navAdmin = 'active'; break; }
-}
+$navAdmin = str_starts_with($uri, '/admin') ? 'active' : '';
 $_is_admin_area = ($navAdmin === 'active');
 
 $_username = (string) ($_user['username'] ?? 'admin');
@@ -172,7 +169,7 @@ $assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROO
             <?php
               if (!empty($s['admin']) && empty($_is_admin)) {
                   // Read-only demo: still surface the admin READ sections (the viewer may
-                  // browse them), but keep /logs hidden — it can carry IPs/paths.
+                  // browse them), but keep Logs hidden — it can carry IPs/paths.
                   if (!demo_mode() || $s['key'] === 'logs') { continue; }
               }
               $isSoon = !empty($s['soon']) || empty($s['href']);

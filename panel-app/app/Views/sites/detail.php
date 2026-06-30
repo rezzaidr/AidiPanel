@@ -253,7 +253,7 @@ $tabs = [
       <div class="card overflow-hidden">
         <div class="card-head">
           <h2 class="card-title"><?= e(t('site.activity.title')) ?></h2>
-          <a href="/logs" class="text-xs text-ink font-medium hover:text-ink-light flex items-center gap-1">
+          <a href="/admin/logs" class="text-xs text-ink font-medium hover:text-ink-light flex items-center gap-1">
             <?= e(t('site.activity.view_all')) ?> <?= icon('arrow-right', 'text-sm') ?>
           </a>
         </div>
@@ -867,7 +867,7 @@ $tabs = [
           <p class="text-xs font-semibold text-amber-800 mb-0.5">Redis service is not running</p>
           <p class="text-[11px] text-amber-700 leading-relaxed">
             The Redis server is not responding. Go to
-            <a href="/services" class="underline font-medium">Services</a>
+            <a href="/admin/services" class="underline font-medium">Services</a>
             to check and restart it.
           </p>
         </div>

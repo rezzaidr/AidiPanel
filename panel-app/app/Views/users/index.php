@@ -108,7 +108,7 @@
   </div>
 
   <!-- Hidden native form the confirm modal submits to delete a user. -->
-  <form id="usr-del-form" method="POST" action="/users/delete" class="hidden">
+  <form id="usr-del-form" method="POST" action="/admin/users/delete" class="hidden">
     <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
     <input type="hidden" name="id" :value="del.id">
   </form>
@@ -126,7 +126,7 @@
         </h3>
         <button type="button" @click="modal=null" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700"><?= icon('x') ?></button>
       </div>
-      <form method="POST" :action="editingId ? '/users/edit' : '/users/add'" class="p-5 space-y-3">
+      <form method="POST" :action="editingId ? '/admin/users/edit' : '/admin/users/add'" class="p-5 space-y-3">
         <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
         <input type="hidden" name="id" :value="editingId || ''">
 
@@ -238,7 +238,7 @@
         </h3>
         <button type="button" @click="modal=null" aria-label="<?= e(t('common.dismiss')) ?>" class="text-zinc-400 hover:text-zinc-700 shrink-0"><?= icon('x') ?></button>
       </div>
-      <form method="POST" action="/users/passwd" class="p-5 space-y-3">
+      <form method="POST" action="/admin/users/passwd" class="p-5 space-y-3">
         <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
         <input type="hidden" name="id" :value="targetId">
         <div>

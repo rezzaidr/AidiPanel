@@ -33,12 +33,14 @@ final class RoutePolicy
         }
 
         $admin = [
-            '/users', '/users/add', '/users/edit', '/users/delete', '/users/passwd',
-            '/logs',
-            '/admin', '/admin/web-delivery', '/admin/settings', '/admin/settings/domain', '/admin/settings/domain/clear',
+            '/admin',
+            '/admin/users', '/admin/users/add', '/admin/users/edit', '/admin/users/delete', '/admin/users/passwd',
+            '/admin/services', '/admin/services/action', '/admin/logs',
+            '/admin/web-delivery', '/admin/settings', '/admin/settings/domain', '/admin/settings/domain/clear',
             '/admin/backups', '/admin/backups/test', '/admin/backups/destination',
             '/admin/backups/policy', '/admin/backups/run',
-            '/services', '/services/action', '/api/services',
+            '/users', '/services', '/logs',
+            '/api/services',
             '/php/restart', '/cache/opcache-restart',
             '/api/metrics', '/api/metrics/history', '/api/cli',
         ];

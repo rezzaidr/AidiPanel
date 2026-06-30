@@ -47,7 +47,7 @@ class ServiceController extends BaseController
         if (!$result['success']) $this->error("Service {$action} failed: " . $result['output']);
 
         \Core\DB::log("service:{$action}", "{$action} {$service}");
-        $this->success("{$service} {$action}ed successfully.", '/services');
+        $this->success("{$service} {$action}ed successfully.", '/admin/services');
     }
 
     private function fetchStatus(): array

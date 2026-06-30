@@ -59,6 +59,14 @@ $router->get('/dashboard', 'DashboardController@index');
 
 // Admin Area (server-wide hub — collects services, users, logs; sidebar shell)
 $router->get('/admin', 'AdminController@index');
+$router->get('/admin/users',             'UserController@index');
+$router->post('/admin/users/add',        'UserController@add');
+$router->post('/admin/users/delete',     'UserController@delete');
+$router->post('/admin/users/passwd',     'UserController@changePassword');
+$router->post('/admin/users/edit',       'UserController@edit');
+$router->get('/admin/services',          'ServiceController@index');
+$router->post('/admin/services/action',  'ServiceController@action');
+$router->get('/admin/logs', 'SystemController@logs');
 $router->get('/admin/web-delivery', 'WebDeliveryController@index');
 $router->get('/admin/settings',         'AdminSettingsController@index');
 $router->post('/admin/settings/domain', 'AdminSettingsController@saveDomain');
@@ -152,19 +160,10 @@ $router->post('/cache/zone',            'CacheController@zone');
 // PHP — server-wide page removed; restart backs the per-site quick action.
 $router->post('/php/restart',  'PhpController@restart');
 
-// Services
-$router->get('/services',          'ServiceController@index');
-$router->post('/services/action',  'ServiceController@action');
-
-// Users
-$router->get('/users',             'UserController@index');
-$router->post('/users/add',        'UserController@add');
-$router->post('/users/delete',     'UserController@delete');
-$router->post('/users/passwd',     'UserController@changePassword');
-$router->post('/users/edit',       'UserController@edit');
-
-// Logs
-$router->get('/logs', 'SystemController@logs');
+// Legacy Admin Area page URLs — authenticated redirects only; actions are canonical-only.
+$router->get('/users',    'AdminController@legacyUsers');
+$router->get('/services', 'AdminController@legacyServices');
+$router->get('/logs',     'AdminController@legacyLogs');
 
 // Account settings (self-service profile + security; reached from the profile menu)
 $router->get('/settings', 'SettingsController@index');

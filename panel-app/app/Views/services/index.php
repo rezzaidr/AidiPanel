@@ -110,7 +110,7 @@ $sections = [
             </button>
             <div x-show="open" x-cloak x-transition.opacity class="absolute right-0 top-full mt-1 z-30 min-w-[10rem] card shadow-xl py-1">
               <?php if ($canReload): ?>
-              <form method="POST" action="/services/action">
+              <form method="POST" action="/admin/services/action">
                 <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
                 <input type="hidden" name="service" value="<?= e($name) ?>">
                 <input type="hidden" name="action" value="reload">
@@ -119,7 +119,7 @@ $sections = [
                 </button>
               </form>
               <?php endif; ?>
-              <form method="POST" action="/services/action">
+              <form method="POST" action="/admin/services/action">
                 <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
                 <input type="hidden" name="service" value="<?= e($name) ?>">
                 <input type="hidden" name="action" value="restart">
@@ -128,7 +128,7 @@ $sections = [
                 </button>
               </form>
               <?php if ($active): ?>
-              <form method="POST" action="/services/action"
+              <form method="POST" action="/admin/services/action"
                     onsubmit="return confirm('<?= e(t('svc.stop_confirm', ['svc' => $name])) ?>')">
                 <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
                 <input type="hidden" name="service" value="<?= e($name) ?>">
@@ -138,7 +138,7 @@ $sections = [
                 </button>
               </form>
               <?php else: ?>
-              <form method="POST" action="/services/action">
+              <form method="POST" action="/admin/services/action">
                 <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
                 <input type="hidden" name="service" value="<?= e($name) ?>">
                 <input type="hidden" name="action" value="start">

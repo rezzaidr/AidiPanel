@@ -54,7 +54,7 @@ class UserController extends BaseController
         }
 
         \Core\DB::log('user:add', "Created panel user: {$fields['username']} ({$fields['role']})");
-        $this->success("User '{$fields['username']}' created.", '/users');
+        $this->success("User '{$fields['username']}' created.", '/admin/users');
     }
 
     public function edit(array $params = []): void
@@ -101,7 +101,7 @@ class UserController extends BaseController
         }
 
         \Core\DB::log('user:edit', "Edited panel user: {$existing['username']} ({$fields['role']})");
-        $this->success("User '{$existing['username']}' updated.", '/users');
+        $this->success("User '{$existing['username']}' updated.", '/admin/users');
     }
 
     public function delete(array $params = []): void
@@ -129,7 +129,7 @@ class UserController extends BaseController
             $this->error($e->getMessage());
         }
         \Core\DB::log('user:delete', "Deleted panel user: " . $user['username']);
-        $this->success('User deleted.', '/users');
+        $this->success('User deleted.', '/admin/users');
     }
 
     public function changePassword(array $params = []): void
@@ -144,7 +144,7 @@ class UserController extends BaseController
         $hash = password_hash($newPass, PASSWORD_BCRYPT, ['cost' => 12]);
         $this->db->run('UPDATE users SET password_hash = ? WHERE id = ?', [$hash, $id]);
         \Core\DB::log('user:passwd', "Changed password for user ID: {$id}");
-        $this->success('Password updated.', '/users');
+        $this->success('Password updated.', '/admin/users');
     }
 
     /**

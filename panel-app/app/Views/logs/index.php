@@ -8,7 +8,7 @@
 
 <!-- Filter toolbar -->
 <div class="card p-4 mb-5">
-  <form method="GET" action="/logs" class="flex flex-wrap items-end gap-3">
+  <form method="GET" action="/admin/logs" class="flex flex-wrap items-end gap-3">
     <div class="min-w-[200px] flex-1">
       <label class="lbl"><?= e(t('col.domain')) ?></label>
       <select name="domain" class="inp w-full h-9">
