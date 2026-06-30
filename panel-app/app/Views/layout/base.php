@@ -24,10 +24,9 @@ $adminSections = [
     ['key' => 'users',    'icon' => 'ti-users',          'href' => '/users', 'admin' => true],
     ['key' => 'services', 'icon' => 'ti-stack-2',        'href' => '/services'],
     ['key' => 'logs',     'icon' => 'ti-file-text',      'href' => '/logs',  'admin' => true],
-    ['key' => 'security', 'icon' => 'ti-shield-lock',    'href' => null,     'soon' => true],
     ['key' => 'tuning',   'icon' => 'ti-adjustments-bolt','href' => null,    'soon' => true],
     ['key' => 'backups',  'icon' => 'ti-database-export','href' => '/admin/backups', 'admin' => true],
-    ['key' => 'support',  'icon' => 'ti-lifebuoy',       'href' => null,     'soon' => true],
+    ['key' => 'support',  'icon' => 'ti-lifebuoy',       'href' => 'https://github.com/rezzaidr/AidiPanel/issues', 'external' => true],
     ['key' => 'settings', 'icon' => 'ti-settings',       'href' => '/admin/settings', 'admin' => true],
 ];
 
@@ -177,7 +176,8 @@ $assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROO
                   if (!demo_mode() || $s['key'] === 'logs') { continue; }
               }
               $isSoon = !empty($s['soon']) || empty($s['href']);
-              $active = (!$isSoon && str_starts_with($uri, $s['href'])) ? ' active' : '';
+              $isExternal = !empty($s['external']);
+              $active = (!$isSoon && !$isExternal && str_starts_with($uri, $s['href'])) ? ' active' : '';
               $title  = t('admin.' . $s['key'] . '.title');
             ?>
             <?php if ($isSoon): ?>
@@ -187,7 +187,7 @@ $assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROO
                 <span class="tag tag-muted"><?= e(t('common.soon')) ?></span>
               </span>
             <?php else: ?>
-              <a href="<?= e($s['href']) ?>" class="sidenav-item<?= $active ?>"<?= $active ? ' aria-current="page"' : '' ?>>
+              <a href="<?= e($s['href']) ?>" class="sidenav-item<?= $active ?>"<?= $active ? ' aria-current="page"' : '' ?><?= $isExternal ? ' target="_blank" rel="noopener noreferrer"' : '' ?>>
                 <?= icon($s['icon'], 'text-[18px]') ?>
                 <span class="flex-1"><?= e($title) ?></span>
               </a>
