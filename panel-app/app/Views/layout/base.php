@@ -26,7 +26,7 @@ $adminSections = [
     ['key' => 'logs',     'icon' => 'ti-file-text',      'href' => '/logs',  'admin' => true],
     ['key' => 'security', 'icon' => 'ti-shield-lock',    'href' => null,     'soon' => true],
     ['key' => 'tuning',   'icon' => 'ti-adjustments-bolt','href' => null,    'soon' => true],
-    ['key' => 'backups',  'icon' => 'ti-database-export','href' => null,     'soon' => true],
+    ['key' => 'backups',  'icon' => 'ti-database-export','href' => '/admin/backups', 'admin' => true],
     ['key' => 'support',  'icon' => 'ti-lifebuoy',       'href' => null,     'soon' => true],
     ['key' => 'settings', 'icon' => 'ti-settings',       'href' => '/admin/settings', 'admin' => true],
 ];

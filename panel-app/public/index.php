@@ -62,6 +62,11 @@ $router->get('/admin', 'AdminController@index');
 $router->get('/admin/settings',         'AdminSettingsController@index');
 $router->post('/admin/settings/domain', 'AdminSettingsController@saveDomain');
 $router->post('/admin/settings/domain/clear', 'AdminSettingsController@clearDomain');
+$router->get('/admin/backups',              'RemoteBackupController@index');
+$router->post('/admin/backups/test',        'RemoteBackupController@test');
+$router->post('/admin/backups/destination', 'RemoteBackupController@saveDestination');
+$router->post('/admin/backups/policy',      'RemoteBackupController@savePolicy');
+$router->post('/admin/backups/run',         'RemoteBackupController@run');
 
 // Sites
 $router->get('/sites',               'SiteController@index');

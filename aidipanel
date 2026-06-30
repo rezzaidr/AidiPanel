@@ -497,10 +497,17 @@ _usage() {
   echo "  db:server-info  Show the local database server (engine/version/port/active)"
 
   echo -e "\n${BOLD}${BLUE}Backups${RESET}"
-  echo "  backup:create    Create a local backup of a site (--domain, [--keep N])"
+  echo "  backup:create    Create a local backup of a site (--domain, [--keep N], [--exclude patterns])"
   echo "  backup:list      List a site's backups as JSON (--domain)"
   echo "  backup:download  Stream a backup archive (--domain; name on stdin)"
   echo "  backup:delete    Delete one backup archive (--domain; name on stdin)"
+
+  echo -e "\n${BOLD}${BLUE}Remote Backups${RESET}"
+  echo "  remote-backup:status  Show sanitized S3 backup configuration/status as JSON"
+  echo "  remote-backup:test    Test an S3 destination without saving (JSON on stdin)"
+  echo "  remote-backup:save-destination  Test and activate an S3 destination (JSON on stdin)"
+  echo "  remote-backup:save-policy  Save schedule/exclusions without testing S3 (JSON on stdin)"
+  echo "  remote-backup:run     Back up every site to the configured S3 destination"
 
   echo -e "\n${BOLD}${BLUE}PHP Management${RESET}"
   echo "  php:install     Install a supported PHP version on-demand"
@@ -1621,11 +1628,28 @@ _backup_dbjson() {
   if (( $# > 0 )); then printf '"%s",' "$@" | sed 's/,$//'; fi
 }
 
+# Tar runs from <site-home>/htdocs, so turn a full UI path for this site into
+# the equivalent path inside the archive. Other sites' paths remain unmatched.
+_backup_exclude_pattern() {
+  local pattern="$1" htdocs="${2%/}"
+  if [[ "$pattern" == "$htdocs/"* ]]; then
+    printf '%s\n' "${pattern#"$htdocs/"}"
+  else
+    printf '%s\n' "$pattern"
+  fi
+}
+
 # Read a newest-first path list on stdin; print the paths to DELETE so the newest <keep>
 # remain (the just-written <final> counts as #1 and is never deleted, even with keep=0).
 _backup_prune_set() {
-  local keep="$1" final="$2" i=0 pf
+  local keep="$1" final="$2" domain="${3:-}" i=0 pf name suffix
   while IFS= read -r pf; do
+    if [[ -n "$domain" ]]; then
+      name=$(basename -- "$pf")
+      [[ "$name" == "${domain}_"* ]] || continue
+      suffix="${name#"${domain}_"}"
+      [[ "$suffix" =~ ^[0-9]{8}_[0-9]{6}_[0-9]+\.tar\.gz$ ]] || continue
+    fi
     i=$((i + 1))
     if (( i > keep )) && [[ "$pf" != "$final" ]]; then printf '%s\n' "$pf"; fi
   done
@@ -1654,6 +1678,708 @@ _backup_manifest() {
     printf '  "aidipanel_version": "%s"\n' "$version"
     printf '}\n'
   }
+}
+
+# Pure Remote Backup validators. Keep these small: they protect both the root
+# config file and the remote delete prefix, and are unit-tested without a VPS.
+_remote_backup_provider_valid() {
+  [[ "${1:-}" == "AWS" || "${1:-}" == "Wasabi" || "${1:-}" == "DigitalOcean" ]]
+}
+
+_remote_backup_endpoint_valid() {
+  local provider="${1:-}" endpoint="${2:-}"
+  _remote_backup_provider_valid "$provider" || return 1
+  if [[ -z "$endpoint" ]]; then
+    [[ "$provider" == "AWS" ]]
+    return
+  fi
+  case "$provider" in
+    AWS) [[ "$endpoint" =~ ^https://([A-Za-z0-9-]+\.)*amazonaws\.com(\.cn)?$ ]] ;;
+    Wasabi) [[ "$endpoint" =~ ^https://([A-Za-z0-9-]+\.)*wasabisys\.com$ ]] ;;
+    DigitalOcean) [[ "$endpoint" =~ ^https://([A-Za-z0-9-]+\.)*digitaloceanspaces\.com$ ]] ;;
+  esac
+}
+
+_remote_backup_endpoint_normalize() {
+  local value="${1:-}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s\n' "${value%/}"
+}
+
+_remote_backup_bucket_valid() {
+  local bucket="${1:-}"
+  (( ${#bucket} >= 3 && ${#bucket} <= 63 )) || return 1
+  [[ "$bucket" =~ ^[a-z0-9][a-z0-9.-]*[a-z0-9]$ ]] || return 1
+  [[ "$bucket" != *".."* && "$bucket" != *".-"* && "$bucket" != *"-."* ]] || return 1
+  [[ ! "$bucket" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+
+_remote_backup_folder_valid() {
+  local folder="${1:-}"
+  [[ ${#folder} -le 200 ]] || return 1
+  [[ "$folder" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$ ]] || return 1
+  [[ "$folder" != *"/../"* && "$folder" != *"/./"* ]]
+}
+
+_remote_backup_folder_normalize() {
+  local value="${1:-}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  value="${value#/}"
+  printf '%s\n' "${value%/}"
+}
+
+_remote_backup_managed_name() {
+  local domain="${1:-}" name="${2:-}" suffix
+  [[ "$name" == "${domain}_"* ]] || return 1
+  suffix="${name#"${domain}_"}"
+  [[ "$suffix" =~ ^[0-9]{8}_[0-9]{6}_[0-9]+\.tar\.gz$ ]]
+}
+
+# Read remote basenames on stdin and print only managed archives beyond newest N.
+_remote_backup_prune_set() {
+  local domain="${1:-}" keep="${2:-5}" name i=0
+  while IFS= read -r name; do
+    _remote_backup_managed_name "$domain" "$name" && printf '%s\n' "$name"
+  done | sort -r | while IFS= read -r name; do
+    i=$((i + 1))
+    (( i > keep )) && printf '%s\n' "$name"
+  done
+}
+
+# v2 schedule + exclude validators. Pure, unit-tested without a VPS.
+_remote_backup_frequency_valid() {
+  [[ "${1:-}" == "daily" || "${1:-}" == "weekly" ]]
+}
+
+_remote_backup_weekday_valid() {
+  [[ "${1:-}" =~ ^[0-6]$ ]]
+}
+
+_remote_backup_time_valid() {
+  [[ "${1:-}" =~ ^([0-1][0-9]|2[0-3]):[0-5][0-9]$ ]]
+}
+
+# Comma-separated glob patterns. Surrounding spaces tolerated, internal
+# spaces rejected. ".." anywhere is rejected to block path traversal.
+_remote_backup_exclude_valid() {
+  local raw="${1:-}"
+  [[ -z "$raw" ]] && return 0
+  raw="${raw//$'\r'/,}"
+  raw="${raw//$'\n'/,}"
+  [[ "$raw" == *".."* ]] && return 1
+  local IFS=','
+  local -a entries
+  read -ra entries <<< "$raw"
+  (( ${#entries[@]} <= 50 )) || return 1
+  local e n=0
+  for e in "${entries[@]}"; do
+    [[ "$e" =~ ^[[:space:]]*$ ]] && continue
+    [[ "$e" =~ ^[[:space:]]*[A-Za-z0-9_./?*-]{1,80}[[:space:]]*$ ]] || return 1
+    ((n++))
+  done
+  (( n >= 1 ))
+}
+
+# Trim surrounding spaces per entry and drop empties, so the stored form is a
+# clean comma list that backup:create can split without re-trimming.
+_remote_backup_exclude_normalize() {
+  local raw="${1:-}" out=""
+  [[ -z "$raw" ]] && return 0
+  raw="${raw//$'\r'/,}"
+  raw="${raw//$'\n'/,}"
+  local IFS=','
+  local -a entries
+  read -ra entries <<< "$raw"
+  local e trimmed
+  for e in "${entries[@]}"; do
+    trimmed="${e#"${e%%[![:space:]]*}"}"
+    trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+    [[ -z "$trimmed" ]] && continue
+    out="${out:+$out,}$trimmed"
+  done
+  printf '%s' "$out"
+}
+
+# Build the 5-field cron schedule (no user/command) from the saved fields.
+_remote_backup_cron_schedule() {
+  local frequency="${1:-}" weekday="${2:-}" time="${3:-}"
+  _remote_backup_frequency_valid "$frequency" || return 1
+  _remote_backup_time_valid "$time" || return 1
+  local minute="$((10#${time#*:}))" hour="$((10#${time%%:*}))"
+  local dow="*"
+  if [[ "$frequency" == "weekly" ]]; then
+    _remote_backup_weekday_valid "$weekday" || return 1
+    dow="$weekday"
+  fi
+  printf '%s %s * * %s\n' "$minute" "$hour" "$dow"
+}
+
+_remote_backup_write_cron_file() {
+  local frequency="${1:-}" weekday="${2:-}" time="${3:-}" output="${4:-}" schedule
+  schedule=$(_remote_backup_cron_schedule "$frequency" "$weekday" "$time") || return 1
+  printf 'SHELL=/bin/bash\nPATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin\n%s root /usr/local/bin/aidipanel remote-backup:run --scheduled >> %s 2>&1\n' \
+    "$schedule" "$REMOTE_BACKUP_LOG" > "$output"
+  chmod 644 "$output"
+}
+
+_remote_backup_paths() {
+  REMOTE_BACKUP_DIR="${REMOTE_BACKUP_DIR:-/etc/aidipanel/remote-backup}"
+  REMOTE_BACKUP_LEGACY_RCLONE="${REMOTE_BACKUP_LEGACY_RCLONE:-${REMOTE_BACKUP_RCLONE:-${REMOTE_BACKUP_DIR}/rclone.conf}}"
+  REMOTE_BACKUP_LEGACY_META="${REMOTE_BACKUP_LEGACY_META:-${REMOTE_BACKUP_META:-${REMOTE_BACKUP_DIR}/settings.conf}}"
+  REMOTE_BACKUP_GENERATIONS="${REMOTE_BACKUP_GENERATIONS:-${REMOTE_BACKUP_DIR}/generations}"
+  REMOTE_BACKUP_CURRENT="${REMOTE_BACKUP_CURRENT:-${REMOTE_BACKUP_DIR}/current}"
+  REMOTE_BACKUP_RCLONE="$REMOTE_BACKUP_LEGACY_RCLONE"
+  REMOTE_BACKUP_META="$REMOTE_BACKUP_LEGACY_META"
+  REMOTE_BACKUP_STATUS="${REMOTE_BACKUP_STATUS:-${REMOTE_BACKUP_DIR}/status.json}"
+  REMOTE_BACKUP_CRON="${REMOTE_BACKUP_CRON:-/etc/cron.d/aidipanel-remote-backup}"
+  REMOTE_BACKUP_LOG="${REMOTE_BACKUP_LOG:-/var/log/aidipanel-remote-backup.log}"
+  REMOTE_BACKUP_LOCK="${REMOTE_BACKUP_LOCK:-/run/lock/aidipanel-remote-backup.lock}"
+}
+
+_remote_backup_current_target_valid() {
+  [[ "${1:-}" =~ ^generations/gen-[A-Za-z0-9._-]+$ ]]
+}
+
+# Resolve both active files from one contained relative generation target.
+# A present-but-invalid current link fails closed and never falls back to legacy.
+_remote_backup_resolve_active() {
+  local target active
+  REMOTE_BACKUP_RCLONE="$REMOTE_BACKUP_LEGACY_RCLONE"
+  REMOTE_BACKUP_META="$REMOTE_BACKUP_LEGACY_META"
+  REMOTE_BACKUP_ACTIVE_TARGET=""
+  if [[ -e "$REMOTE_BACKUP_CURRENT" || -L "$REMOTE_BACKUP_CURRENT" ]]; then
+    [[ -L "$REMOTE_BACKUP_CURRENT" ]] || return 1
+    target=$(readlink -- "$REMOTE_BACKUP_CURRENT") || return 1
+    _remote_backup_current_target_valid "$target" || return 1
+    active="${REMOTE_BACKUP_DIR}/${target}"
+    [[ -d "$active" && ! -L "$active" ]] || return 1
+    [[ -f "$active/rclone.conf" && ! -L "$active/rclone.conf" ]] || return 1
+    [[ -f "$active/settings.conf" && ! -L "$active/settings.conf" ]] || return 1
+    REMOTE_BACKUP_RCLONE="$active/rclone.conf"
+    REMOTE_BACKUP_META="$active/settings.conf"
+    REMOTE_BACKUP_ACTIVE_TARGET="$target"
+    return 0
+  fi
+  [[ -f "$REMOTE_BACKUP_LEGACY_RCLONE" && ! -L "$REMOTE_BACKUP_LEGACY_RCLONE" ]] || return 1
+  [[ -f "$REMOTE_BACKUP_LEGACY_META" && ! -L "$REMOTE_BACKUP_LEGACY_META" ]] || return 1
+}
+
+# Move a complete staging directory into place, then atomically switch current.
+_remote_backup_activate_generation() {
+  local stage="${1:-}" base final target link_tmp
+  [[ "$stage" == "${REMOTE_BACKUP_GENERATIONS}/.staging-"* ]] || return 1
+  [[ -d "$stage" && ! -L "$stage" ]] || return 1
+  [[ -f "$stage/rclone.conf" && ! -L "$stage/rclone.conf" ]] || return 1
+  [[ -f "$stage/settings.conf" && ! -L "$stage/settings.conf" ]] || return 1
+  mkdir -p "$REMOTE_BACKUP_GENERATIONS"
+  chmod 700 "$REMOTE_BACKUP_GENERATIONS" "$stage"
+  base="gen-$(date -u '+%Y%m%d-%H%M%S')-$$-${RANDOM}"
+  final="${REMOTE_BACKUP_GENERATIONS}/${base}"
+  target="generations/${base}"
+  link_tmp="${REMOTE_BACKUP_DIR}/.current.$$.$RANDOM"
+  mv -- "$stage" "$final" || return 1
+  if ! ln -s "$target" "$link_tmp" || ! mv -Tf -- "$link_tmp" "$REMOTE_BACKUP_CURRENT"; then
+    rm -f -- "$link_tmp"
+    rm -rf -- "$final"
+    return 1
+  fi
+  printf '%s\n' "$target"
+}
+
+_remote_backup_prune_generations() {
+  local target="${1:-}" active path base
+  _remote_backup_current_target_valid "$target" || return 1
+  active="${target##*/}"
+  for path in "$REMOTE_BACKUP_GENERATIONS"/gen-*; do
+    [[ -d "$path" && ! -L "$path" ]] || continue
+    base=$(basename -- "$path")
+    [[ "$base" == "$active" ]] && continue
+    rm -rf -- "$path"
+  done
+}
+
+_remote_backup_cleanup_staging() {
+  local path
+  for path in "$REMOTE_BACKUP_GENERATIONS"/.staging-*; do
+    [[ -d "$path" && ! -L "$path" ]] || continue
+    rm -rf -- "$path"
+  done
+}
+
+_remote_backup_lock() {
+  mkdir -p "$(dirname "$REMOTE_BACKUP_LOCK")"
+  exec 8>"$REMOTE_BACKUP_LOCK"
+  flock -n 8 || die "Backup is currently running. Please try again after the current backup finishes."
+}
+
+# Parse a destination JSON document from stdin into one safe value per line.
+_remote_backup_payload() {
+  _remote_backup_paths
+  local parsed
+  if ! parsed=$(python3 -c '
+import json, sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(newline="\n")
+try:
+    data = json.load(sys.stdin)
+except (OSError, ValueError):
+    raise SystemExit(2)
+for key in (
+    "provider", "use_saved_credentials", "access_key_id",
+    "secret_access_key", "region", "endpoint", "bucket", "folder",
+):
+    value = data.get(key, "")
+    if not isinstance(value, str) or "\n" in value or "\r" in value:
+        raise SystemExit(2)
+    print(value)
+print("@@END@@")
+'); then
+    die "Invalid remote backup destination."
+  fi
+  printf '%s\n' "$parsed"
+}
+
+# Resolve a complete credential pair without ever printing it.
+_remote_backup_credentials() {
+  local use_saved="${1:-}" access="${2:-}" secret="${3:-}"
+  local saved
+  local -a saved_fields
+  REMOTE_ACCESS=""; REMOTE_SECRET=""
+  if [[ "$use_saved" == "1" ]]; then
+    _remote_backup_resolve_active || die "Saved credentials are not available."
+    [[ -f "$REMOTE_BACKUP_RCLONE" ]] || die "Saved credentials are not available."
+    saved=$(awk '
+      /^access_key_id = / && access == "" { sub(/^access_key_id = /, ""); access=$0 }
+      /^secret_access_key = / && secret == "" { sub(/^secret_access_key = /, ""); secret=$0 }
+      END { printf "%s\n%s\n@@END@@\n", access, secret }
+    ' "$REMOTE_BACKUP_RCLONE")
+    mapfile -t saved_fields <<< "$saved"
+    (( ${#saved_fields[@]} == 3 )) && [[ "${saved_fields[2]}" == "@@END@@" ]] \
+      || die "Saved credentials are invalid."
+    REMOTE_ACCESS="${saved_fields[0]}"
+    REMOTE_SECRET="${saved_fields[1]}"
+  elif [[ "$use_saved" == "0" ]]; then
+    REMOTE_ACCESS="$access"
+    REMOTE_SECRET="$secret"
+  else
+    die "Invalid credential selection."
+  fi
+  [[ "$REMOTE_ACCESS" =~ ^[A-Za-z0-9/+=._-]{8,128}$ ]] || die "Invalid Access Key ID."
+  (( ${#REMOTE_SECRET} >= 8 && ${#REMOTE_SECRET} <= 256 )) \
+    && [[ "$REMOTE_SECRET" =~ ^[A-Za-z0-9/+=._-]+$ ]] \
+    || die "Invalid Secret Access Key."
+}
+
+# Verify the exact permissions required by uploads and retention.
+_remote_backup_probe() {
+  (
+  local config="${1:-}" bucket="${2:-}" folder="${3:-}"
+  local probe prefix target listing
+  PROBE_NAME="test-$(date +%s)-$$-${RANDOM}.txt"
+  probe=$(mktemp "${REMOTE_BACKUP_DIR}/.probe.XXXXXX") \
+    || { printf '%s\n' "Could not stage connection test."; return 19; }
+  trap 'rm -f -- "${probe:-}"' EXIT
+  chmod 600 "$probe"
+  prefix="aidipanel_remote:${bucket}/${folder}/.aidipanel-test"
+  target="${prefix}/${PROBE_NAME}"
+  if ! rclone --config "$config" copyto "$probe" "$target" --no-check-dest --retries 1 >/dev/null 2>&1; then
+    printf '%s\n' "Upload failed. The key may not have permission to upload objects."
+    return 20
+  fi
+  if ! listing=$(rclone --config "$config" lsf "$prefix" --files-only --format p 2>/dev/null) \
+      || ! grep -Fxq "$PROBE_NAME" <<< "$listing"; then
+    rclone --config "$config" deletefile "$target" >/dev/null 2>&1 || true
+    printf '%s\n' "List failed. The key may not have permission to list this destination."
+    return 21
+  fi
+  if ! rclone --config "$config" deletefile "$target" >/dev/null 2>&1; then
+    printf '%s\n' "Delete failed. Delete permission is required for retention."
+    return 22
+  fi
+  printf '%s\n' '{"ok":true,"checks":{"upload":true,"list":true,"delete":true}}'
+  )
+}
+
+# Test a draft destination without changing the active configuration.
+_remote_backup_test() {
+  _require_root "remote-backup:test"
+  command -v rclone >/dev/null 2>&1 || die "Rclone is not installed."
+  _remote_backup_paths
+  umask 077
+  mkdir -p "$REMOTE_BACKUP_DIR"
+
+  local parsed provider use_saved access secret region endpoint bucket folder sentinel
+  local tmp_rclone result rc
+  parsed=$(_remote_backup_payload)
+  mapfile -t fields <<< "$parsed"
+  (( ${#fields[@]} == 9 )) || die "Invalid remote backup destination."
+  provider="${fields[0]}"; use_saved="${fields[1]}"; access="${fields[2]}"; secret="${fields[3]}"
+  region="${fields[4]}"; endpoint="${fields[5]}"; bucket="${fields[6]}"; folder="${fields[7]}"; sentinel="${fields[8]}"
+  [[ "$sentinel" == "@@END@@" ]] || die "Invalid remote backup destination."
+
+  region="${region#"${region%%[![:space:]]*}"}"; region="${region%"${region##*[![:space:]]}"}"
+  bucket="${bucket#"${bucket%%[![:space:]]*}"}"; bucket="${bucket%"${bucket##*[![:space:]]}"}"
+  endpoint=$(_remote_backup_endpoint_normalize "$endpoint")
+  folder=$(_remote_backup_folder_normalize "$folder")
+  _remote_backup_provider_valid "$provider" || die "Unsupported S3 provider."
+  [[ "$region" =~ ^[a-z0-9-]{1,32}$ ]] || die "Invalid S3 region."
+  _remote_backup_endpoint_valid "$provider" "$endpoint" || die "A valid HTTPS endpoint is required for this provider."
+  _remote_backup_bucket_valid "$bucket" || die "Invalid S3 bucket name."
+  _remote_backup_folder_valid "$folder" || die "Invalid storage folder."
+  _remote_backup_credentials "$use_saved" "$access" "$secret"
+
+  tmp_rclone=$(mktemp "${REMOTE_BACKUP_DIR}/.rclone-test.XXXXXX") \
+    || die "Could not stage Rclone configuration."
+  trap 'rm -f -- "${tmp_rclone:-}"' EXIT
+  printf '[aidipanel_remote]\ntype = s3\nprovider = %s\nenv_auth = false\naccess_key_id = %s\nsecret_access_key = %s\nregion = %s\nendpoint = %s\nacl = private\n' \
+    "$provider" "$REMOTE_ACCESS" "$REMOTE_SECRET" "$region" "$endpoint" > "$tmp_rclone"
+  chmod 600 "$tmp_rclone"
+  if result=$(_remote_backup_probe "$tmp_rclone" "$bucket" "$folder"); then
+    rm -f "$tmp_rclone"
+    trap - EXIT
+    printf '%s\n' "$result"
+    return 0
+  else
+    rc=$?
+    rm -f "$tmp_rclone"
+    trap - EXIT
+    die "$result"
+    return "$rc"
+  fi
+}
+
+_remote_backup_load_meta() {
+  _remote_backup_paths
+  _remote_backup_resolve_active || return 1
+  REMOTE_PROVIDER=""; REMOTE_REGION=""; REMOTE_ENDPOINT=""; REMOTE_BUCKET=""; REMOTE_FOLDER=""
+  REMOTE_EXCLUDE=""; REMOTE_FREQUENCY="daily"; REMOTE_WEEKDAY=""; REMOTE_TIME="03:00"
+  REMOTE_LAST_VERIFIED_AT=""
+  local key value
+  while IFS='=' read -r key value || [[ -n "$key" ]]; do
+    case "$key" in
+      provider) REMOTE_PROVIDER="$value" ;;
+      region)   REMOTE_REGION="$value" ;;
+      endpoint) REMOTE_ENDPOINT="$value" ;;
+      bucket)   REMOTE_BUCKET="$value" ;;
+      folder)   REMOTE_FOLDER="$value" ;;
+      exclude)  REMOTE_EXCLUDE="$value" ;;
+      frequency) REMOTE_FREQUENCY="$value" ;;
+      weekday) REMOTE_WEEKDAY="$value" ;;
+      time) REMOTE_TIME="$value" ;;
+      last_verified_at) REMOTE_LAST_VERIFIED_AT="$value" ;;
+    esac
+  done < "$REMOTE_BACKUP_META"
+  _remote_backup_provider_valid "$REMOTE_PROVIDER" \
+    && [[ "$REMOTE_REGION" =~ ^[a-z0-9-]{1,32}$ ]] \
+    && _remote_backup_endpoint_valid "$REMOTE_PROVIDER" "$REMOTE_ENDPOINT" \
+    && _remote_backup_bucket_valid "$REMOTE_BUCKET" \
+    && _remote_backup_folder_valid "$REMOTE_FOLDER" \
+    && _remote_backup_frequency_valid "$REMOTE_FREQUENCY" \
+    && _remote_backup_time_valid "$REMOTE_TIME" \
+    && { [[ "$REMOTE_FREQUENCY" != "weekly" ]] || _remote_backup_weekday_valid "$REMOTE_WEEKDAY"; }
+}
+
+_remote_backup_domains() {
+  local conf domain
+  for conf in "${NGINX_CONF_DIR}"/*.conf; do
+    [[ -f "$conf" ]] || continue
+    [[ "$(basename "$conf")" == "aidipanel-ui.conf" ]] && continue
+    domain=$(basename "$conf" .conf)
+    [[ "$domain" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$ ]] \
+      && printf '%s\n' "$domain"
+  done | sort
+}
+
+_remote_backup_latest_archive() {
+  local domain="${1:-}" name
+  _files_resolve "$domain"
+  name=$(find "${FILES_HOME}/backups" -maxdepth 1 -type f -name "${domain}_*.tar.gz" \
+    -printf '%f\n' 2>/dev/null | while IFS= read -r name; do
+      _remote_backup_managed_name "$domain" "$name" && printf '%s\n' "$name"
+    done | sort -r | head -n1)
+  _remote_backup_managed_name "$domain" "$name" || return 1
+  REMOTE_BACKUP_ARCHIVE_NAME="$name"
+  REMOTE_BACKUP_ARCHIVE="${FILES_HOME}/backups/${name}"
+}
+
+_remote_backup_write_status() {
+  local result="$1" started="$2" finished="$3" sites_ok="$4" sites_failed="$5" tmp
+  _remote_backup_paths
+  mkdir -p "$REMOTE_BACKUP_DIR"; chmod 700 "$REMOTE_BACKUP_DIR"
+  tmp=$(mktemp "${REMOTE_BACKUP_DIR}/.status.XXXXXX") || return 1
+  python3 - "$tmp" "$result" "$started" "$finished" "$sites_ok" "$sites_failed" <<'PY'
+import json, os, sys
+path, result, started, finished, sites_ok, sites_failed = sys.argv[1:]
+with open(path, "w", encoding="utf-8", newline="\n") as fh:
+    json.dump({
+        "result": result,
+        "started_at": started,
+        "finished_at": finished,
+        "sites_ok": int(sites_ok),
+        "sites_failed": int(sites_failed),
+    }, fh, separators=(",", ":"))
+    fh.write("\n")
+os.chmod(path, 0o600)
+PY
+  mv -f "$tmp" "$REMOTE_BACKUP_STATUS"
+}
+
+# remote-backup:run : create one fresh local archive per site, upload, then prune.
+_remote_backup_run() {
+  _require_root "remote-backup:run"
+  command -v rclone >/dev/null 2>&1 || die "Rclone is not installed."
+  _remote_backup_paths
+  _remote_backup_lock
+  _remote_backup_load_meta || die "Remote backup is not configured."
+
+  local started finished result domain remote_dir listing name pct
+  local sites_ok=0 sites_failed=0 index=0 total cli
+  local domains=() deletions=() create_args=()
+  cli="${AIDIPANEL_SELF:-$0}"
+  mapfile -t domains < <(_remote_backup_domains)
+  total=${#domains[@]}
+  started=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  _progress 2 starting "Starting remote backup"
+
+  for domain in "${domains[@]}"; do
+    index=$((index + 1))
+    pct=$((5 + (index - 1) * 90 / (total > 0 ? total : 1)))
+    _progress "$pct" site "Backing up ${domain}"
+    create_args=(backup:create --domain "$domain" --keep 5)
+    [[ -n "$REMOTE_EXCLUDE" ]] && create_args+=(--exclude "$REMOTE_EXCLUDE")
+    if ! "$cli" "${create_args[@]}" >/dev/null 2>&1; then
+      sites_failed=$((sites_failed + 1)); warn "Remote backup failed for ${domain}: local backup failed."; continue
+    fi
+    if ! _remote_backup_latest_archive "$domain"; then
+      sites_failed=$((sites_failed + 1)); warn "Remote backup failed for ${domain}: archive not found."; continue
+    fi
+    remote_dir="aidipanel_remote:${REMOTE_BUCKET}/${REMOTE_FOLDER}/${domain}"
+    if ! rclone --config "$REMOTE_BACKUP_RCLONE" copyto "$REMOTE_BACKUP_ARCHIVE" \
+      "${remote_dir}/${REMOTE_BACKUP_ARCHIVE_NAME}" --immutable --retries 3 >/dev/null 2>&1; then
+      sites_failed=$((sites_failed + 1)); warn "Remote backup failed for ${domain}: upload failed."; continue
+    fi
+    if ! listing=$(rclone --config "$REMOTE_BACKUP_RCLONE" lsf "$remote_dir" \
+      --files-only --format p 2>/dev/null); then
+      sites_failed=$((sites_failed + 1)); warn "Remote backup uploaded for ${domain}, but retention listing failed."; continue
+    fi
+    mapfile -t deletions < <(printf '%s\n' "$listing" | _remote_backup_prune_set "$domain" 5)
+    local prune_failed=0
+    for name in "${deletions[@]}"; do
+      if ! rclone --config "$REMOTE_BACKUP_RCLONE" deletefile "${remote_dir}/${name}" >/dev/null 2>&1; then
+        prune_failed=1
+      fi
+    done
+    if (( prune_failed )); then
+      sites_failed=$((sites_failed + 1)); warn "Remote backup uploaded for ${domain}, but retention failed."; continue
+    fi
+    sites_ok=$((sites_ok + 1))
+  done
+
+  finished=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  result="success"; (( sites_failed > 0 )) && result="partial"
+  _remote_backup_write_status "$result" "$started" "$finished" "$sites_ok" "$sites_failed" \
+    || warn "Could not write remote backup status."
+  _progress 100 "done" "Remote backup finished"
+  if (( sites_failed > 0 )); then
+    warn "Remote backup finished: ${sites_ok} succeeded, ${sites_failed} failed."
+    return 1
+  fi
+  ok "Remote backup finished: ${sites_ok} site(s)."
+}
+
+# remote-backup:status : sanitized JSON only; credential values are never read.
+_remote_backup_status() {
+  _require_root "remote-backup:status"
+  _remote_backup_paths
+  local active_meta="" active_rclone=""
+  if _remote_backup_resolve_active; then
+    active_meta="$REMOTE_BACKUP_META"
+    active_rclone="$REMOTE_BACKUP_RCLONE"
+  fi
+  python3 - "$active_meta" "$REMOTE_BACKUP_STATUS" "$active_rclone" <<'PY'
+import json, os, sys
+meta_path, status_path, rclone_path = sys.argv[1:4]
+allowed = {"provider", "region", "endpoint", "bucket", "folder", "frequency", "weekday", "time", "exclude", "last_verified_at"}
+meta = {}
+try:
+    with open(meta_path, encoding="utf-8") as fh:
+        for raw in fh:
+            key, sep, value = raw.rstrip("\n").partition("=")
+            if sep and key in allowed:
+                meta[key] = value
+except (FileNotFoundError, OSError):
+    pass
+last = None
+try:
+    with open(status_path, encoding="utf-8") as fh:
+        value = json.load(fh)
+        if isinstance(value, dict):
+            allowed_last = {"result", "started_at", "finished_at", "sites_ok", "sites_failed"}
+            last = {key: value[key] for key in allowed_last if key in value}
+except (FileNotFoundError, OSError, ValueError):
+    pass
+print(json.dumps({
+    "configured": bool(meta),
+    "provider": meta.get("provider", ""),
+    "region": meta.get("region", ""),
+    "endpoint": meta.get("endpoint", ""),
+    "bucket": meta.get("bucket", ""),
+    "folder": meta.get("folder", "aidipanel"),
+    "frequency": meta.get("frequency", "daily"),
+    "weekday": meta.get("weekday", ""),
+    "time": meta.get("time", "03:00"),
+    "exclude": meta.get("exclude", ""),
+    "retention": 5,
+    "credentials_saved": bool(meta) and os.path.isfile(rclone_path),
+    "last_verified_at": meta.get("last_verified_at", ""),
+    "last_run": last,
+}, separators=(",", ":")))
+PY
+}
+
+# remote-backup:save-destination : verify and atomically activate one destination.
+_remote_backup_save_destination() {
+  _require_root "remote-backup:save-destination"
+  command -v rclone >/dev/null 2>&1 || die "Rclone is not installed."
+  _remote_backup_paths
+  umask 077
+  mkdir -p "$REMOTE_BACKUP_DIR" "$REMOTE_BACKUP_GENERATIONS" "$(dirname "$REMOTE_BACKUP_CRON")"
+  chmod 700 "$REMOTE_BACKUP_DIR" "$REMOTE_BACKUP_GENERATIONS"
+  _remote_backup_lock
+  _remote_backup_cleanup_staging
+
+  local parsed provider use_saved access secret region endpoint bucket folder sentinel
+  local frequency="daily" weekday="" time="03:00" exclude="" verified_at
+  local stage="" tmp_cron="" target="" result
+  parsed=$(_remote_backup_payload)
+  local -a fields
+  mapfile -t fields <<< "$parsed"
+  (( ${#fields[@]} == 9 )) || die "Invalid remote backup destination."
+  provider="${fields[0]}"; use_saved="${fields[1]}"; access="${fields[2]}"; secret="${fields[3]}"
+  region="${fields[4]}"; endpoint="${fields[5]}"; bucket="${fields[6]}"; folder="${fields[7]}"; sentinel="${fields[8]}"
+  [[ "$sentinel" == "@@END@@" ]] || die "Invalid remote backup destination."
+
+  region="${region#"${region%%[![:space:]]*}"}"; region="${region%"${region##*[![:space:]]}"}"
+  bucket="${bucket#"${bucket%%[![:space:]]*}"}"; bucket="${bucket%"${bucket##*[![:space:]]}"}"
+  endpoint=$(_remote_backup_endpoint_normalize "$endpoint")
+  folder=$(_remote_backup_folder_normalize "$folder")
+  _remote_backup_provider_valid "$provider" || die "Unsupported S3 provider."
+  [[ "$region" =~ ^[a-z0-9-]{1,32}$ ]] || die "Invalid S3 region."
+  _remote_backup_endpoint_valid "$provider" "$endpoint" || die "A valid HTTPS endpoint is required for this provider."
+  _remote_backup_bucket_valid "$bucket" || die "Invalid S3 bucket name."
+  _remote_backup_folder_valid "$folder" || die "Invalid storage folder."
+  _remote_backup_credentials "$use_saved" "$access" "$secret"
+
+  if _remote_backup_load_meta; then
+    frequency="$REMOTE_FREQUENCY"; weekday="$REMOTE_WEEKDAY"; time="$REMOTE_TIME"; exclude="$REMOTE_EXCLUDE"
+  fi
+  verified_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  stage=$(mktemp -d "${REMOTE_BACKUP_GENERATIONS}/.staging-XXXXXX") || die "Could not stage remote backup generation."
+  chmod 700 "$stage"
+  tmp_cron=$(mktemp "$(dirname "$REMOTE_BACKUP_CRON")/.aidipanel-remote-backup.XXXXXX") \
+    || { rm -rf -- "$stage"; die "Could not stage backup schedule."; }
+  trap 'rm -rf -- "${stage:-}"; rm -f -- "${tmp_cron:-}"' EXIT
+  printf '[aidipanel_remote]\ntype = s3\nprovider = %s\nenv_auth = false\naccess_key_id = %s\nsecret_access_key = %s\nregion = %s\nendpoint = %s\nacl = private\n' \
+    "$provider" "$REMOTE_ACCESS" "$REMOTE_SECRET" "$region" "$endpoint" > "$stage/rclone.conf"
+  chmod 600 "$stage/rclone.conf"
+  if ! result=$(_remote_backup_probe "$stage/rclone.conf" "$bucket" "$folder"); then
+    die "$result"
+  fi
+  printf 'provider=%s\nregion=%s\nendpoint=%s\nbucket=%s\nfolder=%s\nfrequency=%s\nweekday=%s\ntime=%s\nexclude=%s\nlast_verified_at=%s\n' \
+    "$provider" "$region" "$endpoint" "$bucket" "$folder" \
+    "$frequency" "$weekday" "$time" "$exclude" "$verified_at" > "$stage/settings.conf"
+  chmod 600 "$stage/settings.conf"
+  _remote_backup_write_cron_file "$frequency" "$weekday" "$time" "$tmp_cron" \
+    || die "Could not stage backup schedule."
+  mv -f -- "$tmp_cron" "$REMOTE_BACKUP_CRON" || die "Could not activate backup schedule."
+  tmp_cron=""
+  target=$(_remote_backup_activate_generation "$stage") || die "Could not activate remote backup destination."
+  stage=""
+  _remote_backup_current_target_valid "$target" || die "Could not activate remote backup destination."
+  rm -f -- "$REMOTE_BACKUP_LEGACY_RCLONE" "$REMOTE_BACKUP_LEGACY_META"
+  _remote_backup_paths
+  _remote_backup_resolve_active || die "Could not load the activated remote backup destination."
+  _remote_backup_prune_generations "$REMOTE_BACKUP_ACTIVE_TARGET" || true
+  trap - EXIT
+  ok "Remote backup destination verified and saved."
+}
+
+# remote-backup:save-policy : update schedule/exclusions without touching S3 credentials.
+_remote_backup_save_policy() {
+  _require_root "remote-backup:save-policy"
+  _remote_backup_paths
+  umask 077
+  mkdir -p "$REMOTE_BACKUP_DIR" "$REMOTE_BACKUP_GENERATIONS" "$(dirname "$REMOTE_BACKUP_CRON")"
+  chmod 700 "$REMOTE_BACKUP_DIR" "$REMOTE_BACKUP_GENERATIONS"
+  _remote_backup_lock
+  _remote_backup_cleanup_staging
+  _remote_backup_load_meta || die "Remote backup is not configured."
+
+  local parsed frequency weekday time exclude sentinel
+  local active_rclone="$REMOTE_BACKUP_RCLONE" stage="" tmp_cron="" target=""
+  if ! parsed=$(python3 -c '
+import json, sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(newline="\n")
+try:
+    data = json.load(sys.stdin)
+except (OSError, ValueError):
+    raise SystemExit(2)
+for key in ("frequency", "weekday", "time", "exclude"):
+    value = data.get(key, "")
+    if not isinstance(value, str) or "\x00" in value:
+        raise SystemExit(2)
+    if key != "exclude" and ("\n" in value or "\r" in value):
+        raise SystemExit(2)
+    if key == "exclude":
+        value = value.replace("\r\n", ",").replace("\r", ",").replace("\n", ",")
+    print(value)
+print("@@END@@")
+'); then
+    die "Invalid backup policy."
+  fi
+  local -a fields
+  mapfile -t fields <<< "$parsed"
+  (( ${#fields[@]} == 5 )) || die "Invalid backup policy."
+  frequency="${fields[0]}"; weekday="${fields[1]}"; time="${fields[2]}"; exclude="${fields[3]}"; sentinel="${fields[4]}"
+  [[ "$sentinel" == "@@END@@" ]] || die "Invalid backup policy."
+  _remote_backup_frequency_valid "$frequency" || die "Invalid backup frequency."
+  _remote_backup_time_valid "$time" || die "Invalid backup time (use HH:MM, 24-hour)."
+  if [[ "$frequency" == "weekly" ]]; then
+    _remote_backup_weekday_valid "$weekday" || die "Invalid backup weekday."
+  else
+    weekday=""
+  fi
+  _remote_backup_exclude_valid "$exclude" || die "Invalid exclude patterns."
+  exclude=$(_remote_backup_exclude_normalize "$exclude")
+  _remote_backup_cron_schedule "$frequency" "$weekday" "$time" >/dev/null || die "Invalid backup schedule."
+
+  stage=$(mktemp -d "${REMOTE_BACKUP_GENERATIONS}/.staging-XXXXXX") || die "Could not stage remote backup generation."
+  chmod 700 "$stage"
+  tmp_cron=$(mktemp "$(dirname "$REMOTE_BACKUP_CRON")/.aidipanel-remote-backup.XXXXXX") \
+    || { rm -rf -- "$stage"; die "Could not stage backup schedule."; }
+  trap 'rm -rf -- "${stage:-}"; rm -f -- "${tmp_cron:-}"' EXIT
+  cp -- "$active_rclone" "$stage/rclone.conf" || die "Could not preserve remote backup credentials."
+  chmod 600 "$stage/rclone.conf"
+  printf 'provider=%s\nregion=%s\nendpoint=%s\nbucket=%s\nfolder=%s\nfrequency=%s\nweekday=%s\ntime=%s\nexclude=%s\nlast_verified_at=%s\n' \
+    "$REMOTE_PROVIDER" "$REMOTE_REGION" "$REMOTE_ENDPOINT" "$REMOTE_BUCKET" "$REMOTE_FOLDER" \
+    "$frequency" "$weekday" "$time" "$exclude" "$REMOTE_LAST_VERIFIED_AT" > "$stage/settings.conf"
+  chmod 600 "$stage/settings.conf"
+  _remote_backup_write_cron_file "$frequency" "$weekday" "$time" "$tmp_cron" \
+    || die "Could not stage backup schedule."
+  mv -f -- "$tmp_cron" "$REMOTE_BACKUP_CRON" || die "Could not activate backup schedule."
+  tmp_cron=""
+  target=$(_remote_backup_activate_generation "$stage") || die "Could not activate remote backup policy."
+  stage=""
+  _remote_backup_current_target_valid "$target" || die "Could not activate remote backup policy."
+  rm -f -- "$REMOTE_BACKUP_LEGACY_RCLONE" "$REMOTE_BACKUP_LEGACY_META"
+  _remote_backup_paths
+  _remote_backup_resolve_active || die "Could not load the activated remote backup policy."
+  _remote_backup_prune_generations "$REMOTE_BACKUP_ACTIVE_TARGET" || true
+  trap - EXIT
+  ok "Remote backup policy saved."
 }
 
 # backup:list --domain <d> : JSON list of this site's valid backups (newest first).
@@ -1715,12 +2441,25 @@ _backup_delete() {
   ok "Deleted backup: ${name}"
 }
 
-# backup:create --domain <d> [--keep N] : build one local .tar.gz (webroot + DBs).
+# backup:create --domain <d> [--keep N] [--exclude patterns] : build one local .tar.gz (webroot + DBs).
 _backup_create() {
   _require_root "backup:create"; _parse_opts "$@"
-  local domain keep; domain=$(_opt "domain"); keep=$(_opt "keep" "5")
-  _require_arg "domain" "$domain" "backup:create --domain <d> [--keep N]"
+  local domain keep exclude; domain=$(_opt "domain"); keep=$(_opt "keep" "5"); exclude=$(_opt "exclude" "")
+  _require_arg "domain" "$domain" "backup:create --domain <d> [--keep N] [--exclude <patterns>]"
   [[ "$keep" =~ ^[0-9]+$ ]] || die "--keep must be a positive integer."
+
+  # Exclude: comma-separated glob patterns applied to the webroot tar only.
+  # Full paths under the current site's htdocs are converted to archive paths.
+  # Bare patterns still match a name at any depth. DB dumps are always complete.
+  local -a tar_excludes=() _pats=()
+  local _oldifs="${IFS:-}" _pat _archive_pat
+  if [[ -n "$exclude" ]]; then
+    _remote_backup_exclude_valid "$exclude" || die "Invalid --exclude patterns."
+    exclude=$(_remote_backup_exclude_normalize "$exclude")
+    IFS=','
+    read -ra _pats <<< "$exclude"
+    IFS="$_oldifs"
+  fi
 
   # Per-domain lock: no parallel runs for the same site. flock is auto-released by the
   # kernel on exit or crash, so a killed run never leaves a stale lock.
@@ -1736,6 +2475,10 @@ _backup_create() {
   local backups="${BACKUP_HOME}/backups"
   local vconf="${NGINX_CONF_DIR}/${domain}.conf"
   local site_type php_ver
+  for _pat in "${_pats[@]}"; do
+    _archive_pat=$(_backup_exclude_pattern "$_pat" "$htdocs")
+    tar_excludes+=(--exclude "$_archive_pat")
+  done
   site_type=$(grep -oP '# Type: \K\w+' "$vconf" 2>/dev/null || echo "")
   php_ver=$(grep -oP 'php\K[0-9.]+(?=-fpm)' "$vconf" 2>/dev/null || echo "")
 
@@ -1768,7 +2511,7 @@ _backup_create() {
   # Phase 1: tar webroot as the site-user (source = htdocs/<domain>, NOT /public).
   # Top-level entry inside webroot.tar.gz is <domain>/; ~/backups is a sibling, never included.
   _progress 10 tarring "Archiving webroot"
-  ( cd "$htdocs" && sudo -u "$user" tar czf "${BACKUP_STAGING}/webroot.tar.gz" "$domain" ) \
+  ( cd "$htdocs" && sudo -u "$user" tar czf "${BACKUP_STAGING}/webroot.tar.gz" "${tar_excludes[@]}" "$domain" ) \
     || die "Failed to archive webroot."
 
   # Phase 2: dump DB(s) as root via a mode-0600 defaults file (password never in argv/environ).
@@ -1825,7 +2568,7 @@ _backup_create() {
   local pf
   while IFS= read -r pf; do
     rm -f "$pf" 2>/dev/null || sudo -u "$user" rm -f "$pf" 2>/dev/null || true
-  done < <(printf '%s\n' "${backups}/${domain}_"*.tar.gz | sort -r | _backup_prune_set "$keep" "$final")
+  done < <(printf '%s\n' "${backups}/${domain}_"*.tar.gz | sort -r | _backup_prune_set "$keep" "$final" "$domain")
 
   _progress 100 "done" "Backup created"
   ok "Backup created: ${final} ($(du -h "$final" | cut -f1))"
@@ -9600,6 +10343,11 @@ main() {
     backup:download)  _backup_download "$@" ;;
     backup:delete)    _backup_delete "$@" ;;
     backup:create)    _backup_create "$@" ;;
+    remote-backup:status) _remote_backup_status "$@" ;;
+    remote-backup:test)   _remote_backup_test "$@" ;;
+    remote-backup:save-destination) _remote_backup_save_destination "$@" ;;
+    remote-backup:save-policy) _remote_backup_save_policy "$@" ;;
+    remote-backup:run)    _remote_backup_run "$@" ;;
     sftp:status)    _sftp_status "$@" ;;
     sftp:enable)    _sftp_enable "$@" ;;
     sftp:disable)   _sftp_disable "$@" ;;

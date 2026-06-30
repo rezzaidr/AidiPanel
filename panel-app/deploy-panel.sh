@@ -232,6 +232,7 @@ case "$cmd" in
   files:rename|files:copy|files:move|files:chmod|files:zip|files:unzip|\
   files:download-many|files:upload-chunk|files:upload-cancel|\
   backup:create|backup:list|backup:download|backup:delete|\
+  remote-backup:status|remote-backup:test|remote-backup:save-destination|remote-backup:save-policy|remote-backup:run|\
   sftp:status|sftp:enable|sftp:disable|sftp:passwd|sftp:passwd-clear|sftp:key-add|sftp:key-delete|\
   service:status|service:start|service:stop|service:restart|service:reload|\
   cron:list|cron:add|cron:delete|cron:toggle|cron:wp|\

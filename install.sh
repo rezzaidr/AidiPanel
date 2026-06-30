@@ -445,7 +445,7 @@ _install_base_packages() {
   echo 'DPkg::Lock::Timeout "300";' > /etc/apt/apt.conf.d/99aidipanel-lock-timeout
   _apt_install \
     curl wget gnupg2 lsb-release ca-certificates apt-transport-https \
-    software-properties-common unzip zip tar \
+    software-properties-common unzip zip tar rclone \
     git cron ufw fail2ban \
     openssl certbot \
     sqlite3 python3 \
@@ -1761,6 +1761,7 @@ case "$cmd" in
   files:rename|files:copy|files:move|files:chmod|files:zip|files:unzip|\
   files:download-many|files:upload-chunk|files:upload-cancel|\
   backup:create|backup:list|backup:download|backup:delete|\
+  remote-backup:status|remote-backup:test|remote-backup:save-destination|remote-backup:save-policy|remote-backup:run|\
   sftp:status|sftp:enable|sftp:disable|sftp:passwd|sftp:passwd-clear|sftp:key-add|sftp:key-delete|\
   system:info)
     ;;
