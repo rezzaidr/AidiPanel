@@ -53,6 +53,7 @@ log "Generated admin password"
 # --------------------------------------------------------------------------
 cp -r "${SCRIPT_DIR}/public/"* "${PANEL_DIR}/public/"
 cp -r "${SCRIPT_DIR}/app"       "${PANEL_DIR}/"
+cp -r "${SCRIPT_DIR}/bin"       "${PANEL_DIR}/"
 ok "App files copied"
 
 # --------------------------------------------------------------------------
@@ -66,12 +67,15 @@ mkdir -p "${PANEL_DIR}/storage/db" \
 
 chown -R "${PANEL_USER}":www-data "${PANEL_DIR}/app"
 chown -R "${PANEL_USER}":www-data "${PANEL_DIR}/public"
+chown -R "${PANEL_USER}":www-data "${PANEL_DIR}/bin"
 chown -R www-data:www-data         "${PANEL_DIR}/storage"
 
 find "${PANEL_DIR}/app"    -type f -exec chmod 640 {} \;
 find "${PANEL_DIR}/app"    -type d -exec chmod 750 {} \;
 find "${PANEL_DIR}/public" -type f -exec chmod 644 {} \;
 find "${PANEL_DIR}/public" -type d -exec chmod 755 {} \;
+find "${PANEL_DIR}/bin"    -type f -exec chmod 640 {} \;
+find "${PANEL_DIR}/bin"    -type d -exec chmod 750 {} \;
 
 chmod 750 "${PANEL_DIR}/storage"
 chmod 770 "${PANEL_DIR}/storage/db"
@@ -81,6 +85,12 @@ chmod 770 "${PANEL_DIR}/storage/tmp"
 chmod 770 "${PANEL_DIR}/storage/tmp/vhost"
 chmod 770 "${PANEL_DIR}/storage/backups"
 ok "Permissions set"
+
+# Remove the legacy active-log gzip cron. Ubuntu's Nginx logrotate job safely
+# renames and reopens *.log; gzipping a live inode can silently lose traffic.
+if [[ -f /etc/cron.d/aidipanel ]]; then
+    sed -i '\|find /var/log/nginx .* -exec gzip|d' /etc/cron.d/aidipanel
+fi
 
 # --------------------------------------------------------------------------
 # 4. Write the password hash directly into SQLite (not read from a file at

@@ -1043,7 +1043,7 @@ function php_install_end($handle): void
  */
 function sys_cpu_percent(): float
 {
-    $f    = sys_get_temp_dir() . '/aidipanel_cpu.json';
+    $f    = defined('STORAGE_ROOT') ? STORAGE_ROOT . '/tmp/cpu.json' : sys_get_temp_dir() . '/aidipanel_cpu.json';
     $stat = @file('/proc/stat');
     if (!$stat) return 0.0;
     $parts = explode(' ', preg_replace('/\s+/', ' ', trim($stat[0])));
@@ -1083,7 +1083,7 @@ function sys_cpu_percent(): float
 
 function sys_net_rate(): array
 {
-    $f     = sys_get_temp_dir() . '/aidipanel_net.json';
+    $f     = defined('STORAGE_ROOT') ? STORAGE_ROOT . '/tmp/net.json' : sys_get_temp_dir() . '/aidipanel_net.json';
     $lines = @file('/proc/net/dev') ?: [];
     $rx = 0; $tx = 0; $iface = '';
     foreach ($lines as $line) {
@@ -1169,7 +1169,7 @@ function sys_uptime(): string
  */
 function sys_disk_io(): array
 {
-    $f     = sys_get_temp_dir() . '/aidipanel_diskio.json';
+    $f     = defined('STORAGE_ROOT') ? STORAGE_ROOT . '/tmp/diskio.json' : sys_get_temp_dir() . '/aidipanel_diskio.json';
     $lines = @file('/proc/diskstats') ?: [];
     $readSectors = 0; $writeSectors = 0;
     foreach ($lines as $line) {

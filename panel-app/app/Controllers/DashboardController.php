@@ -137,117 +137,86 @@ class DashboardController extends BaseController
         return $result;
     }
 
-    /**
-     * Traffic & cache analytics from the Nginx access log.
-     *
-     * Nginx logs the FastCGI cache result on every line (`cache:$upstream_cache_status`,
-     * see the `main` log_format in install.sh), so hit ratio, cached-vs-origin split,
-     * bandwidth saved and a per-minute time series are all real — no separate metrics
-     * collector needed (that one is for CPU/mem history, which /proc does not keep).
-     *
-     * Bounded to the tail of the log and cached for 60s to stay light on busy servers
-     * (the performance-first brand: the panel must not become the bottleneck).
-     */
+    /** Global origin analytics persisted by the existing per-minute collector. */
     private function getTrafficAnalytics(): array
     {
-        $empty = [
-            'req_today'   => 0,
-            'hit_ratio'   => 0.0,
-            'cached'      => 0,
-            'origin'      => 0,
-            'uncacheable' => 0,
-            'bw_saved'    => 0,
-            'bw_total'    => 0,
-            'cache_size'  => $this->fastcgiCacheSize(),
-            'has_data'    => false,
-            'series'      => ['labels' => [], 'cached' => [], 'origin' => []],
-        ];
+        $now = time();
+        $dayStart = $this->trafficDayStart($now);
+        $state = [];
+        foreach ($this->db->rows('SELECT key, value FROM traffic_state') as $row) {
+            $state[(string) $row['key']] = (string) $row['value'];
+        }
 
-        $cacheFile = sys_get_temp_dir() . '/aidipanel_traffic.json';
-        if (is_readable($cacheFile) && (time() - (int) filemtime($cacheFile)) < 60) {
-            $hit = @json_decode((string) file_get_contents($cacheFile), true);
-            if (is_array($hit) && isset($hit['has_data'])) {
-                return $hit;
+        $lastCollected = isset($state['last_collected_at']) ? (int) $state['last_collected_at'] : null;
+        $coverageStarted = max(0, (int) ($state['coverage_started_at'] ?? 0));
+        $queryStart = max($dayStart, $coverageStarted);
+        $status = \Core\TrafficMetrics::collectorStatus(
+            $lastCollected,
+            $now,
+            (int) ($state['unreadable_logs'] ?? 0),
+            (int) ($state['data_errors'] ?? 0)
+        );
+        $summary = \Core\TrafficMetrics::summarize([]);
+        $series = ['labels' => [], 'cached' => [], 'origin' => []];
+
+        if ($status === 'ready') {
+            $totals = $this->db->row(
+                'SELECT COALESCE(SUM(requests), 0) AS requests,
+                        COALESCE(SUM(cache_hits), 0) AS cache_hits,
+                        COALESCE(SUM(cache_misses), 0) AS cache_misses,
+                        COALESCE(SUM(cache_bypass), 0) AS cache_bypass,
+                        COALESCE(SUM(cache_bytes), 0) AS cache_bytes
+                   FROM traffic_metrics
+                  WHERE minute >= ? AND minute <= ?',
+                [$queryStart, $now]
+            ) ?? [];
+            $summary = \Core\TrafficMetrics::summarize($totals);
+
+            $endMinute = intdiv($now, 60) * 60;
+            $startMinute = max($queryStart, $endMinute - 59 * 60);
+            $rows = $this->db->rows(
+                'SELECT minute,
+                        SUM(requests) AS requests,
+                        SUM(cache_hits) AS cache_hits,
+                        SUM(cache_misses) AS cache_misses,
+                        SUM(cache_bypass) AS cache_bypass,
+                        SUM(cache_bytes) AS cache_bytes
+                   FROM traffic_metrics
+                  WHERE minute >= ? AND minute <= ?
+                  GROUP BY minute ORDER BY minute ASC',
+                [$startMinute, $endMinute]
+            );
+            $filled = \Core\TrafficMetrics::zeroFill($rows, $startMinute, $endMinute);
+            $timezone = new \DateTimeZone(current_user_tz());
+            foreach ($filled as $minute => $counts) {
+                $series['labels'][] = (new \DateTimeImmutable('@' . $minute))
+                    ->setTimezone($timezone)->format('H:i');
+                $series['cached'][] = $counts['cache_hits'];
+                $series['origin'][] = max(0, $counts['requests'] - $counts['cache_hits']);
             }
         }
 
-        $log = '/var/log/nginx/access.log';
-        if (!is_readable($log)) {
-            @file_put_contents($cacheFile, json_encode($empty), LOCK_EX);
-            return $empty;
+        $cacheBytes = null;
+        $cacheCheckedAt = isset($state['cache_checked_at']) ? (int) $state['cache_checked_at'] : 0;
+        if ($cacheCheckedAt > 0 && $cacheCheckedAt <= $now + 300 && $now - $cacheCheckedAt <= 900
+            && isset($state['cache_bytes']) && ctype_digit($state['cache_bytes'])) {
+            $cacheBytes = (int) $state['cache_bytes'];
         }
 
-        $raw = @shell_exec('tail -n 50000 ' . escapeshellarg($log) . ' 2>/dev/null');
-        if (!is_string($raw) || $raw === '') {
-            @file_put_contents($cacheFile, json_encode($empty), LOCK_EX);
-            return $empty;
-        }
-
-        $today       = date('d/M/Y');           // matches Nginx $time_local, e.g. 08/Jun/2026
-        $cached      = 0;
-        $origin      = 0;
-        $uncacheable = 0;
-        $bwSaved     = 0;
-        $bwTotal     = 0;
-        $buckets     = [];                       // 'HH:MM' => [cachedCount, originCount]
-
-        // groups: 1=hour 2=minute 3=body_bytes_sent 4=cache status (date matched but not captured)
-        $re = '#\[\d{2}/[A-Za-z]{3}/\d{4}:(\d{2}):(\d{2}):\d{2}[^\]]*\]\s"[^"]*"\s\d{3}\s(\d+|-)\s.*cache:(\S+)#';
-
-        foreach (explode("\n", $raw) as $line) {
-            if ($line === '' || strpos($line, $today) === false) continue;   // today only (fast pre-filter)
-            if (!preg_match($re, $line, $m)) continue;
-
-            $bytes   = $m[3] === '-' ? 0 : (int) $m[3];
-            $status  = strtoupper($m[4]);
-            $bwTotal += $bytes;
-
-            $key = $m[1] . ':' . $m[2];
-            if (!isset($buckets[$key])) $buckets[$key] = [0, 0];
-
-            if (in_array($status, ['HIT', 'STALE', 'UPDATING', 'REVALIDATED'], true)) {
-                $cached++; $bwSaved += $bytes; $buckets[$key][0]++;
-            } elseif (in_array($status, ['MISS', 'EXPIRED', 'BYPASS'], true)) {
-                $origin++; $buckets[$key][1]++;
-            } else {
-                $uncacheable++;   // '-' = static / non-FastCGI: not part of cache ratio or the chart
-            }
-        }
-
-        $cacheable = $cached + $origin;
-        $reqToday  = $cacheable + $uncacheable;
-
-        ksort($buckets);                          // 'HH:MM' is zero-padded → chronological
-        $slice = array_slice($buckets, -60, null, true);
-
-        $result = [
-            'req_today'   => $reqToday,
-            'hit_ratio'   => $cacheable > 0 ? round($cached / $cacheable * 100, 1) : 0.0,
-            'cached'      => $cached,
-            'origin'      => $origin,
-            'uncacheable' => $uncacheable,
-            'bw_saved'    => $bwSaved,
-            'bw_total'    => $bwTotal,
-            'cache_size'  => $this->fastcgiCacheSize(),
-            'has_data'    => $reqToday > 0,
-            'series'      => [
-                'labels' => array_values(array_keys($slice)),
-                'cached' => array_values(array_map(static fn($b) => $b[0], $slice)),
-                'origin' => array_values(array_map(static fn($b) => $b[1], $slice)),
-            ],
+        return [
+            'status' => $status,
+            'last_updated' => $lastCollected,
+            'coverage_started_at' => $coverageStarted > 0 ? $coverageStarted : null,
+            'req_today' => $status === 'ready' ? $summary['requests'] : null,
+            'hit_ratio' => $status === 'ready' ? $summary['hit_ratio'] : null,
+            'cached' => $status === 'ready' ? $summary['cache_hits'] : null,
+            'origin' => $status === 'ready' ? $summary['cache_misses'] : null,
+            'bypass' => $status === 'ready' ? $summary['cache_bypass'] : null,
+            'served_bytes' => $status === 'ready' ? $summary['cache_bytes'] : null,
+            'cache_bytes' => $cacheBytes,
+            'has_data' => $status === 'ready' && $summary['requests'] > 0,
+            'series' => $series,
         ];
-
-        @file_put_contents($cacheFile, json_encode($result), LOCK_EX);
-        return $result;
-    }
-
-    private function fastcgiCacheSize(): string
-    {
-        $dir = '/var/cache/nginx/fastcgi';
-        if (!is_dir($dir)) return '—';
-        $out = @shell_exec('du -sh ' . escapeshellarg($dir) . ' 2>/dev/null');
-        if (!is_string($out) || $out === '') return '—';
-        return trim(explode("\t", trim($out))[0] ?? '—');
     }
 
     private function getTopSites(): array
@@ -259,23 +228,62 @@ class DashboardController extends BaseController
         if ($ids === []) {
             return [];
         }
-        if ($ids === null) {
-            $sites = $this->db->rows('SELECT * FROM sites ORDER BY created_at DESC LIMIT 5');
-        } else {
-            $place = implode(',', array_fill(0, count($ids), '?'));
-            $sites = $this->db->rows("SELECT * FROM sites WHERE id IN ({$place}) ORDER BY created_at DESC LIMIT 5", $ids);
+        $collectorState = [];
+        foreach ($this->db->rows('SELECT key, value FROM traffic_state') as $row) {
+            $collectorState[(string) $row['key']] = (string) $row['value'];
         }
-        foreach ($sites as &$site) {
-            $logFile = '/var/log/nginx/' . $site['domain'] . '-access.log';
-            $site['req_today'] = 0;
-            if (is_readable($logFile)) {
-                $out = @shell_exec('wc -l < ' . escapeshellarg($logFile) . ' 2>/dev/null');
-                $site['req_today'] = (int) trim((string) $out);
+        $trafficStatus = \Core\TrafficMetrics::collectorStatus(
+            isset($collectorState['last_collected_at']) ? (int) $collectorState['last_collected_at'] : null,
+            time(),
+            (int) ($collectorState['unreadable_logs'] ?? 0),
+            (int) ($collectorState['data_errors'] ?? 0)
+        );
+        if ($trafficStatus !== 'ready') {
+            if ($ids === null) {
+                $sites = $this->db->rows('SELECT * FROM sites ORDER BY created_at DESC LIMIT 5');
+            } else {
+                $place = implode(',', array_fill(0, count($ids), '?'));
+                $sites = $this->db->rows(
+                    "SELECT * FROM sites WHERE id IN ({$place}) ORDER BY created_at DESC LIMIT 5",
+                    $ids
+                );
             }
+            foreach ($sites as &$site) $site['req_today'] = null;
+            unset($site);
+            return $sites;
         }
+        $now = time();
+        $coverageStarted = max(0, (int) ($collectorState['coverage_started_at'] ?? 0));
+        $params = [max($this->trafficDayStart($now), $coverageStarted), $now];
+        $where = '';
+        if ($ids !== null) {
+            $place = implode(',', array_fill(0, count($ids), '?'));
+            $where = "WHERE s.id IN ({$place})";
+            array_push($params, ...$ids);
+        }
+        $sites = $this->db->rows(
+            "SELECT s.*, COALESCE(SUM(tm.requests), 0) AS req_today
+               FROM sites s
+               LEFT JOIN traffic_metrics tm
+                 ON tm.domain = s.domain AND tm.minute >= ? AND tm.minute <= ?
+               {$where}
+              GROUP BY s.id
+              ORDER BY req_today DESC, s.created_at DESC
+              LIMIT 5",
+            $params
+        );
+        foreach ($sites as &$site) $site['req_today'] = (int) $site['req_today'];
         unset($site);
-        usort($sites, fn($a, $b) => $b['req_today'] <=> $a['req_today']);
         return $sites;
+    }
+
+    private function trafficDayStart(int $now): int
+    {
+        $timezone = new \DateTimeZone(current_user_tz());
+        return (new \DateTimeImmutable('@' . $now))
+            ->setTimezone($timezone)
+            ->setTime(0, 0)
+            ->getTimestamp();
     }
 
     private function getVpsStatus(array $metrics): array

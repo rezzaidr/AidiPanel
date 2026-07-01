@@ -254,28 +254,31 @@ return [
     'dash.range.12h'          => 'Last 12 hours',
 
     // Dashboard — KPI tiles
-    'dash.kpi.requests'        => 'Requests',
-    'dash.kpi.requests_hint'   => 'today',
-    'dash.kpi.hit_ratio'       => 'Cache Hit Ratio',
+    'dash.kpi.requests'        => 'Origin Requests',
+    'dash.kpi.hit_ratio'       => 'FastCGI Cache Hit Ratio',
     'dash.kpi.hit_ratio_hint'  => '{cached} of {total} cacheable from cache',
     'dash.kpi.hit_ratio_empty' => 'No cacheable requests yet',
-    'dash.kpi.bw_saved'        => 'Bandwidth Saved',
-    'dash.kpi.bw_saved_hint'   => 'served from cache today',
+    'dash.kpi.served_cache'    => 'Served from Cache',
+    'dash.kpi.served_cache_hint'=> 'response data served from FastCGI cache',
     'dash.kpi.data_cached'     => 'Data Cached',
-    'dash.kpi.data_cached_hint'=> 'FastCGI cache on disk',
+    'dash.kpi.data_cached_hint'=> 'shared + dedicated FastCGI cache on disk',
+    'dash.analytics.collecting'=> 'Collecting origin data…',
+    'dash.analytics.unavailable'=> 'Origin analytics unavailable',
+    'dash.analytics.updated'   => 'managed sites · updated {time} · static excluded',
+    'dash.analytics.scope_since'=> 'managed sites · since {time} · static excluded',
 
     // Dashboard — traffic analytics (cache effectiveness)
     'dash.traffic.title'      => 'Traffic',
-    'dash.traffic.window'     => 'today · per minute',
+    'dash.traffic.window'     => 'last 60 minutes · managed origin · static excluded',
     'dash.traffic.cached'     => 'Cached',
     'dash.traffic.origin'     => 'Origin / PHP',
     'dash.traffic.empty'      => 'No requests recorded yet today.',
     'dash.cacheperf.title'    => 'Cache Performance',
     'dash.cacheperf.hit'      => 'Cache hit',
     'dash.cacheperf.served'   => 'Served from cache',
-    'dash.cacheperf.origin'   => 'Origin / PHP',
-    'dash.cacheperf.saved'    => 'Bandwidth saved',
-    'dash.cacheperf.empty'    => 'Cache metrics appear once your sites receive traffic.',
+    'dash.cacheperf.origin'   => 'Eligible origin',
+    'dash.cacheperf.bypass'    => 'Bypassed',
+    'dash.cacheperf.empty'    => 'No eligible FastCGI cache requests yet.',
 
     // Dashboard — monitoring (historical charts)
     'dash.system.title'       => 'Monitoring',
@@ -283,7 +286,7 @@ return [
 
     // Dashboard — top sites
     'dash.top_sites'          => 'Top Sites',
-    'dash.top_sites.hint'     => 'by requests today',
+    'dash.top_sites.hint'     => 'by collected origin requests',
 
     // VPS status panel
     'vps.title'             => 'Server status',

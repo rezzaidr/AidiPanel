@@ -6,8 +6,8 @@
  *   Monitoring charts  REAL history from the `metrics` table (bin/collect-metrics.php,
  *                      one sample/minute) — fetched per selected time range via
  *                      /api/metrics/history. /proc keeps no history, so we record it.
- *   $analytics         real traffic & cache stats parsed from the Nginx access log
- *                      (hit ratio, cached vs origin, bandwidth saved, per-minute series).
+ *   $analytics         persisted origin traffic and FastCGI cache counters collected
+ *                      incrementally from managed per-site Nginx access logs.
  *   $metrics           live snapshot, used here only for capacity (disk total).
  *   $alerts            "Needs Attention" advisor. $vps server identity. $sites top sites.
  */
@@ -38,8 +38,29 @@ $compact = static function ($n): string {
     return number_format($n);
 };
 
-$cacheable  = (int) ($analytics['cached'] ?? 0) + (int) ($analytics['origin'] ?? 0);
-$hasSeries  = !empty($analytics['series']['labels']);   // cacheable traffic to plot
+$analyticsStatus = (string) ($analytics['status'] ?? 'collecting');
+$analyticsReady = $analyticsStatus === 'ready';
+$cacheable = $analyticsReady
+    ? (int) ($analytics['cached'] ?? 0) + (int) ($analytics['origin'] ?? 0)
+    : 0;
+$hasSeries = $analyticsReady
+    && !empty($analytics['has_data'])
+    && !empty($analytics['series']['labels']);
+$analyticsHint = t('dash.analytics.' . ($analyticsStatus === 'unavailable' ? 'unavailable' : 'collecting'));
+if ($analyticsReady) {
+    $timezone = new DateTimeZone(current_user_tz());
+    $nowLocal = (new DateTimeImmutable('now', $timezone));
+    $lastUpdated = (int) ($analytics['last_updated'] ?? 0);
+    $coverageStarted = (int) ($analytics['coverage_started_at'] ?? 0);
+    $hintKey = $coverageStarted > $nowLocal->setTime(0, 0)->getTimestamp()
+        ? 'dash.analytics.scope_since'
+        : 'dash.analytics.updated';
+    $hintAt = $hintKey === 'dash.analytics.scope_since' ? $coverageStarted : $lastUpdated;
+    $hintTime = $hintAt > 0
+        ? (new DateTimeImmutable('@' . $hintAt))->setTimezone($timezone)->format('H:i')
+        : '—';
+    $analyticsHint = t($hintKey, ['time' => $hintTime]);
+}
 $memTotal   = format_bytes((int) ($vps['mem_total'] ?? 0));
 $diskTotal  = format_bytes((int) ($metrics['disk']['total'] ?? 0));
 $computeParts = [];
@@ -124,43 +145,44 @@ $range = $history['range'] ?? '1h';
 
 <!-- KPI row — performance-led -->
 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
-  <!-- Requests -->
+  <!-- Origin requests -->
   <div class="card p-4">
     <div class="flex items-center justify-between">
-      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('arrow-bounce', 'text-ink') ?> <?= e(t('dash.kpi.requests')) ?> <span class="text-zinc-300 font-normal">· <?= e(t('dash.kpi.requests_hint')) ?></span></span>
+      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('arrow-bounce', 'text-ink') ?> <?= e(t('dash.kpi.requests')) ?></span>
     </div>
-    <div class="mono font-bold text-[26px] text-zinc-900 leading-none mt-2"><?= e($compact($analytics['req_today'] ?? 0)) ?></div>
+    <div class="mono font-bold text-[26px] text-zinc-900 leading-none mt-2"><?= $analyticsReady ? e($compact((int) $analytics['req_today'])) : '<span class="text-zinc-300">—</span>' ?></div>
     <div id="spkReq" class="mt-1 -mb-1"></div>
   </div>
   <!-- Cache hit ratio -->
   <div class="card p-4">
     <div class="flex items-center justify-between">
       <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('bolt', 'text-speed') ?> <?= e(t('dash.kpi.hit_ratio')) ?></span>
-      <span class="badge badge-info text-[10px] px-1.5 py-0.5">FastCGI</span>
     </div>
     <div class="mono font-bold text-[26px] text-speed leading-none mt-2">
-      <?php if ($cacheable > 0): ?><?= e(number_format((float) $analytics['hit_ratio'], 1)) ?><span class="text-zinc-300 text-lg">%</span><?php else: ?><span class="text-zinc-300">—</span><?php endif; ?>
+      <?php if ($analyticsReady && $cacheable > 0): ?><?= e(number_format((float) $analytics['hit_ratio'], 1)) ?><span class="text-zinc-300 text-lg">%</span><?php else: ?><span class="text-zinc-300">—</span><?php endif; ?>
     </div>
     <p class="text-[11px] text-zinc-400 mt-2">
-      <?= $cacheable > 0
+      <?= !$analyticsReady
+        ? e($analyticsHint)
+        : ($cacheable > 0
         ? e(t('dash.kpi.hit_ratio_hint', ['cached' => $compact($analytics['cached']), 'total' => $compact($cacheable)]))
-        : e(t('dash.kpi.hit_ratio_empty')) ?>
+        : e(t('dash.kpi.hit_ratio_empty'))) ?>
     </p>
   </div>
-  <!-- Bandwidth saved -->
+  <!-- Served from cache -->
   <div class="card p-4">
     <div class="flex items-center justify-between">
-      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('arrow-down-circle', 'text-emerald-500') ?> <?= e(t('dash.kpi.bw_saved')) ?></span>
+      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('arrow-down-circle', 'text-emerald-500') ?> <?= e(t('dash.kpi.served_cache')) ?></span>
     </div>
-    <div class="mono font-bold text-[26px] text-zinc-900 leading-none mt-2"><?= e(format_bytes((int) ($analytics['bw_saved'] ?? 0))) ?></div>
-    <p class="text-[11px] text-zinc-400 mt-2"><?= e(t('dash.kpi.bw_saved_hint')) ?></p>
+    <div class="mono font-bold text-[26px] text-zinc-900 leading-none mt-2"><?= $analyticsReady ? e(format_bytes((int) $analytics['served_bytes'])) : '<span class="text-zinc-300">—</span>' ?></div>
+    <p class="text-[11px] text-zinc-400 mt-2"><?= $analyticsReady ? e(t('dash.kpi.served_cache_hint')) : e($analyticsHint) ?></p>
   </div>
   <!-- Data cached -->
   <div class="card p-4">
     <div class="flex items-center justify-between">
       <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('database', 'text-ink') ?> <?= e(t('dash.kpi.data_cached')) ?></span>
     </div>
-    <div class="mono font-bold text-[26px] text-zinc-900 leading-none mt-2"><?= e($analytics['cache_size'] ?? '—') ?></div>
+    <div class="mono font-bold text-[26px] text-zinc-900 leading-none mt-2"><?= ($analytics['cache_bytes'] ?? null) !== null ? e(format_bytes((int) $analytics['cache_bytes'])) : '<span class="text-zinc-300">—</span>' ?></div>
     <p class="text-[11px] text-zinc-400 mt-2"><?= e(t('dash.kpi.data_cached_hint')) ?></p>
   </div>
 </div>
@@ -182,24 +204,26 @@ $range = $history['range'] ?? '1h';
     <?php else: ?>
       <div class="flex flex-col items-center justify-center text-center px-4 py-16">
         <?= icon('chart-area-line', 'text-4xl text-zinc-200 mb-2') ?>
-        <p class="text-sm text-zinc-400"><?= e(t('dash.traffic.empty')) ?></p>
+        <p class="text-sm text-zinc-400"><?= e($analyticsReady ? t('dash.traffic.empty') : $analyticsHint) ?></p>
       </div>
     <?php endif; ?>
   </div>
 
   <div class="card overflow-hidden flex flex-col">
     <div class="card-head"><h2 class="card-title"><?= icon('rocket', 'text-speed') ?> <?= e(t('dash.cacheperf.title')) ?></h2></div>
-    <?php if ($cacheable > 0): ?>
-      <div class="px-4 pt-2"><div id="chartHit"></div></div>
-      <div class="px-4 pb-4 mt-1 space-y-2 text-xs">
+    <?php if ($analyticsReady && $cacheable > 0): ?>
+      <div data-cache-performance-body class="grid grid-cols-[112px_minmax(0,1fr)] items-center gap-2 px-3 py-3 flex-1">
+        <div id="chartHit"></div>
+        <div class="space-y-2 text-xs min-w-0">
         <div class="flex items-center justify-between"><span class="flex items-center gap-2 text-zinc-500"><span class="w-2 h-2 rounded-full bg-speed"></span> <?= e(t('dash.cacheperf.served')) ?></span><span class="mono font-semibold text-zinc-800"><?= e($compact($analytics['cached'])) ?></span></div>
         <div class="flex items-center justify-between"><span class="flex items-center gap-2 text-zinc-500"><span class="w-2 h-2 rounded-full bg-ink"></span> <?= e(t('dash.cacheperf.origin')) ?></span><span class="mono font-semibold text-zinc-800"><?= e($compact($analytics['origin'])) ?></span></div>
-        <div class="flex items-center justify-between pt-2 border-t border-zinc-100"><span class="flex items-center gap-2 text-zinc-500"><?= icon('arrow-down-circle', 'text-emerald-500') ?> <?= e(t('dash.cacheperf.saved')) ?></span><span class="mono font-semibold text-emerald-600"><?= e(format_bytes((int) $analytics['bw_saved'])) ?></span></div>
+        <div class="flex items-center justify-between pt-2 border-t border-zinc-100"><span class="flex items-center gap-2 text-zinc-500"><?= icon('arrow-guide', 'text-zinc-400') ?> <?= e(t('dash.cacheperf.bypass')) ?></span><span class="mono font-semibold text-zinc-800"><?= e($compact($analytics['bypass'])) ?></span></div>
+        </div>
       </div>
     <?php else: ?>
       <div class="flex-1 flex flex-col items-center justify-center text-center px-4 py-12">
         <span class="w-10 h-10 rounded-full bg-speed-pale flex items-center justify-center mb-2"><?= icon('rocket', 'text-speed text-xl') ?></span>
-        <p class="text-sm text-zinc-400"><?= e(t('dash.cacheperf.empty')) ?></p>
+        <p class="text-sm text-zinc-400"><?= e($analyticsReady ? t('dash.cacheperf.empty') : $analyticsHint) ?></p>
       </div>
     <?php endif; ?>
   </div>
@@ -304,7 +328,7 @@ $range = $history['range'] ?? '1h';
                 <span class="badge badge-muted"><?= e(t('ssl.self')) ?></span>
               <?php endif; ?>
             </td>
-            <td><span class="mono text-sm font-medium text-zinc-700"><?= e($compact($site['req_today'])) ?></span></td>
+            <td><span class="mono text-sm font-medium text-zinc-700"><?= ($site['req_today'] ?? null) !== null ? e($compact($site['req_today'])) : '<span class="text-zinc-300">—</span>' ?></span></td>
             <td class="text-right"><a href="/sites/<?= e($site['domain']) ?>" class="btn btn-sm btn-ghost"><?= e(t('action.manage')) ?></a></td>
           </tr>
           <?php endforeach; ?>
@@ -390,7 +414,7 @@ $range = $history['range'] ?? '1h';
   setT('vNetIn', last(H.nin)); setT('vNetOut', last(H.nout));
   setT('vDioR', last(H.dr));   setT('vDioW', last(H.dw));
 
-  // ── traffic & cache analytics (real, from the Nginx access log) ────────────
+  // ── traffic & cache analytics (persisted by the per-minute collector) ─────
   <?php if ($hasSeries): ?>
   (function () {
     const tl = <?= json_encode($analytics['series']['labels'], JSON_UNESCAPED_SLASHES) ?>;
@@ -416,11 +440,11 @@ $range = $history['range'] ?? '1h';
 
   <?php if ($cacheable > 0): ?>
   new ApexCharts($('#chartHit'), {
-    chart: { type: 'radialBar', height: 212, sparkline: { enabled: true }, fontFamily: '"Plus Jakarta Sans"' },
+    chart: { type: 'radialBar', height: 128, sparkline: { enabled: true }, fontFamily: '"Plus Jakarta Sans"' },
     series: [<?= (float) $analytics['hit_ratio'] ?>], colors: ['#0891B2'], labels: [<?= json_encode(t('dash.cacheperf.hit')) ?>], stroke: { lineCap: 'round' },
     plotOptions: { radialBar: { hollow: { size: '60%' }, track: { background: CH.track, strokeWidth: '100%' },
-      dataLabels: { name: { show: true, offsetY: 20, color: CH.axis, fontSize: '11px', fontWeight: 600 },
-        value: { show: true, offsetY: -10, color: CH.text, fontSize: '32px', fontWeight: 700, fontFamily: '"JetBrains Mono"', formatter: v => (Math.round(v * 10) / 10) + '%' } } } },
+      dataLabels: { name: { show: true, offsetY: 17, color: CH.axis, fontSize: '9px', fontWeight: 600 },
+        value: { show: true, offsetY: -8, color: CH.text, fontSize: '21px', fontWeight: 700, fontFamily: '"JetBrains Mono"', formatter: v => (Math.round(v * 10) / 10) + '%' } } } },
   }).render();
   <?php endif; ?>
 })();

@@ -1894,9 +1894,6 @@ PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 # Purge FastCGI cache older than 1 day
 0 4 * * * root find /var/cache/nginx/fastcgi -type f -atime +1 -delete >> /var/log/aidipanel-install.log 2>&1
 
-# Rotate AidiPanel logs weekly
-0 0 * * 0 root find /var/log/nginx -name "*.log" -size +100M -exec gzip {} \; 2>/dev/null
-
 # Collect system metrics every minute (dashboard Monitoring history charts)
 * * * * * www-data /usr/bin/php /opt/aidipanel/bin/collect-metrics.php >/dev/null 2>&1
 CRONFILE

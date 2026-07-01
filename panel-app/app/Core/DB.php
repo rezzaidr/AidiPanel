@@ -106,6 +106,32 @@ class DB
                 dio_w  REAL NOT NULL DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS traffic_metrics (
+                minute        INTEGER NOT NULL,
+                domain        TEXT    NOT NULL,
+                requests      INTEGER NOT NULL DEFAULT 0,
+                cache_hits    INTEGER NOT NULL DEFAULT 0,
+                cache_misses  INTEGER NOT NULL DEFAULT 0,
+                cache_bypass  INTEGER NOT NULL DEFAULT 0,
+                cache_bytes   INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (minute, domain)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_traffic_metrics_domain_minute
+                ON traffic_metrics(domain, minute);
+
+            CREATE TABLE IF NOT EXISTS traffic_cursors (
+                log_path    TEXT    PRIMARY KEY,
+                inode       INTEGER NOT NULL,
+                byte_offset INTEGER NOT NULL,
+                updated_at  INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS traffic_state (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS user_recovery_codes (
                 id        INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id   INTEGER NOT NULL,
