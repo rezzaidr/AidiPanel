@@ -86,7 +86,7 @@ $assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROO
 
   <script defer src="/assets/vendor/alpine.min.js"></script>
 </head>
-<body class="h-full text-zinc-800 antialiased" x-data="{ userMenu: false }">
+<body class="min-h-screen flex flex-col text-zinc-800 antialiased" x-data="{ userMenu: false }">
 
 <!-- ===== TOP BAR ===== -->
 <header class="h-16 bg-white border-b border-zinc-200/80 flex items-center px-5 gap-4">
@@ -157,6 +157,7 @@ $assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROO
 </header>
 
 <!-- ===== CONTENT ===== -->
+<div data-app-content class="flex-1">
 <?php if (!empty($_full_bleed)): ?>
   <?= $_content ?? '' ?>
 <?php elseif (!empty($_is_admin_area)): ?>
@@ -202,6 +203,19 @@ $assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROO
     <?= $_content ?? '' ?>
   </main>
 <?php endif; ?>
+</div>
+
+<footer data-app-footer class="bg-white border-t border-zinc-200/80">
+  <nav aria-label="Footer" class="mx-auto max-w-[1280px] px-6 py-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 text-xs text-zinc-400">
+    <span>© 2026 AidiPanel.</span>
+    <div data-footer-links class="flex items-center gap-4">
+      <a href="https://aidipanel.com/docs/" target="_blank" rel="noopener noreferrer" class="hover:text-zinc-600 transition-colors">Docs</a>
+      <a href="https://github.com/rezzaidr/AidiPanel/issues" target="_blank" rel="noopener noreferrer" class="hover:text-zinc-600 transition-colors">Issue</a>
+      <a href="https://github.com/sponsors/rezzaidr" target="_blank" rel="noopener noreferrer" class="hover:text-zinc-600 transition-colors">Sponsor</a>
+      <a href="https://aidipanel.com/contact/" target="_blank" rel="noopener noreferrer" class="hover:text-zinc-600 transition-colors">Contact</a>
+    </div>
+  </nav>
+</footer>
 
 <!-- ===== TOASTS (flash messages) ===== -->
 <div id="toast-stack" aria-live="polite" class="fixed top-4 right-4 z-[60] flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)]">
