@@ -73,6 +73,16 @@ The default PHP version (8.4) is used when `--php` is omitted. See [docs/cli.md]
 - [Architecture](docs/architecture.md)
 - [Roadmap](docs/roadmap.md)
 
+## Support AidiPanel
+
+AidiPanel is built and maintained independently.
+
+If this project helps you manage servers more easily, save time, or learn server management with less confusion, consider supporting the development.
+
+Your sponsorship helps fund VPS testing, documentation, security improvements, backup workflows, installer testing, and continued development.
+
+[Become a Sponsor](https://github.com/sponsors/rezzaidr)
+
 ## License
 
 Licensed under the MIT License — see [LICENSE](LICENSE).
