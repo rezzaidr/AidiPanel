@@ -99,9 +99,10 @@ $tabs = [
         <div>
           <div class="flex items-center gap-2">
             <h1 class="font-head font-bold text-[19px] text-zinc-900 leading-none"><?= e($domain) ?></h1>
-            <span class="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
-              <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-              <?= e(t('site.active')) ?>
+            <span class="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full cursor-help <?= $hasTrustedSsl ? 'text-emerald-700 bg-emerald-50' : 'text-zinc-600 bg-zinc-100' ?>"
+                  title="<?= e($hasTrustedSsl ? t('site.active_hint') : t('site.configured_hint')) ?>">
+              <span class="w-1.5 h-1.5 rounded-full <?= $hasTrustedSsl ? 'bg-emerald-500' : 'bg-zinc-400' ?>"></span>
+              <?= e($hasTrustedSsl ? t('site.active') : t('site.configured')) ?>
             </span>
           </div>
           <p class="text-xs text-zinc-400 mt-1.5">

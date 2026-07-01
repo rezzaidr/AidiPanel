@@ -348,6 +348,9 @@ return [
     'site.back'             => 'Back to Sites',
     'site.visit'            => 'Visit site',
     'site.active'           => 'Active',
+    'site.configured'       => 'Configured',
+    'site.configured_hint'  => 'Site is configured. Install a trusted SSL certificate to mark it Active.',
+    'site.active_hint'      => 'A valid trusted SSL certificate is installed.',
 
     // Manage Site — tabs
     'site.tab.overview'     => 'Overview',
