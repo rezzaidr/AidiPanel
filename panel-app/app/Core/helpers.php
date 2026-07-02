@@ -578,7 +578,7 @@ function server_public_ip(): string
  * but can leave the config dir behind, and aidipanel itself writes files into
  * that dir (99-aidipanel.ini, pool.d/*.conf), so a dir check reads a purged
  * version as still installed. This mirrors the CLI's `_php_installed` exactly so
- * panel-state and CLI-state agree. www-data can stat the world-readable binary
+ * panel-state and CLI-state agree. The aidipanel runtime can stat the world-readable binary
  * without sudo.
  */
 function php_is_installed(string $ver): bool
@@ -633,7 +633,7 @@ function php_versions_status(): array
  *   3. else any unit that exists at all.
  *   4. else default to 'mysql'.
  *
- * Cached per-request; www-data can read systemctl state without sudo.
+ * Cached per-request; the aidipanel runtime can read systemctl state without sudo.
  */
 function db_service(): string
 {
@@ -655,7 +655,7 @@ function db_service(): string
 }
 
 /**
- * Safe CLI runner - use sudo when invoked from the web (www-data)
+ * Safe CLI runner - use sudo when invoked from the web (aidipanel runtime)
  */
 function run_cli(string $command, array $args = []): array
 {

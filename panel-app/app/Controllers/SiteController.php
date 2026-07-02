@@ -952,7 +952,7 @@ class SiteController extends BaseController
             }
         }
 
-        // is_readable (not file_exists): the panel runs as www-data, so a cert it
+        // is_readable (not file_exists): the panel runs as aidipanel, so a cert it
         // cannot read is a cert it cannot vouch for. The CLI now makes the public
         // cert + its directory readable, keeping only the private key root-only.
         $path = null;

@@ -8886,7 +8886,7 @@ _ssl_import() {
   fi
   cp "$key_path" "${dir}/privkey.pem"
   chown -R root:root "$dir"
-  # The directory + public certificate must be readable by the panel (www-data)
+  # The directory + public certificate must be readable by the panel runtime (aidipanel)
   # so it can report the real SSL status; only the private key stays root-only.
   chmod 755 "$dir"
   chmod 644 "${dir}/fullchain.pem"
@@ -8955,7 +8955,7 @@ _ssl_install() {
     || die "Let's Encrypt could not verify domain ownership. Make sure every domain points to this server's IP and that port 80 is open, then try again."
 
   # certbot makes /etc/letsencrypt/{live,archive} 0700 (root-only), which blocks
-  # the panel (www-data) from reading the public cert to report SSL status.
+  # the panel runtime (aidipanel) from reading the public cert to report SSL status.
   # Make the two parent dirs traversable; private keys keep their own 0600.
   chmod 755 /etc/letsencrypt/live /etc/letsencrypt/archive 2>/dev/null || true
 
@@ -9278,7 +9278,7 @@ _ssl_autorenew() {
 
   # Disabling moves the renewal config aside so the global `certbot renew` skips
   # just this site; enabling moves it back. Mirror the state into a vhost marker
-  # so the panel (www-data) can show it without reading the root-only renewal dir.
+  # so the panel runtime (aidipanel) can show it without reading the root-only renewal dir.
   if [[ "$action" == "off" ]]; then
     [[ -f "$renewal" ]] && mv "$renewal" "$disabled"
   else
@@ -9542,12 +9542,12 @@ INSERT OR IGNORE INTO users (username, password_hash, role, active)
 VALUES ('demo', '!', 'viewer', 1);
 UPDATE users SET role = 'viewer', active = 1, password_hash = '!' WHERE username = 'demo';
 SQL
-  # The panel runs as www-data; keep the DB (+ any WAL/SHM) owned by it after a root write.
-  chown www-data:www-data "$db" "$db-wal" "$db-shm" 2>/dev/null || true
+  # The panel runs as aidipanel; restore DB ownership after the root write.
+  chown aidipanel:aidipanel "$db" "$db-wal" "$db-shm" 2>/dev/null || true
 
   # Drop the marker the panel reads (world-readable so any panel worker can stat it).
   : > "$flag"
-  chown www-data:www-data "$flag" 2>/dev/null || true
+  chown aidipanel:aidipanel "$flag" 2>/dev/null || true
   chmod 644 "$flag" 2>/dev/null || true
 
   ok "Read-only demo ENABLED — visitors auto-login as 'demo' (viewer); every change is blocked."

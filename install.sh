@@ -1499,8 +1499,8 @@ _setup_panel_fpm() {
   cat > "$conf" <<'PANELFPM'
 ; AidiPanel dedicated PHP-FPM — serves ONLY the panel UI.
 ; Isolated from php<ver>-fpm so site:add/site:delete reloads never cycle the
-; panel worker (the create/delete 502 fix). Runtime user = www-data
-; (TRANSITIONAL — a dedicated aidipanel runtime user is a later hardening slice).
+; panel worker (the create/delete 502 fix). Runtime user = aidipanel;
+; Nginx remains www-data and can only connect through the FastCGI socket.
 [global]
 error_log = /var/log/aidipanel-fpm.log
 log_level = warning

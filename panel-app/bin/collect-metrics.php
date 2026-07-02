@@ -2,7 +2,7 @@
 /**
  * AidiPanel — system metrics collector.
  *
- * Run every minute by cron (as www-data, see /etc/cron.d/aidipanel). Samples the
+ * Run every minute by cron (as aidipanel, see /etc/cron.d/aidipanel). Samples the
  * server's CPU/memory/disk/load/network/disk-IO and appends one row to the
  * `metrics` SQLite table, so the dashboard can draw REAL historical charts for the
  * selected time range (CloudPanel-style) instead of only live data.

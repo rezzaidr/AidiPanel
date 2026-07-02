@@ -24,9 +24,9 @@ before issuance. AidiPanel pre-checks DNS per name and reports which one failed.
 install it later and enable it.
 
 **SQLite permission errors in the panel**
-The panel runs as `www-data`; the database lives at
+The panel runs as the dedicated `aidipanel` user; the database lives at
 `/opt/aidipanel/storage/db/aidipanel.sqlite`. Ensure the `storage` tree is owned
-by `www-data`.
+by `aidipanel:aidipanel`.
 
 ## CI
 

@@ -192,7 +192,7 @@ fi
 
 # --------------------------------------------------------------------------
 # 4. Write the password hash directly into SQLite (not read from a file at
-#    runtime). This avoids permission issues between root and www-data.
+#    runtime). This avoids permission issues between root and aidipanel.
 # --------------------------------------------------------------------------
 SQLITE_DB="${PANEL_DIR}/storage/db/aidipanel.sqlite"
 
