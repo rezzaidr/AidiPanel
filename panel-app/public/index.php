@@ -1,6 +1,6 @@
 <?php
 /**
- * AidiPanel — Entry Point v1.2.0-rc2
+ * AidiPanel — Entry Point v1.2.0
  * All requests go through here (Nginx: try_files $uri $uri/ /index.php?$args)
  */
 
@@ -10,7 +10,7 @@ define('PANEL_ROOT',    dirname(__DIR__));
 define('APP_ROOT',      PANEL_ROOT . '/app');
 define('STORAGE_ROOT',  PANEL_ROOT . '/storage');
 define('PUBLIC_ROOT',   __DIR__);
-define('PANEL_VERSION', '1.2.0-rc2');
+define('PANEL_VERSION', '1.2.0');
 
 // PANEL_DIR = /opt/aidipanel (used by DB.php to read credentials.conf)
 define('PANEL_DIR', '/opt/aidipanel');
