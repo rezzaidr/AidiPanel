@@ -5,7 +5,7 @@
 #
 #  Install : cp aidipanel /usr/local/bin/aidipanel && chmod +x /usr/local/bin/aidipanel
 #  Usage   : aidipanel <command> [options]
-#  Version : 1.2.0-rc1
+#  Version : 1.2.0-rc2
 #  Author  : AidiPanel Team — by rezzaid
 # =============================================================================
 
@@ -15,7 +15,7 @@ IFS=$'\n\t'
 # ---------------------------------------------------------------------------
 # CONSTANTS
 # ---------------------------------------------------------------------------
-readonly CLI_VERSION="1.2.0-rc1"
+readonly CLI_VERSION="1.2.0-rc2"
 readonly PANEL_DIR="/opt/aidipanel"
 readonly HOME_BASE="/home"
 readonly RESERVED_SITE_USERS=(root www-data ubuntu debian nginx mysql mariadb postgres redis aidipanel aidipanel-pma daemon bin sys sync games man lp mail news uucp proxy backup list irc gnats nobody systemd-network systemd-resolve)

@@ -207,7 +207,7 @@ $assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROO
 
 <footer data-app-footer class="bg-white border-t border-zinc-200/80">
   <nav aria-label="Footer" class="mx-auto max-w-[1280px] px-6 py-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 text-xs text-zinc-400">
-    <span>© 2026 AidiPanel.</span>
+    <span>© 2026 AidiPanel · v<?= e(PANEL_VERSION) ?></span>
     <div data-footer-links class="flex items-center gap-4">
       <a href="https://aidipanel.com/docs/" target="_blank" rel="noopener noreferrer" class="hover:text-zinc-600 transition-colors">Docs</a>
       <a href="https://github.com/rezzaidr/AidiPanel/issues" target="_blank" rel="noopener noreferrer" class="hover:text-zinc-600 transition-colors">Issue</a>
