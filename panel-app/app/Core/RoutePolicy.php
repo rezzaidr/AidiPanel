@@ -57,7 +57,9 @@ final class RoutePolicy
         if ($routePath === '/sites/{domain}/backups/download') {
             return self::SITE_BACKUP_DOWNLOAD;
         }
-        if ($routePath === '/sites/{domain}/php' || $routePath === '/sites/{domain}/php-settings') {
+        if ($routePath === '/sites/{domain}/php'
+            || $routePath === '/sites/{domain}/php-settings'
+            || $routePath === '/sites/{domain}/nginx') {
             return self::SITE_SETTINGS;
         }
         if (str_starts_with($routePath, '/cache/')

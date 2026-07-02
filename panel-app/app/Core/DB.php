@@ -171,20 +171,12 @@ class DB
 
         // Seed admin ONLY if there is no user at all yet
         // Password hash is written by deploy-panel.sh via the CLI -
-        // NOT read from a file at runtime, to avoid permission issues
-        $count = (int) $this->pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
-        if ($count === 0) {
-            // Fallback: if called without deploy-panel.sh
-            // Read from the env var set by Nginx fastcgi_param
+            // NOT read from a file at runtime, to avoid permission issues
+            $count = (int) $this->pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
+            if ($count === 0) {
             $hash = getenv('AIDIPANEL_ADMIN_HASH') ?: '';
-            if (empty($hash)) {
-                // Last resort: random password, written to /tmp so the admin can read it
-                $random = bin2hex(random_bytes(10));
-                $hash   = password_hash($random, PASSWORD_BCRYPT, ['cost' => 12]);
-                $fallbackFile = '/tmp/aidipanel-fallback-pass.txt';
-                @file_put_contents($fallbackFile, "admin password (fallback): {$random}\n");
-                @chmod($fallbackFile, 0600);
-                error_log("AidiPanel FALLBACK: admin pass written to {$fallbackFile}");
+            if ($hash === '') {
+                throw new \RuntimeException('Initial admin hash is required.');
             }
             $this->pdo->prepare(
                 'INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)'

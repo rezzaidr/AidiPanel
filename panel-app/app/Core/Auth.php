@@ -9,7 +9,27 @@ class Auth
 
     public static function check(): bool
     {
-        return Session::has('user_id');
+        if (!Session::has('user_id')) {
+            return false;
+        }
+
+        $user = DB::instance()->row(
+            'SELECT id, username, role, active, password_hash FROM users WHERE id = ? LIMIT 1',
+            [(int) Session::get('user_id')]
+        );
+        $sessionHash = (string) Session::get('auth_hash', '');
+        if (!$user
+            || (int) $user['active'] !== 1
+            || $sessionHash === ''
+            || !hash_equals($sessionHash, self::authHash((string) $user['password_hash']))) {
+            self::logout();
+            return false;
+        }
+
+        // Apply account and role changes to an already-open session immediately.
+        Session::set('username', $user['username']);
+        Session::set('role',     $user['role']);
+        return true;
     }
 
     public static function user(): ?array
@@ -30,6 +50,7 @@ class Auth
         Session::set('user_id',  $user['id']);
         Session::set('username', $user['username']);
         Session::set('role',     $user['role']);
+        Session::set('auth_hash', self::authHash((string) $user['password_hash']));
         Session::set('first_login', $wasFirstLogin);
         DB::instance()->run('UPDATE users SET last_login = ? WHERE id = ?', [gmdate('Y-m-d H:i:s'), $user['id']]);
     }
@@ -99,6 +120,11 @@ class Auth
     public static function clearPending(): void
     {
         Session::remove('pending_2fa');
+    }
+
+    private static function authHash(string $passwordHash): string
+    {
+        return hash('sha256', $passwordHash);
     }
 
     /**

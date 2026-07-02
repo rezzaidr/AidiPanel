@@ -4,8 +4,8 @@
 #  Stack: Nginx + FastCGI Cache + PHP-FPM (multi-version) + MySQL/MariaDB + Redis
 #  Supported OS: Debian 11/12, Ubuntu 22.04/24.04 (x86_64 & arm64)
 #
-#  One-command install (installs stack + deploys panel app automatically):
-#    bash <(curl -fsSL https://get.aidipanel.com)
+#  Quick install (installs stack + deploys panel app automatically):
+#    curl -fsSL https://get.aidipanel.com | sudo bash
 #
 #  Options:
 #    --port PORT           Panel HTTPS port (default: 8443)
@@ -30,7 +30,7 @@ readonly PANEL_VERSION="1.2.0-rc1"
 readonly PANEL_USER="aidipanel"
 readonly PANEL_DIR="/opt/aidipanel"
 readonly PANEL_LOG="/var/log/aidipanel-install.log"
-readonly PANEL_LOCK="/var/run/aidipanel-install.lock"
+readonly PANEL_LOCK="/run/lock/aidipanel-deploy.lock"
 readonly NGINX_CACHE_DIR="/var/cache/nginx/fastcgi"
 readonly NGINX_CACHE_ZONE="aidipanel_fcgi"
 readonly SITES_DIR="/var/www"
@@ -50,6 +50,7 @@ DB_ENGINE="mariadb1011"
 INSTALL_REDIS=true
 DRY_RUN=false
 DB_ROOT_PASS=""
+DB_DEFAULTS_TMP=""
 PANEL_ADMIN_PASS=""        # generated random, shown at end
 SWAP_SIZE_MB=2048
 UI_PLAIN=false        # --plain -> ASCII fallback (no unicode)
@@ -82,6 +83,33 @@ run() {
     return 0
   fi
   "$@" >> "$PANEL_LOG" 2>&1
+}
+
+# Run a slow command with a live spinner on an interactive TTY so the console
+# never looks frozen; command output still goes to the log. On a non-TTY
+# (piped/automated) or --plain, it runs plainly with no animation so logs stay
+# clean. Returns the wrapped command's exit status.  run_spin <label> <cmd...>
+run_spin() {
+  local label="$1"; shift
+  if [[ "$DRY_RUN" == "true" ]]; then
+    warn "[dry-run] skipped: $1 …"
+    return 0
+  fi
+  if [[ ! -t 1 || "$UI_PLAIN" == "true" ]]; then
+    "$@" >> "$PANEL_LOG" 2>&1
+    return $?
+  fi
+  "$@" >> "$PANEL_LOG" 2>&1 &
+  local pid=$! i=0 rc=0 start=$SECONDS f
+  local frames='|/-\'
+  while kill -0 "$pid" 2>/dev/null; do
+    f=${frames:i%4:1}; i=$(( i + 1 ))
+    printf '\r  %s%s%s %s  %ds ' "${C_WARN:-}" "$f" "${C_RESET:-}" "$label" "$(( SECONDS - start ))"
+    sleep 0.2
+  done
+  wait "$pid" || rc=$?
+  printf '\r\033[K'
+  return "$rc"
 }
 
 credential_line() {
@@ -151,7 +179,7 @@ _php_list() { echo "${PHP_DEFAULT_VERSION}"; }
 # ---------------------------------------------------------------------------
 _cleanup() {
   local exit_code=$?
-  rm -f "$PANEL_LOCK"
+  [[ -n "$DB_DEFAULTS_TMP" ]] && rm -f -- "$DB_DEFAULTS_TMP"
   if [[ $exit_code -ne 0 ]]; then
     echo -e "\n${RED}══════════════════════════════════════════${RESET}"
     echo -e "${RED} ${PANEL_NAME} installation FAILED (exit $exit_code)${RESET}"
@@ -181,10 +209,14 @@ _parse_args() {
         ;;
       --db-root-pass)
         shift
+        [[ "$1" != *"'"* && "$1" != *'\'* && "$1" != *$'\n'* && "$1" != *$'\r'* ]] \
+          || die "--db-root-pass must not contain quotes, backslashes, or line breaks"
         DB_ROOT_PASS="$1"
         ;;
       --mysql-root-pass)
         shift
+        [[ "$1" != *"'"* && "$1" != *'\'* && "$1" != *$'\n'* && "$1" != *$'\r'* ]] \
+          || die "--mysql-root-pass must not contain quotes, backslashes, or line breaks"
         DB_ROOT_PASS="$1"
         warn "--mysql-root-pass is deprecated; use --db-root-pass"
         ;;
@@ -229,17 +261,16 @@ _check_root() {
 }
 
 _check_lock() {
-  if [[ -f "$PANEL_LOCK" ]]; then
-    die "Another installation is already running (lock: $PANEL_LOCK). " \
-        "If this is stale, remove it: rm $PANEL_LOCK"
-  fi
-  touch "$PANEL_LOCK"
+  mkdir -p "$(dirname "$PANEL_LOCK")"
+  exec 179>"$PANEL_LOCK"
+  chmod 600 "$PANEL_LOCK" 2>/dev/null || true
+  flock -n 179 || die "Another AidiPanel install or update is currently running."
 }
 
 _check_already_installed() {
   if [[ -d "$PANEL_DIR" ]] && [[ -x /usr/local/bin/aidipanel ]]; then
     die "${PANEL_NAME} is already installed. " \
-        "To reinstall, run the uninstaller first."
+        "Use 'sudo aidipanel self:update' to upgrade, or follow the manual removal guide before reinstalling."
   fi
 }
 
@@ -422,12 +453,12 @@ _banner() {
 # ---------------------------------------------------------------------------
 _apt_update() {
   log "Updating apt package lists..."
-  run apt-get update -qq
+  run_spin "updating package index" apt-get update -qq
 }
 
 _apt_install() {
   log "Installing packages: $*"
-  run apt-get install -y -qq --no-install-recommends "$@"
+  run_spin "installing ${1}${2:+ …}" apt-get install -y -qq --no-install-recommends "$@"
 }
 
 _pkg_installed() {
@@ -519,6 +550,37 @@ _apt_arch() {
   [[ "$ARCH" == "x86_64" ]] && echo "amd64" || echo "arm64"
 }
 
+_install_verified_apt_key() (
+  set -Eeuo pipefail
+  local url="$1" destination="$2"
+  shift 2
+  [[ "$url" == https://* ]] || die "Repository signing-key URL must use HTTPS."
+  [[ "$#" -gt 0 ]] || die "At least one repository signing-key fingerprint is required."
+
+  local tmp_dir key_file exported actual_fingerprints expected_fingerprints
+  tmp_dir=$(mktemp -d)
+  trap 'rm -rf -- "$tmp_dir"' EXIT
+  key_file="${tmp_dir}/archive-key"
+  exported="${tmp_dir}/archive-keyring.gpg"
+
+  curl -fsSL --proto '=https' --tlsv1.2 "$url" -o "$key_file" \
+    || die "Could not download a repository signing key."
+  gpg --homedir "$tmp_dir" --batch --import "$key_file" >> "$PANEL_LOG" 2>&1 \
+    || die "Could not import a repository signing key."
+
+  actual_fingerprints=$(gpg --homedir "$tmp_dir" --batch --with-colons --fingerprint \
+    | awk -F: '$1 == "pub" { primary=1; next } $1 == "fpr" && primary { print $10; primary=0 }' \
+    | LC_ALL=C sort)
+  expected_fingerprints=$(printf '%s\n' "$@" | LC_ALL=C sort)
+  [[ "$actual_fingerprints" == "$expected_fingerprints" ]] \
+    || die "Repository signing-key fingerprint mismatch."
+
+  gpg --homedir "$tmp_dir" --batch --export "$@" > "$exported" \
+    || die "Could not export the verified repository signing key."
+  [[ -s "$exported" ]] || die "Verified repository signing key export is empty."
+  install -o root -g root -m 0644 "$exported" "$destination"
+)
+
 _add_nginx_repo() {
   if [[ -f /etc/apt/sources.list.d/nginx.list ]]; then
     log "Nginx apt repo already configured — skipping"
@@ -529,10 +591,11 @@ _add_nginx_repo() {
 
   local apt_arch; apt_arch=$(_apt_arch)
 
-  # Download and dearmor GPG key properly
-  curl -fsSL https://nginx.org/keys/nginx_signing.key \
-    | gpg --dearmor -o /etc/apt/trusted.gpg.d/nginx.gpg 2>>"$PANEL_LOG"
-  chmod 644 /etc/apt/trusted.gpg.d/nginx.gpg
+  _install_verified_apt_key "https://nginx.org/keys/nginx_signing.key" \
+    "/etc/apt/trusted.gpg.d/nginx.gpg" \
+    "573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62" \
+    "8540A6F18833A80E9C1653A42FD21310B49F6B46" \
+    "9E9BE90EACBCDE69FE9B204CBCDCD8A38D88A2B3"
 
   # Ubuntu 24.04 Noble: nginx.org mainline supports noble since 1.25.3+
   # Fall back to distro nginx if noble not yet in official repo
@@ -542,7 +605,7 @@ _add_nginx_repo() {
   if [[ "$OS_ID" == "ubuntu" && "$OS_VERSION_ID" == "24.04" ]]; then
     # Check if noble is in nginx.org mainline
     if curl -fsSL --max-time 10 \
-        "http://nginx.org/packages/ubuntu/dists/noble/" >/dev/null 2>&1; then
+        "https://nginx.org/packages/ubuntu/dists/noble/" >/dev/null 2>&1; then
       log "Nginx official repo supports Ubuntu 24.04 noble"
     else
       warn "Nginx official repo not yet available for Ubuntu 24.04 noble — using distro nginx"
@@ -553,7 +616,7 @@ _add_nginx_repo() {
   fi
 
   cat > /etc/apt/sources.list.d/nginx.list <<NGINX_REPO
-deb [arch=${apt_arch} signed-by=/etc/apt/trusted.gpg.d/nginx.gpg] http://nginx.org/packages/${nginx_repo_os} ${nginx_repo_codename} nginx
+deb [arch=${apt_arch} signed-by=/etc/apt/trusted.gpg.d/nginx.gpg] https://nginx.org/packages/${nginx_repo_os} ${nginx_repo_codename} nginx
 NGINX_REPO
 
   _apt_update
@@ -736,14 +799,20 @@ _add_php_repo() {
   [[ "$DRY_RUN" == "true" ]] && { warn "[dry-run] skipping PHP repo add"; return 0; }
 
   if [[ "$OS_ID" == "ubuntu" ]]; then
-    # ondrej/php PPA works on all supported Ubuntu versions
-    apt-get install -y -qq software-properties-common >> "$PANEL_LOG" 2>&1
-    add-apt-repository -y ppa:ondrej/php >> "$PANEL_LOG" 2>&1
+    # Configure the public Launchpad PPA explicitly so its signing key is
+    # verified against the full fingerprint published by Launchpad.
+    _install_verified_apt_key \
+      "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xB8DC7E53946656EFBCE4C1DD71DAEAAB4AD4CAB6" \
+      "/etc/apt/trusted.gpg.d/php-ondrej.gpg" \
+      "B8DC7E53946656EFBCE4C1DD71DAEAAB4AD4CAB6"
+    cat > /etc/apt/sources.list.d/php.list <<PHP_REPO
+deb [signed-by=/etc/apt/trusted.gpg.d/php-ondrej.gpg] https://ppa.launchpadcontent.net/ondrej/php/ubuntu ${OS_CODENAME} main
+PHP_REPO
   else
     # Debian — use deb.sury.org
-    curl -fsSL https://packages.sury.org/php/apt.gpg \
-      | gpg --dearmor -o /etc/apt/trusted.gpg.d/php-sury.gpg 2>>"$PANEL_LOG"
-    chmod 644 /etc/apt/trusted.gpg.d/php-sury.gpg
+    _install_verified_apt_key "https://packages.sury.org/php/apt.gpg" \
+      "/etc/apt/trusted.gpg.d/php-sury.gpg" \
+      "15058500A0235D97F5D10063B188E2B695BD4743"
     cat > /etc/apt/sources.list.d/php.list <<PHP_REPO
 deb [signed-by=/etc/apt/trusted.gpg.d/php-sury.gpg] https://packages.sury.org/php/ ${OS_CODENAME} main
 PHP_REPO
@@ -901,26 +970,26 @@ _add_mysql_repo() {
   [[ "$DRY_RUN" == "true" ]] && return 0
 
   local apt_arch; apt_arch=$(_apt_arch)
-  # MySQL signing key. The standalone file at repo.mysql.com/RPM-GPG-KEY-mysql-2023 is
-  # still served with its original 2025-10-22 expiry — Oracle renewed the key (to
-  # 2027-10-23) but did not refresh that file — so a fresh fetch yields an EXPKEYSIG and
-  # apt rejects the repo. Pull the renewed key from the Ubuntu keyserver first; fall back
-  # to the published file if the keyserver is unreachable.
-  local mysql_key="B7B3B788A8D3785C" tmp_gpg
+  # Trust the HTTPS-published MySQL key only after its full Oracle-documented
+  # fingerprint matches; a short key ID or keyserver lookup is not sufficient.
+  local mysql_key_fingerprint="BCA43417C3B485DD128EC6D4B7B3B788A8D3785C" tmp_gpg key_file actual_fingerprint
   tmp_gpg=$(mktemp -d)
-  if gpg --homedir "$tmp_gpg" --batch --keyserver keyserver.ubuntu.com \
-       --recv-keys "$mysql_key" >>"$PANEL_LOG" 2>&1; then
-    gpg --homedir "$tmp_gpg" --export "$mysql_key" > /etc/apt/trusted.gpg.d/mysql.gpg
-  else
-    warn "MySQL keyserver unreachable; falling back to repo.mysql.com key file."
-    curl -fsSL "https://repo.mysql.com/RPM-GPG-KEY-mysql-2023" \
-      | gpg --dearmor -o /etc/apt/trusted.gpg.d/mysql.gpg 2>>"$PANEL_LOG"
-  fi
+  key_file="${tmp_gpg}/mysql.asc"
+  curl -fsSL --proto '=https' --tlsv1.2 "https://repo.mysql.com/RPM-GPG-KEY-mysql-2023" -o "$key_file" \
+    || { rm -rf "$tmp_gpg"; die "Could not download the MySQL repository signing key."; }
+  gpg --homedir "$tmp_gpg" --batch --import "$key_file" >> "$PANEL_LOG" 2>&1 \
+    || { rm -rf "$tmp_gpg"; die "Could not import the MySQL repository signing key."; }
+  actual_fingerprint=$(gpg --homedir "$tmp_gpg" --batch --with-colons --fingerprint \
+    | awk -F: '$1 == "fpr" { print $10; exit }')
+  [[ "$actual_fingerprint" == "$mysql_key_fingerprint" ]] \
+    || { rm -rf "$tmp_gpg"; die "MySQL repository signing-key fingerprint mismatch."; }
+  gpg --homedir "$tmp_gpg" --batch --export "$mysql_key_fingerprint" > /etc/apt/trusted.gpg.d/mysql.gpg \
+    || { rm -rf "$tmp_gpg"; die "Could not install the verified MySQL signing key."; }
   rm -rf "$tmp_gpg"
   chmod 644 /etc/apt/trusted.gpg.d/mysql.gpg
 
   cat > /etc/apt/sources.list.d/mysql.list <<MYSQL_REPO
-deb [arch=${apt_arch} signed-by=/etc/apt/trusted.gpg.d/mysql.gpg] http://repo.mysql.com/apt/${OS_ID} ${OS_CODENAME} ${mysql_component}
+deb [arch=${apt_arch} signed-by=/etc/apt/trusted.gpg.d/mysql.gpg] https://repo.mysql.com/apt/${OS_ID} ${OS_CODENAME} ${mysql_component}
 MYSQL_REPO
 
   _apt_update
@@ -944,8 +1013,18 @@ _add_mariadb_repo() {
   log "Adding MariaDB ${mariadb_version} apt repository..."
   [[ "$DRY_RUN" == "true" ]] && return 0
 
-  curl -fsSL "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup" \
-    | bash -s -- --mariadb-server-version="mariadb-${mariadb_version}" >> "$PANEL_LOG" 2>&1
+  local apt_arch; apt_arch=$(_apt_arch)
+  # Trust MariaDB's long-lived signing key by full fingerprint (one key signs
+  # every MariaDB version), then point apt at the versioned repo directly. This
+  # drops the mutable mariadb_repo_setup script and its shifting checksum, so no
+  # per-version or routine hash maintenance is ever required.
+  _install_verified_apt_key "https://supplychain.mariadb.com/MariaDB-Server-GPG-KEY" \
+    "/etc/apt/trusted.gpg.d/mariadb.gpg" \
+    "177F4010FE56CA3336300305F1656F24C74CD1D8"
+
+  cat > /etc/apt/sources.list.d/mariadb.list <<MARIADB_REPO
+deb [arch=${apt_arch} signed-by=/etc/apt/trusted.gpg.d/mariadb.gpg] https://dlm.mariadb.com/repo/mariadb-server/${mariadb_version}/repo/${OS_ID} ${OS_CODENAME} main
+MARIADB_REPO
 
   _apt_update
   ok "MariaDB ${mariadb_version} repo added"
@@ -1013,16 +1092,21 @@ _configure_database() {
 
   [[ -n "$DB_ROOT_PASS" ]] || die "Database root password was not initialized."
 
+  DB_DEFAULTS_TMP=$(mktemp "/run/aidipanel-db-client.XXXXXX") \
+    || die "Could not prepare private database client credentials."
+  chmod 600 "$DB_DEFAULTS_TMP"
+  printf '[client]\nuser=root\npassword=%s\n' "$DB_ROOT_PASS" > "$DB_DEFAULTS_TMP"
+
   # Use arrays so bash splits args correctly (string variable = "command not found" bug).
   # MariaDB starts with socket-auth root access; MySQL has already been preseeded
   # with DB_ROOT_PASS, so password auth must be used from the first SQL statement.
   local -a db_cmd_bootstrap db_cmd_auth
   if [[ "$DB_ENGINE" == mariadb* ]]; then
     db_cmd_bootstrap=(mariadb -u root)
-    db_cmd_auth=(mariadb -u root "-p${DB_ROOT_PASS}")
+    db_cmd_auth=(mariadb "--defaults-extra-file=${DB_DEFAULTS_TMP}")
   else
-    db_cmd_bootstrap=(mysql -u root "-p${DB_ROOT_PASS}")
-    db_cmd_auth=(mysql -u root "-p${DB_ROOT_PASS}")
+    db_cmd_bootstrap=(mysql "--defaults-extra-file=${DB_DEFAULTS_TMP}")
+    db_cmd_auth=(mysql "--defaults-extra-file=${DB_DEFAULTS_TMP}")
   fi
 
   # Secure the installation
@@ -1067,6 +1151,9 @@ password=${PANEL_DB_PASS}
 database=${DB_NAME}
 MYCNF
   chmod 600 "${PANEL_DIR}/.my.cnf"
+
+  rm -f -- "$DB_DEFAULTS_TMP"
+  DB_DEFAULTS_TMP=""
 
   ok "${DB_ENGINE_LABELS[$DB_ENGINE]} secured and AidiPanel database created"
 }
@@ -1139,15 +1226,23 @@ _install_wpcli() {
     return 0
   fi
   log "Installing WP-CLI..."
-  if curl -fsSL -o /usr/local/bin/wp \
-      "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar" \
-      2>/dev/null; then
-    chmod +x /usr/local/bin/wp
+  local tmp_dir phar checksum
+  tmp_dir=$(mktemp -d)
+  phar="${tmp_dir}/wp-cli.phar"
+  checksum="${tmp_dir}/wp-cli.phar.sha512"
+  if curl -fsSL --proto '=https' --tlsv1.2 -o "$phar" \
+       "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar" 2>/dev/null \
+     && curl -fsSL --proto '=https' --tlsv1.2 -o "$checksum" \
+       "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar.sha512" 2>/dev/null \
+     && printf '%s  %s\n' "$(cat "$checksum")" "$phar" | sha512sum -c - >/dev/null 2>&1; then
+    install -o root -g root -m 0755 "$phar" /usr/local/bin/wp
+    rm -rf "$tmp_dir"
     ok "WP-CLI installed: /usr/local/bin/wp"
-  else
-    warn "WP-CLI download failed (non-fatal) — object cache management will be limited"
+    return 0
   fi
-  return 0
+  rm -rf "$tmp_dir"
+  warn "WP-CLI download failed (non-fatal) — WordPress site creation stays unavailable until reinstalled"
+  return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -1157,17 +1252,31 @@ _configure_firewall() {
   log "Configuring UFW firewall..."
   [[ "$DRY_RUN" == "true" ]] && return 0
 
-  run_quiet "Security" "configure UFW rules" bash -c "
-    set -e
-    ufw --force reset >/dev/null 2>&1 || true
-    ufw default deny incoming
-    ufw default allow outgoing
-    ufw allow ssh comment 'SSH'
-    ufw allow 80/tcp comment 'HTTP'
-    ufw allow 443/tcp comment 'HTTPS'
-    ufw allow ${PANEL_PORT}/tcp comment 'AidiPanel'
-    ufw --force enable"
-  ok "UFW enabled — allowed ports: 22, 80, 443, ${PANEL_PORT}"
+  # Never reset UFW: preserve provider, VPN, and custom rules. Open every
+  # configured SSH port (plus the current session port) before enabling it.
+  local -a ssh_ports=()
+  local ssh_port current_ssh_port
+  while IFS= read -r ssh_port; do
+    [[ "$ssh_port" =~ ^[0-9]+$ ]] && ssh_ports+=("$ssh_port")
+  done < <(sshd -T 2>/dev/null | awk '$1 == "port" { print $2 }' || true)
+
+  current_ssh_port=$(awk '{print $4}' <<< "${SSH_CONNECTION:-}")
+  [[ "$current_ssh_port" =~ ^[0-9]+$ ]] && ssh_ports+=("$current_ssh_port")
+  [[ "${#ssh_ports[@]}" -gt 0 ]] || ssh_ports=(22)
+
+  ufw default deny incoming >> "$PANEL_LOG" 2>&1
+  ufw default allow outgoing >> "$PANEL_LOG" 2>&1
+  local -A seen_ssh=()
+  for ssh_port in "${ssh_ports[@]}"; do
+    [[ -n "${seen_ssh[$ssh_port]:-}" ]] && continue
+    seen_ssh[$ssh_port]=1
+    ufw allow "${ssh_port}/tcp" comment "SSH ${ssh_port}" >> "$PANEL_LOG" 2>&1
+  done
+  ufw allow 80/tcp comment 'HTTP' >> "$PANEL_LOG" 2>&1
+  ufw allow 443/tcp comment 'HTTPS' >> "$PANEL_LOG" 2>&1
+  ufw allow "${PANEL_PORT}/tcp" comment 'AidiPanel' >> "$PANEL_LOG" 2>&1
+  ufw --force enable >> "$PANEL_LOG" 2>&1
+  ok "UFW enabled — existing rules preserved; HTTP, HTTPS, detected SSH, and panel ports allowed"
 }
 
 # ---------------------------------------------------------------------------
@@ -1230,12 +1339,15 @@ PROFTPD_CONF
 _create_panel_user() {
   log "Creating system user: ${PANEL_USER}..."
   [[ "$DRY_RUN" == "true" ]] && return 0
+  getent group "$PANEL_USER" >/dev/null 2>&1 || groupadd --system "$PANEL_USER"
   if id "$PANEL_USER" &>/dev/null; then
+    usermod --gid "$PANEL_USER" "$PANEL_USER"
     log "User ${PANEL_USER} already exists"
-    return 0
+  else
+    useradd --system --gid "$PANEL_USER" --no-create-home --shell /usr/sbin/nologin "$PANEL_USER"
+    ok "System user '${PANEL_USER}' created"
   fi
-  useradd --system --no-create-home --shell /usr/sbin/nologin "$PANEL_USER"
-  ok "System user '${PANEL_USER}' created"
+  getent group adm >/dev/null 2>&1 && usermod --append --groups adm "$PANEL_USER"
 }
 
 _create_panel_scaffold() {
@@ -1355,8 +1467,11 @@ server {
 }
 VHOST_WP
 
-  chown -R "$PANEL_USER":www-data "$PANEL_DIR"
-  chmod 750 "$PANEL_DIR"
+  chown root:root "$PANEL_DIR"
+  chown -R root:"$PANEL_USER" "${PANEL_DIR}/config"
+  chown -R "$PANEL_USER":"$PANEL_USER" "${PANEL_DIR}/storage"
+  chmod 755 "$PANEL_DIR"
+  chmod 750 "${PANEL_DIR}/config" "${PANEL_DIR}/storage"
   ok "Panel directory structure created: ${PANEL_DIR}"
 }
 
@@ -1367,8 +1482,8 @@ VHOST_WP
 # site:delete run `systemctl reload php<ver>-fpm`; if the panel shared that
 # service, the reload would cycle its worker mid-request -> 502. A dedicated
 # service (own master + socket) is never touched by those reloads.
-# Runtime user = www-data (TRANSITIONAL; a dedicated aidipanel runtime user is a
-# later hardening slice — see the installer-runtime-maturity spec).
+# The FPM workers run as the dedicated aidipanel system user. Nginx only owns
+# the socket connection and never receives the panel's sudo capability.
 _setup_panel_fpm() {
   log "Setting up dedicated panel PHP-FPM service (aidipanel-fpm)..."
   [[ "$DRY_RUN" == "true" ]] && { warn "[dry-run] skipping aidipanel-fpm setup"; return 0; }
@@ -1392,8 +1507,8 @@ log_level = warning
 daemonize = no
 
 [aidipanel]
-user = www-data
-group = www-data
+user = aidipanel
+group = aidipanel
 listen = /run/aidipanel-fpm.sock
 listen.owner = www-data
 listen.group = www-data
@@ -1404,6 +1519,7 @@ pm.process_idle_timeout = 10s
 pm.max_requests = 200
 php_admin_value[error_log] = /var/log/aidipanel-fpm.log
 php_admin_flag[log_errors] = on
+php_admin_flag[display_errors] = off
 PANELFPM
 
   # Unquoted heredoc: ${fpm_bin}/${conf} expand; \$MAINPID is a systemd runtime
@@ -1432,7 +1548,7 @@ UNIT
   systemctl enable --now aidipanel-fpm >> "$PANEL_LOG" 2>&1 \
     || die "Could not start aidipanel-fpm — check: ${PANEL_LOG} and 'journalctl -u aidipanel-fpm'"
 
-  ok "Dedicated panel PHP-FPM active: aidipanel-fpm → /run/aidipanel-fpm.sock (www-data, transitional)"
+  ok "Dedicated panel PHP-FPM active: aidipanel-fpm → /run/aidipanel-fpm.sock (aidipanel)"
 }
 
 # ---------------------------------------------------------------------------
@@ -1508,6 +1624,33 @@ PANEL_VHOST
 # ---------------------------------------------------------------------------
 # 17. INSTALL CLI TOOL
 # ---------------------------------------------------------------------------
+_download_release_asset() (
+  set -Eeuo pipefail
+  local asset="$1" destination="$2"
+  local base="${AIDIPANEL_RELEASE_BASE:-https://github.com/rezzaidr/AidiPanel/releases/latest/download}"
+  [[ "$base" == https://* ]] || die "AidiPanel release URL must use HTTPS."
+  [[ "$asset" =~ ^[A-Za-z0-9._-]+$ ]] || die "Invalid AidiPanel release asset name."
+
+  local tmp_dir manifest checksum_line
+  tmp_dir=$(mktemp -d)
+  trap 'rm -rf -- "$tmp_dir"' EXIT
+  manifest="${tmp_dir}/SHA256SUMS"
+
+  curl -fsSL --proto '=https' --tlsv1.2 "${base}/${asset}" -o "${tmp_dir}/${asset}" \
+    || die "Could not download AidiPanel release asset: ${asset}"
+  curl -fsSL --proto '=https' --tlsv1.2 "${base}/SHA256SUMS" -o "$manifest" \
+    || die "Could not download AidiPanel release checksums."
+
+  checksum_line=$(awk -v name="$asset" '$2 == name || $2 == "*" name { print; found=1 } END { if (!found) exit 1 }' "$manifest") \
+    || die "No checksum published for AidiPanel release asset: ${asset}"
+  [[ "$checksum_line" =~ ^[0-9a-fA-F]{64}[[:space:]]+\*?${asset}$ ]] \
+    || die "Invalid checksum entry for AidiPanel release asset: ${asset}"
+  (cd "$tmp_dir" && printf '%s\n' "$checksum_line" | sha256sum -c - >/dev/null) \
+    || die "AidiPanel release asset failed checksum verification: ${asset}"
+
+  mv -f -- "${tmp_dir}/${asset}" "$destination"
+)
+
 _install_cli() {
   log "Installing AidiPanel CLI tool..."
   [[ "$DRY_RUN" == "true" ]] && { warn "[dry-run] skipping CLI install"; return 0; }
@@ -1519,15 +1662,14 @@ _install_cli() {
   if [[ -f "${script_dir}/aidipanel" ]]; then
     cli_src="${script_dir}/aidipanel"
   else
-    # Download from GitHub
-    log "Downloading AidiPanel CLI from GitHub..."
+    # Download the stable release asset with its published checksum.
+    log "Downloading verified AidiPanel CLI release..."
     cli_src="/tmp/aidipanel-cli-$$"
-    curl -fsSL "https://raw.githubusercontent.com/rezzaidr/AidiPanel/master/aidipanel" \
-      -o "$cli_src" 2>>"$PANEL_LOG" || { warn "Could not download CLI — install manually"; return 0; }
+    _download_release_asset "aidipanel" "$cli_src" >> "$PANEL_LOG" 2>&1 \
+      || { warn "Could not download verified CLI — install manually"; return 0; }
   fi
 
-  cp "$cli_src" /usr/local/bin/aidipanel
-  chmod +x /usr/local/bin/aidipanel
+  install -o root -g root -m 0755 "$cli_src" /usr/local/bin/aidipanel
   ok "AidiPanel CLI installed: /usr/local/bin/aidipanel"
 }
 
@@ -1567,9 +1709,7 @@ _deploy_panel_app() {
   log "Panel app directory not found locally; downloading from GitHub..."
   local tmp_dir downloaded_app
   tmp_dir="$(mktemp -d)"
-  curl -fsSL --retry 3 --connect-timeout 15 \
-    "https://github.com/rezzaidr/AidiPanel/archive/refs/heads/master.tar.gz" \
-    -o "${tmp_dir}/aidipanel.tar.gz" \
+  _download_release_asset "aidipanel-panel-app.tar.gz" "${tmp_dir}/aidipanel.tar.gz" \
     || { rm -rf "$tmp_dir"; die "Failed to download AidiPanel repository archive."; }
   tar -xzf "${tmp_dir}/aidipanel.tar.gz" -C "$tmp_dir" \
     || { rm -rf "$tmp_dir"; die "Failed to extract AidiPanel repository archive."; }
@@ -1591,7 +1731,8 @@ _do_deploy_app() {
   cp -r "${app_src}/app"       "${PANEL_DIR}/"
   [[ -d "${app_src}/bin" ]] && cp -r "${app_src}/bin" "${PANEL_DIR}/"   # CLI helpers (metrics collector)
 
-  # Storage dirs with correct permissions for www-data write access
+  # Runtime storage belongs to the dedicated panel identity. Application source
+  # stays root-owned so a panel-process compromise cannot persist in code.
   mkdir -p "${PANEL_DIR}/storage/db" \
            "${PANEL_DIR}/storage/logs" \
            "${PANEL_DIR}/storage/cache" \
@@ -1599,14 +1740,14 @@ _do_deploy_app() {
            "${PANEL_DIR}/storage/backups"
 
   # Permissions
-  chown -R "${PANEL_USER}":www-data "${PANEL_DIR}/app"
-  chown -R "${PANEL_USER}":www-data "${PANEL_DIR}/public"
+  chown -R root:"${PANEL_USER}" "${PANEL_DIR}/app"
+  chown -R root:"${PANEL_USER}" "${PANEL_DIR}/public"
   if [[ -d "${PANEL_DIR}/bin" ]]; then
-    chown -R "${PANEL_USER}":www-data "${PANEL_DIR}/bin"
+    chown -R root:"${PANEL_USER}" "${PANEL_DIR}/bin"
     chmod 750 "${PANEL_DIR}/bin"
     find "${PANEL_DIR}/bin" -type f -exec chmod 640 {} \;
   fi
-  chown -R www-data:www-data "${PANEL_DIR}/storage"
+  chown -R "${PANEL_USER}":"${PANEL_USER}" "${PANEL_DIR}/storage"
   find "${PANEL_DIR}/app"    -type f -exec chmod 640 {} \;
   find "${PANEL_DIR}/app"    -type d -exec chmod 750 {} \;
   find "${PANEL_DIR}/public" -type f -exec chmod 644 {} \;
@@ -1627,7 +1768,14 @@ _do_deploy_app() {
   command -v "$php_bin" >/dev/null 2>&1 || die "PHP CLI not found; cannot seed panel admin password."
   command -v sqlite3 >/dev/null 2>&1 || die "sqlite3 not found; cannot seed panel admin password."
 
-  "$php_bin" -r "
+  # Compute the bcrypt admin hash (password passed via env, never argv), then let
+  # DB::instance() seed the admin during migrate(). The panel DB layer is
+  # fail-closed: it seeds the admin only when the users table is empty and
+  # requires AIDIPANEL_ADMIN_HASH, so re-running never resets an existing admin.
+  local hashed_pass
+  hashed_pass=$(AIDIPANEL_PASS="$PANEL_ADMIN_PASS" "$php_bin" -r 'echo password_hash(getenv("AIDIPANEL_PASS"), PASSWORD_BCRYPT, ["cost" => 12]);')
+
+  AIDIPANEL_ADMIN_HASH="$hashed_pass" "$php_bin" -r "
 define('PANEL_DIR', '${PANEL_DIR}');
 define('APP_ROOT', '${PANEL_DIR}/app');
 define('PANEL_VERSION', '${PANEL_VERSION}');
@@ -1638,16 +1786,9 @@ require '${PANEL_DIR}/app/Core/DB.php';
   local sqlite_db="${PANEL_DIR}/storage/db/aidipanel.sqlite"
   [[ -f "$sqlite_db" ]] || die "Panel SQLite DB was not created: ${sqlite_db}"
 
-  local hashed_pass
-  hashed_pass=$(AIDIPANEL_PASS="$PANEL_ADMIN_PASS" "$php_bin" -r 'echo password_hash(getenv("AIDIPANEL_PASS"), PASSWORD_BCRYPT, ["cost" => 12]);')
-  sqlite3 "$sqlite_db" <<SQLITE
-INSERT OR IGNORE INTO users (username, password_hash, role, active)
-VALUES ('admin', '${hashed_pass}', 'admin', 1);
-UPDATE users SET password_hash='${hashed_pass}', role='admin', active=1 WHERE username='admin';
-SQLITE
-  chown www-data:www-data "$sqlite_db" "$sqlite_db-shm" "$sqlite_db-wal" 2>/dev/null || true
+  chown "${PANEL_USER}":"${PANEL_USER}" "$sqlite_db" "$sqlite_db-shm" "$sqlite_db-wal" 2>/dev/null || true
   chmod 660 "$sqlite_db" 2>/dev/null || true
-  ok "Admin password hash written to panel SQLite database"
+  ok "Admin account seeded in panel SQLite database"
 }
 
 # ---------------------------------------------------------------------------
@@ -1833,7 +1974,7 @@ WRAPPER
   local sudoers_file="/etc/sudoers.d/aidipanel"
   cat > "$sudoers_file" <<'SUDOERS'
 # AidiPanel - allow the web panel to run the controlled CLI wrapper as root
-www-data ALL=(root) NOPASSWD: /usr/local/sbin/aidipanel-web-run *
+aidipanel ALL=(root) NOPASSWD: /usr/local/sbin/aidipanel-web-run *
 SUDOERS
   chmod 440 "$sudoers_file"
 
@@ -1841,7 +1982,7 @@ SUDOERS
   visudo -c -f "$sudoers_file" >> "$PANEL_LOG" 2>&1 \
     || { warn "sudoers validation failed - removing"; rm -f "$sudoers_file"; return 1; }
 
-  ok "Sudoers configured: www-data can run AidiPanel wrapper as root"
+  ok "Sudoers configured: aidipanel can run the controlled wrapper as root"
 }
 
 _configure_fail2ban() {
@@ -1895,7 +2036,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 0 4 * * * root find /var/cache/nginx/fastcgi -type f -atime +1 -delete >> /var/log/aidipanel-install.log 2>&1
 
 # Collect system metrics every minute (dashboard Monitoring history charts)
-* * * * * www-data /usr/bin/php /opt/aidipanel/bin/collect-metrics.php >/dev/null 2>&1
+* * * * * aidipanel /usr/bin/php /opt/aidipanel/bin/collect-metrics.php >/dev/null 2>&1
 CRONFILE
 
   chmod 644 /etc/cron.d/aidipanel
@@ -2033,7 +2174,7 @@ _print_summary() {
   ui_kv "Firewall"    "UFW enabled (22, 80, 443, ${PANEL_PORT})"
   ui_kv "Protection"  "Fail2ban enabled"
   printf '\n'
-  printf '%s\n' "Panel runtime aidipanel-fpm · www-data (transitional)"
+  printf '%s\n' "Panel runtime aidipanel-fpm · aidipanel"
   ui_kv "Site Model"  "/home/<site-user>/htdocs/<domain>"
   ui_kv "Cache Dir"   "${NGINX_CACHE_DIR}"
   ui_kv "Install Log" "${PANEL_LOG}"
@@ -2158,7 +2299,7 @@ main() {
   _configure_database; ui_ok "Database secured"; ui_ok "AidiPanel database created"
   _install_redis;      ui_ok "Redis installed"
   _configure_redis;    ui_ok "Redis configured: 128mb, allkeys-lru, persistence off"
-  _install_wpcli;      ui_ok "WP-CLI ready"
+  if _install_wpcli; then ui_ok "WP-CLI ready"; else ui_warn "WP-CLI unavailable — WordPress site creation limited"; fi
   ui_elapsed "$t"
 
   ui_section "Security Layer"; ui_note "Applying base protection"; printf '\n'
@@ -2178,7 +2319,7 @@ main() {
   # is retained as _install_proftpd() for a future opt-in SFTP feature.
   _create_panel_user;     ui_ok "System user created: aidipanel"
   _create_panel_scaffold; ui_ok "Panel directory prepared: ${PANEL_DIR}"
-  _setup_panel_fpm;       ui_ok "Panel PHP-FPM service: aidipanel-fpm (www-data, transitional)"
+  _setup_panel_fpm;       ui_ok "Panel PHP-FPM service: aidipanel-fpm (aidipanel)"
   _configure_panel_vhost; ui_ok "Self-signed panel SSL generated"
   _install_cli;           ui_ok "CLI installed: /usr/local/bin/aidipanel"
   # Born locked (backlog #6): now that the CLI exists and Redis is up with an

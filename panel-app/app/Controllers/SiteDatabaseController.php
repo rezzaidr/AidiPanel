@@ -30,6 +30,7 @@ class SiteDatabaseController extends BaseController
 
         $args = ['--site', $domain, '--name', $name, '--permission', $perm];
         $user = '';
+        $secret = '';
 
         if ($createUser) {
             $user = $this->cleanName((string) $this->request->post('user', $name));
@@ -40,13 +41,14 @@ class SiteDatabaseController extends BaseController
             $pass = (string) $this->request->post('pass', '');
             if ($pass !== '') {
                 $this->checkPass($pass, $domain);
-                $args[] = '--pass'; $args[] = $pass;
+                $args[] = '--password-stdin';
+                $secret = $pass;
             }
         } else {
             $args[] = '--no-user';
         }
 
-        $result = run_cli('db:add', $args);
+        $result = $secret !== '' ? run_cli_stdin('db:add', $args, $secret) : run_cli('db:add', $args);
         if (!$result['success']) {
             $this->error('Could not create database: ' . $result['output'], $this->tab($domain));
         }
@@ -72,13 +74,15 @@ class SiteDatabaseController extends BaseController
         $perm = $this->perm((string) $this->request->post('permission', 'rw'), $domain);
 
         $args = ['--site', $domain, '--name', $user, '--db', $db, '--permission', $perm];
+        $secret = '';
         $pass = (string) $this->request->post('pass', '');
         if ($pass !== '') {
             $this->checkPass($pass, $domain);
-            $args[] = '--pass'; $args[] = $pass;
+            $args[] = '--password-stdin';
+            $secret = $pass;
         }
 
-        $result = run_cli('db:user-add', $args);
+        $result = $secret !== '' ? run_cli_stdin('db:user-add', $args, $secret) : run_cli('db:user-add', $args);
         if (!$result['success']) {
             $this->error('Could not create user: ' . $result['output'], $this->tab($domain));
         }
@@ -101,6 +105,7 @@ class SiteDatabaseController extends BaseController
         $args = ['--site', $domain, '--name', $user];
         $changed = false;
         $passChanged = false;
+        $secret = '';
 
         $permRaw = trim((string) $this->request->post('permission', ''));
         if ($permRaw !== '') {
@@ -114,7 +119,8 @@ class SiteDatabaseController extends BaseController
             $changed = true; $passChanged = true;
         } elseif ($pass !== '') {
             $this->checkPass($pass, $domain);
-            $args[] = '--pass'; $args[] = $pass;
+            $args[] = '--password-stdin';
+            $secret = $pass;
             $changed = true; $passChanged = true;
         }
 
@@ -131,7 +137,7 @@ class SiteDatabaseController extends BaseController
             }
         }
 
-        $result = run_cli('db:user-edit', $args);
+        $result = $secret !== '' ? run_cli_stdin('db:user-edit', $args, $secret) : run_cli('db:user-edit', $args);
         if (!$result['success']) {
             $this->error('Could not update user: ' . $result['output'], $this->tab($domain));
         }
@@ -186,13 +192,16 @@ class SiteDatabaseController extends BaseController
         }
 
         $cred = $this->parseKeyValues($result['output']);
-        foreach (['pma_user', 'pma_password', 'pma_db', 'pma_host', 'pma_port'] as $key) {
+        foreach (['pma_session_id', 'pma_user', 'pma_db'] as $key) {
             if (($cred[$key] ?? '') === '') {
                 $this->error('Could not open phpMyAdmin: incomplete signon credential.', $this->tab($domain));
             }
         }
+        if (!preg_match('/^[a-f0-9]{32}$/', (string) $cred['pma_session_id'])) {
+            $this->error('Could not open phpMyAdmin: malformed signon session.', $this->tab($domain));
+        }
 
-        $this->writePhpMyAdminSignonSession($cred);
+        $this->sendPhpMyAdminSignonCookie((string) $cred['pma_session_id']);
         \Core\DB::log('db:pma-open', "Opened phpMyAdmin for {$cred['pma_user']} on {$cred['pma_db']} from {$domain}");
         $this->redirect('/phpmyadmin/index.php?db=' . rawurlencode($cred['pma_db']));
     }
@@ -292,31 +301,26 @@ class SiteDatabaseController extends BaseController
         return $out;
     }
 
-    private function writePhpMyAdminSignonSession(array $cred): void
+    /**
+     * Hand the browser the signon session id minted by `db:pma-credentials`.
+     * The session file itself is written root-owned by the CLI — PHP's files
+     * session handler only trusts files owned by the reader's uid or by root,
+     * so a panel-written file would be rejected by phpMyAdmin's isolated
+     * runtime (aidipanel-pma). The panel never sees the DB password.
+     */
+    private function sendPhpMyAdminSignonCookie(string $sessionId): void
     {
-        if (session_status() === PHP_SESSION_ACTIVE) {
-            @session_write_close();
-        }
-
         $secure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
             || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https')
             || (($_SERVER['SERVER_PORT'] ?? '') === '8443');
 
-        session_name(self::PMA_SIGNON_SESSION);
-        session_set_cookie_params([
-            'lifetime' => 0,
+        setcookie(self::PMA_SIGNON_SESSION, $sessionId, [
+            'expires'  => 0,
             'path'     => '/',
             'secure'   => $secure,
             'httponly' => true,
             'samesite' => 'Lax',
         ]);
-        @session_start();
-        $_SESSION['PMA_single_signon_user'] = (string) $cred['pma_user'];
-        $_SESSION['PMA_single_signon_password'] = (string) $cred['pma_password'];
-        $_SESSION['PMA_single_signon_host'] = (string) $cred['pma_host'];
-        $_SESSION['PMA_single_signon_port'] = (string) $cred['pma_port'];
-        $_SESSION['PMA_single_signon_HMAC_secret'] = bin2hex(random_bytes(32));
-        @session_write_close();
     }
 
     private function requireSite(string $domain): void

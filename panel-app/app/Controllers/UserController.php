@@ -141,6 +141,11 @@ class UserController extends BaseController
             $this->error('Password must be at least 8 characters.');
         }
 
+        $target = $this->db->row('SELECT id FROM users WHERE id = ? LIMIT 1', [$id]);
+        if (!$target) {
+            $this->error('User not found.');
+        }
+
         $hash = password_hash($newPass, PASSWORD_BCRYPT, ['cost' => 12]);
         $this->db->run('UPDATE users SET password_hash = ? WHERE id = ?', [$hash, $id]);
         \Core\DB::log('user:passwd', "Changed password for user ID: {$id}");

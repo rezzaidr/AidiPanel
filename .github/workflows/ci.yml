@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [master, main]
+    tags: ['v*']
   pull_request:
     branches: [master, main]
 
@@ -34,8 +35,11 @@ jobs:
       - name: Check bash syntax — deploy-panel.sh
         run: bash -n panel-app/deploy-panel.sh
 
-      - name: Installer archive unit tests
-        run: bash tests/unit/installer_archive_test.sh
+      - name: Shell contract tests
+        run: |
+          for test in tests/unit/*.sh; do
+            bash "$test"
+          done
 
   lint-php:
     name: Lint PHP Files
@@ -51,18 +55,61 @@ jobs:
       - name: PHP syntax check (all files)
         run: find panel-app -name "*.php" -print0 | xargs -0 -n1 php -l
 
-  release:
-    name: Create Release Archive
+      - name: PHP contract tests
+        run: |
+          for test in tests/unit/*.php; do
+            php "$test"
+          done
+
+  frontend:
+    name: Verify Frontend Assets
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master'
-    needs: [lint-installer, lint-php]
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: panel-app/package-lock.json
+
+      - name: Install locked dependencies
+        working-directory: panel-app
+        run: npm ci
+
+      - name: Audit build and runtime dependencies
+        working-directory: panel-app
+        run: npm audit --audit-level=high
+
+      - name: Rebuild frontend
+        working-directory: panel-app
+        run: npm run build
+
+      - name: Reject stale generated assets
+        run: git diff --exit-code -- panel-app/public/assets
+
+  release:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [lint-installer, lint-php, frontend]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify release version
+        run: |
+          source_version="${GITHUB_REF_NAME#v}"
+          grep -Fqx "readonly PANEL_VERSION=\"${source_version}\"" install.sh
+          grep -Fqx "readonly CLI_VERSION=\"${source_version}\"" aidipanel
+          grep -Fqx "readonly PANEL_VERSION=\"${source_version}\"" panel-app/deploy-panel.sh
 
       - name: Package install script
         run: |
           cp install.sh install-aidipanel.sh
           tar -czf aidipanel-panel-app.tar.gz panel-app/
+          sha256sum install-aidipanel.sh aidipanel aidipanel-panel-app.tar.gz > SHA256SUMS
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -72,3 +119,18 @@ jobs:
             install-aidipanel.sh
             aidipanel
             aidipanel-panel-app.tar.gz
+            SHA256SUMS
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=(--verify-tag --generate-notes --title "$GITHUB_REF_NAME")
+          [[ "$GITHUB_REF_NAME" == *-* ]] && flags+=(--prerelease)
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" "${flags[@]}"
+          gh release upload "$GITHUB_REF_NAME" \
+            install-aidipanel.sh \
+            aidipanel \
+            aidipanel-panel-app.tar.gz \
+            SHA256SUMS

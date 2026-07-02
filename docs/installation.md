@@ -10,13 +10,22 @@
 | **CPU** | 1 core | 2+ cores |
 | **Arch** | x86_64, aarch64 | x86_64 |
 
+> Install on a fresh, dedicated VPS. AidiPanel provisions the system Nginx,
+> PHP-FPM, database, Redis, firewall defaults, and service configuration; it is
+> not an in-place importer for an existing production web stack.
+
 ---
 
-## One-Command Install
+## Verified Release Install
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/rezzaidr/AidiPanel/master/install.sh)
+curl -fLO https://github.com/rezzaidr/AidiPanel/releases/latest/download/install-aidipanel.sh
+curl -fLO https://github.com/rezzaidr/AidiPanel/releases/latest/download/SHA256SUMS
+grep ' install-aidipanel.sh$' SHA256SUMS | sha256sum -c -
+sudo bash install-aidipanel.sh
 ```
+
+Continue only when the checksum command prints `install-aidipanel.sh: OK`.
 
 This installs the full stack and deploys the web panel automatically:
 
@@ -163,21 +172,8 @@ Keep this file secure — it contains the database root password and panel admin
 
 ## Uninstall
 
-There is no automated uninstaller yet. To remove manually:
-
-```bash
-# Stop services
-systemctl stop nginx php8.4-fpm aidipanel-fpm mariadb redis-server
-
-# Remove packages
-apt-get purge -y nginx 'php8.*' mariadb-server redis-server certbot
-
-# Remove panel files
-rm -rf /opt/aidipanel /etc/aidipanel /var/cache/nginx/fastcgi
-userdel aidipanel 2>/dev/null || true
-
-# Reset UFW rules
-ufw --force reset
-```
+There is no automated uninstaller yet. Back up all sites and databases, then
+follow the [manual uninstall guide](uninstall.md). It separates panel-only,
+single-site, and full-stack removal without resetting unrelated firewall rules.
 
 Site users and their home directories under `/home/` are left untouched; remove them individually if desired.

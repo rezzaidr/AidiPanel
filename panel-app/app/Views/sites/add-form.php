@@ -67,7 +67,12 @@ $renderField = function (array $f): void {
         default: // text | password (shown as visible text)
             $val = isset($f['value'])       ? ' value="' . e($f['value']) . '"'             : '';
             $ph  = isset($f['placeholder']) ? ' placeholder="' . e($f['placeholder']) . '"' : '';
-            echo '<input type="text" name="' . e($f['key']) . '" class="' . $inCls . '"' . $val . $ph . $da . '>';
+            // Enforce required at the browser too (an empty WP admin email used to
+            // slip through and skip the whole WordPress install), and keep every
+            // submitted value — incl. generated admin passwords — out of the
+            // browser's autofill history.
+            $rq  = (!$dis && !empty($f['required'])) ? ' required' : '';
+            echo '<input type="text" name="' . e($f['key']) . '" class="' . $inCls . '" autocomplete="off" spellcheck="false"' . $val . $ph . $rq . $da . '>';
             if (!empty($f['generate'])) {
                 $gc = $dis ? 'text-zinc-300 cursor-not-allowed' : 'text-ink hover:underline';
                 echo '<button type="button" data-gen-pass="' . e($f['key']) . '" class="text-[11px] ' . $gc . ' mt-1 inline-flex items-center gap-1"' . $da . '>'
@@ -106,7 +111,7 @@ $renderField = function (array $f): void {
     </div>
     <?php endif; ?>
 
-    <form method="POST" action="/sites/add" x-data="phpCreateForm()" @submit="onSubmit($event)" x-ref="form">
+    <form method="POST" action="/sites/add" autocomplete="off" x-data="phpCreateForm()" @submit="onSubmit($event)" x-ref="form">
       <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
       <?php if ($creatable && !$hasApp): ?>
         <input type="hidden" name="type" value="<?= e($form['type']) ?>">

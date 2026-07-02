@@ -856,7 +856,7 @@ function run_cli_download_stdin(string $command, array $args, string $stdin): in
  * key=value summary + any error text) are captured into 'output', like run_cli().
  * Success = the CLI's terminal "100 done" marker and/or a zero exit code.
  */
-function run_cli_stream(string $command, array $args, callable $onProgress): array
+function run_cli_stream(string $command, array $args, callable $onProgress, string $stdin = ''): array
 {
     $binary = '/usr/local/bin/aidipanel';
     if (!file_exists($binary)) {
@@ -884,14 +884,17 @@ function run_cli_stream(string $command, array $args, callable $onProgress): arr
         $cmd = 'NO_COLOR=1 ' . escapeshellcmd($binary) . ' ' . escapeshellarg($command) . ' ' . implode(' ', $safeArgs) . ' 2>&1';
     }
 
-    $fp = popen($cmd, 'r');
-    if (!is_resource($fp)) {
+    $spec = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+    $process = proc_open($cmd, $spec, $pipes);
+    if (!is_resource($process)) {
         return ['success' => false, 'output' => 'Failed to start the CLI process.', 'code' => 1];
     }
+    fwrite($pipes[0], $stdin);
+    fclose($pipes[0]);
 
     $output  = [];
     $sawDone = false;
-    while (($line = fgets($fp)) !== false) {
+    while (($line = fgets($pipes[1])) !== false) {
         $line = rtrim($line, "\r\n");
         if (preg_match('/^@@PROGRESS\s+(\S+)\s+(\S+)\s?(.*)$/', $line, $m)) {
             if ($m[1] === '100' && $m[2] === 'done') {
@@ -902,16 +905,13 @@ function run_cli_stream(string $command, array $args, callable $onProgress): arr
             $output[] = preg_replace('/\x1B\[[0-9;]*[A-Za-z]/', '', $line);
         }
     }
-
-    $status = pclose($fp);
-    if ($status === -1) {
-        $exitCode = 1;
-    } elseif (function_exists('pcntl_wifexited') && pcntl_wifexited($status)) {
-        $exitCode = pcntl_wexitstatus($status);
-    } else {
-        // pclose returns a wait-status; the exit code is the high byte on POSIX.
-        $exitCode = ($status > 255) ? (($status >> 8) & 0xFF) : $status;
+    fclose($pipes[1]);
+    $stderr = trim((string) stream_get_contents($pipes[2]));
+    fclose($pipes[2]);
+    if ($stderr !== '') {
+        $output[] = (string) preg_replace('/\x1B\[[0-9;]*[A-Za-z]/', '', $stderr);
     }
+    $exitCode = proc_close($process);
 
     return [
         // The CLI emits "100 done" only after every step succeeded; accept that OR a

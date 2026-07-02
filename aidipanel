@@ -18,7 +18,7 @@ IFS=$'\n\t'
 readonly CLI_VERSION="1.2.0-rc1"
 readonly PANEL_DIR="/opt/aidipanel"
 readonly HOME_BASE="/home"
-readonly RESERVED_SITE_USERS=(root www-data ubuntu debian nginx mysql mariadb postgres redis aidipanel daemon bin sys sync games man lp mail news uucp proxy backup list irc gnats nobody systemd-network systemd-resolve)
+readonly RESERVED_SITE_USERS=(root www-data ubuntu debian nginx mysql mariadb postgres redis aidipanel aidipanel-pma daemon bin sys sync games man lp mail news uucp proxy backup list irc gnats nobody systemd-network systemd-resolve)
 readonly NGINX_CONF_DIR="/etc/nginx/sites-available"
 readonly NGINX_ENABLED_DIR="/etc/nginx/sites-enabled"
 readonly NGINX_SNIPPET_DIR="/etc/nginx/snippets"
@@ -38,9 +38,13 @@ readonly PMA_DIR="/usr/share/phpmyadmin"
 readonly PMA_CONF="/etc/aidipanel/phpmyadmin.conf"
 readonly PMA_NGINX_SNIPPET="/etc/nginx/snippets/aidipanel-phpmyadmin.conf"
 readonly PMA_URL_PATH="/phpmyadmin/index.php"
+readonly PMA_RUNTIME_USER="aidipanel-pma"
+readonly PMA_FPM_SOCKET="/run/php/aidipanel-pma.sock"
+readonly PMA_SESSION_DIR="/var/lib/aidipanel/phpmyadmin-sessions"
 readonly DB_SECRET_DIR="/var/lib/aidipanel/db-secrets"
 readonly DB_SECRET_STORE="/var/lib/aidipanel/db-secrets/passwords.tsv"
 readonly DB_SECRET_KEY="/etc/aidipanel/db-secret.key"
+readonly DB_SECRET_LOCK="/run/lock/aidipanel-db-secrets.lock"
 # Redis per-site ACL isolation (backlog #6) — see
 # _private/specs/2026-06-24-redis-acl-per-site-design.md.
 readonly REDIS_CONF="/etc/redis/redis.conf"
@@ -98,6 +102,24 @@ _progress() {
   local msg="$*"
   printf '@@PROGRESS %s %s %s\n' "$pct" "$key" "$msg"
   return 0
+}
+
+# Run a slow command while re-emitting a progress frame every 2s, so a streamed
+# long op never goes silent long enough for the SSE client (or nginx) to time
+# out and abort mid-operation. Output frames only when streaming is enabled;
+# returns the wrapped command's exit status.
+# _run_heartbeat <pct> <key> <label> -- <cmd...>
+_run_heartbeat() {
+  local pct="${1:-0}" key="${2:-step}" label="${3:-}"; shift 3 || true
+  [[ "${1:-}" == "--" ]] && shift
+  "$@" &
+  local hb_pid=$! rc=0
+  while kill -0 "$hb_pid" 2>/dev/null; do
+    _progress "$pct" "$key" "$label"
+    sleep 2
+  done
+  wait "$hb_pid" || rc=$?
+  return "$rc"
 }
 
 # ---------------------------------------------------------------------------
@@ -359,9 +381,9 @@ _mysql_exec() {
   # Run a MySQL/MariaDB query using root credentials
   _load_credentials
   local bin; bin=$(_db_binary)
-  $bin --defaults-extra-file=<(printf '[client]\nuser=%s\npassword=%s\n' \
-    root "${MYSQL_ROOT_PASSWORD}") \
-    -e "$1" 2>/dev/null
+  printf '%s\n' "$1" | "$bin" \
+    --defaults-extra-file=<(printf '[client]\nuser=%s\npassword=%s\n' root "${MYSQL_ROOT_PASSWORD}") \
+    2>/dev/null
 }
 
 _mysql_exec_db() {
@@ -369,9 +391,9 @@ _mysql_exec_db() {
   local db="$1"; shift
   _load_credentials
   local bin; bin=$(_db_binary)
-  $bin --defaults-extra-file=<(printf '[client]\nuser=%s\npassword=%s\n' \
-    root "${MYSQL_ROOT_PASSWORD}") \
-    "$db" -e "$1" 2>/dev/null
+  printf '%s\n' "$1" | "$bin" \
+    --defaults-extra-file=<(printf '[client]\nuser=%s\npassword=%s\n' root "${MYSQL_ROOT_PASSWORD}") \
+    "$db" 2>/dev/null
 }
 
 # Read-only summary of the local database server for the Settings UI. Queries the
@@ -555,7 +577,7 @@ _usage() {
   echo "  system:cloud-metadata  Detect cached cloud instance metadata"
   echo "  system:info     Show server and panel information"
   echo "  log:tail        Tail Nginx or PHP logs for a domain"
-  echo "  self:update     Update AidiPanel CLI to latest version"
+  echo "  self:update     Update AidiPanel CLI and web panel"
 
   echo -e "\n${BOLD}Examples:${RESET}"
   echo "  aidipanel site:add --domain example.com --user example --type wordpress"
@@ -622,6 +644,12 @@ _site_add() {
   wp_title=$(_opt "wp-title" ""); wp_admin_user=$(_opt "wp-admin-user" "admin")
   wp_admin_pass=$(_opt "wp-admin-pass" ""); wp_admin_email=$(_opt "wp-admin-email" "")
   wp_multisite=$(_opt "wp-multisite" "off")
+  if [[ "$(_opt "wp-admin-pass-stdin" "false")" == "true" ]]; then
+    IFS= read -r wp_admin_pass || true
+    if IFS= read -r; then
+      die "WordPress admin password input must contain exactly one line."
+    fi
+  fi
 
   _require_arg "domain" "$domain" "site:add --domain example.com --user example --type wordpress"
 
@@ -633,8 +661,10 @@ _site_add() {
   [[ "$site_type" =~ ^(wordpress|php|laravel|static|proxy)$ ]] \
     || die "Invalid site type: ${site_type}. Supported: wordpress, php, laravel, static, proxy"
 
-  # WordPress: validate multisite mode (subdomain deferred — needs wildcard SSL), and
-  # when admin details are supplied, validate the install fields + WP-CLI availability.
+  # WordPress: validate multisite mode (subdomain deferred — needs wildcard SSL).
+  # The install fields are required up front — an empty --wp-admin-email used to
+  # silently skip the whole DB + WordPress install while still reporting the
+  # site creation as successful (fail-open). A bare document root is --type php.
   local wp_do_install=0
   if [[ "$site_type" == "wordpress" ]]; then
     case "$wp_multisite" in
@@ -642,15 +672,15 @@ _site_add() {
       subdomain) die "Subdomain multisite needs wildcard SSL (DNS-01), not supported yet. Use --wp-multisite subdir." ;;
       *) die "Invalid --wp-multisite '${wp_multisite}'. Use: off or subdir." ;;
     esac
-    if [[ -n "$wp_admin_email" ]]; then
-      wp_do_install=1
-      [[ -n "$wp_title" ]]      || die "WordPress install requires --wp-title."
-      [[ -n "$wp_admin_user" ]] || die "WordPress install requires --wp-admin-user."
-      [[ -n "$wp_admin_pass" ]] || die "WordPress install requires --wp-admin-pass."
-      [[ "$wp_admin_email" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]] \
-        || die "Invalid --wp-admin-email: ${wp_admin_email}"
-      command -v wp >/dev/null 2>&1 || die "WP-CLI not installed; cannot install WordPress (install.sh installs it)."
-    fi
+    wp_do_install=1
+    [[ -n "$wp_admin_email" ]] || die "WordPress requires --wp-admin-email (use --type php for a bare site)."
+    [[ -n "$wp_title" ]]      || die "WordPress install requires --wp-title."
+    [[ -n "$wp_admin_user" ]] || die "WordPress install requires --wp-admin-user."
+    [[ -n "$wp_admin_pass" ]] || die "WordPress install requires --wp-admin-pass."
+    [[ "${#wp_admin_pass}" -ge 8 ]] || die "WordPress admin password must be at least 8 characters."
+    [[ "$wp_admin_email" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]] \
+      || die "Invalid --wp-admin-email: ${wp_admin_email}"
+    command -v wp >/dev/null 2>&1 || die "WP-CLI not installed; cannot install WordPress (install.sh installs it)."
   fi
 
   # --user is optional; derive a unique suggestion from the domain when absent.
@@ -2852,12 +2882,20 @@ _files_upload_cancel() {
 # ---------------------------------------------------------------------------
 SFTP_GROUP="aidipanel-sftp"
 SFTP_DROPIN="/etc/ssh/sshd_config.d/50-aidipanel-sftp.conf"
+readonly SFTP_LOCK="/run/lock/aidipanel-sftp.lock"
+
+_sftp_lock() {
+  mkdir -p "$(dirname "$SFTP_LOCK")" || die "Could not prepare the SFTP operation lock."
+  exec 176>"$SFTP_LOCK" || die "Could not open the SFTP operation lock."
+  chmod 600 "$SFTP_LOCK" 2>/dev/null || true
+  flock -w 10 176 || die "Another SFTP change is currently running. Please try again."
+}
 
 # Ensure the group + sshd drop-in exist and are valid; reload sshd only if changed
 # and only if `sshd -t` passes (never break SSH).
 _sftp_ensure_sshd() {
   getent group "$SFTP_GROUP" >/dev/null 2>&1 || groupadd "$SFTP_GROUP"
-  local want changed=0
+  local want changed=0 tmp="" backup="" had_old=0
   want=$(cat <<EOF
 # Managed by AidiPanel — per-site chrooted SFTP-only access. Do not edit by hand.
 Match Group ${SFTP_GROUP}
@@ -2866,21 +2904,34 @@ Match Group ${SFTP_GROUP}
     AllowTcpForwarding no
     X11Forwarding no
     PermitTunnel no
-    PasswordAuthentication yes
+  PasswordAuthentication yes
 EOF
 )
   if [[ ! -f "$SFTP_DROPIN" ]] || [[ "$(cat "$SFTP_DROPIN" 2>/dev/null)" != "$want" ]]; then
-    printf '%s\n' "$want" > "${SFTP_DROPIN}.tmp"
-    chmod 0644 "${SFTP_DROPIN}.tmp"
-    mv -f "${SFTP_DROPIN}.tmp" "$SFTP_DROPIN"
+    tmp=$(mktemp "${SFTP_DROPIN}.new.XXXXXX") || die "Could not stage the SFTP sshd configuration."
+    printf '%s\n' "$want" > "$tmp"
+    chmod 0644 "$tmp"
+    if [[ -f "$SFTP_DROPIN" ]]; then
+      backup=$(mktemp "${SFTP_DROPIN}.bak.XXXXXX") || { rm -f -- "$tmp"; die "Could not back up the SFTP sshd configuration."; }
+      cp -p -- "$SFTP_DROPIN" "$backup" || { rm -f -- "$tmp" "$backup"; die "Could not back up the SFTP sshd configuration."; }
+      had_old=1
+    fi
+    mv -f -- "$tmp" "$SFTP_DROPIN"
     changed=1
   fi
   if ! sshd -t 2>/dev/null; then
-    [[ "$changed" == "1" ]] && rm -f "$SFTP_DROPIN"
+    if [[ "$changed" == "1" ]]; then
+      if [[ "$had_old" == "1" ]]; then mv -f -- "$backup" "$SFTP_DROPIN"; else rm -f -- "$SFTP_DROPIN"; fi
+    fi
     die "sshd configuration test failed; SFTP was not applied."
   fi
   if [[ "$changed" == "1" ]]; then
-    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+    if ! systemctl reload ssh 2>/dev/null && ! systemctl reload sshd 2>/dev/null; then
+      if [[ "$had_old" == "1" ]]; then mv -f -- "$backup" "$SFTP_DROPIN"; else rm -f -- "$SFTP_DROPIN"; fi
+      sshd -t 2>/dev/null && { systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true; }
+      die "Could not reload sshd; the previous SFTP configuration was restored."
+    fi
+    [[ "$had_old" == "1" ]] && rm -f -- "$backup"
   fi
   return 0
 }
@@ -2888,18 +2939,25 @@ EOF
 # Ensure ~/.ssh + authorized_keys exist with strict perms, owned by the site user.
 _sftp_ensure_sshdir() {
   local sshdir="${FILES_HOME}/.ssh" ak="${FILES_HOME}/.ssh/authorized_keys"
-  [[ -d "$sshdir" ]] || mkdir -p "$sshdir"
-  [[ -f "$ak" ]] || : > "$ak"
-  chown "$FILES_USER":"$FILES_USER" "$sshdir" "$ak"
-  chmod 700 "$sshdir"; chmod 600 "$ak"
+  [[ ! -L "$sshdir" && ! -L "$ak" ]] || die "Refusing symbolic links in the managed SSH key path."
+  runuser -u "$FILES_USER" -- mkdir -p -- "$sshdir" \
+    || die "Could not create the site SSH directory."
+  [[ -d "$sshdir" && ! -L "$sshdir" ]] || die "The managed SSH directory is not a regular directory."
+  if [[ ! -e "$ak" ]]; then
+    runuser -u "$FILES_USER" -- touch -- "$ak" || die "Could not create authorized_keys."
+  fi
+  [[ -f "$ak" && ! -L "$ak" ]] || die "The managed authorized_keys path is not a regular file."
+  runuser -u "$FILES_USER" -- chmod 700 -- "$sshdir" || die "Could not secure the site SSH directory."
+  runuser -u "$FILES_USER" -- chmod 600 -- "$ak" || die "Could not secure authorized_keys."
 }
 
 # Make the home a valid chroot target (root-owned dir; group stays the user so they
 # can still traverse their own home; content subdirs stay user-owned + writable).
 _sftp_chroot_prep() {
+  # Create the user-owned key directory before making the chroot root-owned.
+  _sftp_ensure_sshdir
   chown root:"$FILES_USER" "$FILES_HOME"
   chmod 750 "$FILES_HOME"
-  _sftp_ensure_sshdir
 }
 
 _sftp_in_group() {
@@ -2956,6 +3014,7 @@ _sftp_enable() {
   _require_root "sftp:enable"; _parse_opts "$@"
   local domain; domain=$(_opt "domain"); _require_arg "domain" "$domain" "sftp:enable --domain X"
   _files_resolve "$domain"
+  _sftp_lock
   _sftp_ensure_sshd
   _sftp_chroot_prep
   usermod -aG "$SFTP_GROUP" "$FILES_USER"
@@ -2968,6 +3027,7 @@ _sftp_disable() {
   _require_root "sftp:disable"; _parse_opts "$@"
   local domain; domain=$(_opt "domain"); _require_arg "domain" "$domain" "sftp:disable --domain X"
   _files_resolve "$domain"
+  _sftp_lock
   if _sftp_in_group; then gpasswd -d "$FILES_USER" "$SFTP_GROUP" >/dev/null 2>&1 || true; fi
   ok "SFTP disabled."
   return 0
@@ -2978,6 +3038,7 @@ _sftp_passwd() {
   _require_root "sftp:passwd"; _parse_opts "$@"
   local domain pw; domain=$(_opt "domain"); _require_arg "domain" "$domain" "sftp:passwd --domain X (password on stdin)"
   _files_resolve "$domain"
+  _sftp_lock
   IFS= read -r pw || true
   [[ -n "$pw" ]] || die "No password provided."
   [[ "${#pw}" -ge 8 ]] || die "Password must be at least 8 characters."
@@ -2991,6 +3052,7 @@ _sftp_passwd_clear() {
   _require_root "sftp:passwd-clear"; _parse_opts "$@"
   local domain; domain=$(_opt "domain"); _require_arg "domain" "$domain" "sftp:passwd-clear --domain X"
   _files_resolve "$domain"
+  _sftp_lock
   usermod -p '!' "$FILES_USER" || die "Could not clear the password."
   ok "Password disabled (key-only)."
   return 0
@@ -3001,6 +3063,7 @@ _sftp_key_add() {
   _require_root "sftp:key-add"; _parse_opts "$@"
   local domain key tmp body ak; domain=$(_opt "domain"); _require_arg "domain" "$domain" "sftp:key-add --domain X (key on stdin)"
   _files_resolve "$domain"
+  _sftp_lock
   IFS= read -r key || true
   [[ -n "$key" ]] || die "No key provided."
   tmp=$(mktemp); printf '%s\n' "$key" > "$tmp"
@@ -3009,11 +3072,12 @@ _sftp_key_add() {
   _sftp_ensure_sshdir
   ak="${FILES_HOME}/.ssh/authorized_keys"
   body=$(awk '{print $2}' <<<"$key")
-  if [[ -n "$body" ]] && awk -v b="$body" '$2==b{found=1} END{exit !found}' "$ak"; then
+  if [[ -n "$body" ]] && runuser -u "$FILES_USER" -- awk -v b="$body" '$2==b{found=1} END{exit !found}' "$ak"; then
     die "That key is already added."
   fi
-  printf '%s\n' "$key" >> "$ak"
-  chown "$FILES_USER":"$FILES_USER" "$ak"; chmod 600 "$ak"
+  runuser -u "$FILES_USER" -- tee -a -- "$ak" >/dev/null <<<"$key" \
+    || die "Could not add the SSH key."
+  runuser -u "$FILES_USER" -- chmod 600 -- "$ak" || die "Could not secure authorized_keys."
   ok "Key added."
   return 0
 }
@@ -3023,12 +3087,13 @@ _sftp_key_delete() {
   _require_root "sftp:key-delete"; _parse_opts "$@"
   local domain fp ak; domain=$(_opt "domain"); _require_arg "domain" "$domain" "sftp:key-delete --domain X (fingerprint on stdin)"
   _files_resolve "$domain"
+  _sftp_lock
   IFS= read -r fp || true
   [[ -n "$fp" ]] || die "No fingerprint provided."
   ak="${FILES_HOME}/.ssh/authorized_keys"
   [[ -f "$ak" ]] || die "No keys to remove."
-  python3 - "$ak" "$fp" <<'PY' || die "Key not found."
-import sys, os, hashlib, base64
+  runuser -u "$FILES_USER" -- python3 - "$ak" "$fp" <<'PY' || die "Key not found."
+import sys, os, hashlib, base64, tempfile
 ak, target = sys.argv[1], sys.argv[2]
 out, removed = [], 0
 for line in open(ak, encoding="utf-8", errors="replace"):
@@ -3048,12 +3113,17 @@ for line in open(ak, encoding="utf-8", errors="replace"):
     else:
         out.append(line)
 if removed:
-    tmp = ak + ".tmp"
-    open(tmp, "w", encoding="utf-8").writelines(out)
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=os.path.dirname(ak),
+        prefix=".authorized_keys.", delete=False
+    ) as staged:
+        staged.writelines(out)
+        tmp = staged.name
+    os.chmod(tmp, 0o600)
     os.replace(tmp, ak)
 sys.exit(0 if removed else 3)
 PY
-  chown "$FILES_USER":"$FILES_USER" "$ak"; chmod 600 "$ak"
+  runuser -u "$FILES_USER" -- chmod 600 -- "$ak" || die "Could not secure authorized_keys."
   ok "Key removed."
   return 0
 }
@@ -6943,6 +7013,13 @@ _db_grant() {
   fi
 }
 
+_db_secret_lock() {
+  mkdir -p "$(dirname "$DB_SECRET_LOCK")" || return 1
+  exec 177>"$DB_SECRET_LOCK" || return 1
+  chmod 600 "$DB_SECRET_LOCK" 2>/dev/null || true
+  flock -w 10 177
+}
+
 _db_secret_init() {
   mkdir -p "$DB_SECRET_DIR" "$(dirname "$DB_SECRET_KEY")" || return 1
   chown root:root "$DB_SECRET_DIR" "$(dirname "$DB_SECRET_KEY")" 2>/dev/null || true
@@ -6978,6 +7055,7 @@ _db_secret_decrypt() {
 _db_secret_put() {
   local site="$1" db_name="$2" db_user="$3" db_pass="$4"
   [[ -n "$site" && -n "$db_name" && -n "$db_user" && -n "$db_pass" ]] || return 1
+  _db_secret_lock || return 1
   local cipher tmp
   cipher=$(_db_secret_encrypt "$db_pass") || return 1
   tmp=$(mktemp) || return 1
@@ -6992,6 +7070,7 @@ _db_secret_put() {
 
 _db_secret_get() {
   local site="$1" db_name="$2" db_user="$3" cipher=""
+  _db_secret_lock || return 1
   _db_secret_init || return 1
   cipher=$(awk -F '\t' -v s="$site" -v d="$db_name" -v u="$db_user" \
     '$1 == s && $2 == d && $3 == u { print $4; exit }' "$DB_SECRET_STORE")
@@ -7001,6 +7080,7 @@ _db_secret_get() {
 
 _db_secret_delete_db() {
   local site="$1" db_name="$2" tmp
+  _db_secret_lock || return 0
   _db_secret_init || return 0
   tmp=$(mktemp) || return 0
   awk -F '\t' -v s="$site" -v d="$db_name" \
@@ -7013,6 +7093,7 @@ _db_secret_delete_db() {
 
 _db_secret_delete_user() {
   local site="$1" db_user="$2" tmp
+  _db_secret_lock || return 0
   _db_secret_init || return 0
   tmp=$(mktemp) || return 0
   awk -F '\t' -v s="$site" -v u="$db_user" \
@@ -7027,6 +7108,7 @@ _db_secret_delete_user() {
 # column 1 — the domain passed as `db:add --site <domain>`). Used by site teardown.
 _db_secret_delete_site() {
   local site="$1" tmp
+  _db_secret_lock || return 0
   _db_secret_init || return 0
   tmp=$(mktemp) || return 0
   awk -F '\t' -v s="$site" \
@@ -7153,6 +7235,10 @@ _db_add() {
   local db_name; db_name=$(_opt "name")
   local db_user; db_user=$(_opt "user" "$db_name")
   local db_pass; db_pass=$(_opt "pass" "$(openssl rand -base64 16 | tr -dc 'A-Za-z0-9' | head -c 16)")
+  if [[ "$(_opt "password-stdin" "false")" == "true" ]]; then
+    IFS= read -r db_pass || true
+    if IFS= read -r; then die "Database password input must contain exactly one line."; fi
+  fi
   local site;    site=$(_opt "site" "")
   local perm;    perm=$(_opt "permission" "rw")
   local no_user; no_user=$(_opt "no-user" "false")
@@ -7321,16 +7407,26 @@ _db_backup() {
   _load_credentials
   mkdir -p "$output_dir"
 
-  local backup_file; backup_file="${output_dir}/${db_name}_$(date +%Y%m%d_%H%M%S).sql.gz"
+  local backup_file backup_staged
+  backup_file="${output_dir}/${db_name}_$(date +%Y%m%d_%H%M%S).sql.gz"
+  backup_staged=$(mktemp "${output_dir}/.${db_name}.XXXXXX.sql.gz") \
+    || die "Could not create a temporary database backup file."
+  chmod 600 "$backup_staged" \
+    || { rm -f -- "$backup_staged"; die "Could not secure the temporary database backup file."; }
   log "Backing up database: ${db_name} → ${backup_file}"
 
-  mysqldump \
+  if ! ( set -o pipefail; mysqldump \
     --defaults-extra-file=<(printf '[client]\nuser=root\npassword=%s\n' "${MYSQL_ROOT_PASSWORD}") \
     --single-transaction \
     --quick \
     --lock-tables=false \
     "$db_name" \
-    | gzip > "$backup_file"
+    | gzip > "$backup_staged" ); then
+    rm -f -- "$backup_staged"
+    die "Failed to back up database: ${db_name}"
+  fi
+  mv -f -- "$backup_staged" "$backup_file" \
+    || { rm -f -- "$backup_staged"; die "Could not publish the completed database backup."; }
 
   local size; size=$(du -sh "$backup_file" | cut -f1)
   ok "Backup created: ${backup_file} (${size})"
@@ -7344,6 +7440,10 @@ _db_user_add() {
   local db_user; db_user=$(_opt "name"); _require_arg "name" "$db_user" "db:user-add --name <user>"
   local db_name; db_name=$(_opt "db");   _require_arg "db" "$db_name" "db:user-add --db <database>"
   local db_pass; db_pass=$(_opt "pass" "$(openssl rand -base64 16 | tr -dc 'A-Za-z0-9' | head -c 16)")
+  if [[ "$(_opt "password-stdin" "false")" == "true" ]]; then
+    IFS= read -r db_pass || true
+    if IFS= read -r; then die "Database password input must contain exactly one line."; fi
+  fi
   local perm;    perm=$(_opt "permission" "rw")
 
   [[ "$db_user" =~ ^[a-zA-Z0-9_]+$ ]] || die "Database user must contain only letters, numbers, underscores"
@@ -7387,6 +7487,10 @@ _db_user_edit() {
   local db_user;  db_user=$(_opt "name");  _require_arg "name" "$db_user" "db:user-edit --name <user>"
   local perm;     perm=$(_opt "permission" "")
   local new_pass; new_pass=$(_opt "pass" "")
+  if [[ "$(_opt "password-stdin" "false")" == "true" ]]; then
+    IFS= read -r new_pass || true
+    if IFS= read -r; then die "Database password input must contain exactly one line."; fi
+  fi
   local generate; generate=$(_opt "generate" "false")
   local wp_config; wp_config=$(_opt "wp-config" "")
 
@@ -7501,17 +7605,101 @@ _db_pma_credentials() {
   fi
   [[ -n "$db_pass" ]] || die "No stored password for '${db_user}'. Reset the database user password, then open phpMyAdmin again."
 
+  # PHP's files session handler only trusts session files owned by the reading
+  # process's uid or by root. The panel (aidipanel) and phpMyAdmin
+  # (aidipanel-pma) are separate users, so a panel-written signon session is
+  # rejected by phpMyAdmin's runtime. Mint the signon session HERE as root
+  # instead — root-owned files pass the check, the pma group keeps read/write —
+  # and hand the panel only the session id. The DB password never leaves this
+  # process.
+  [[ -d "$PMA_SESSION_DIR" ]] || die "phpMyAdmin session directory is missing — reinstall phpMyAdmin (db:pma-install)."
+  local sid hmac payload tmpf
+  sid=$(openssl rand -hex 16)
+  hmac=$(openssl rand -hex 32)
+  payload=$(
+    LC_ALL=C
+    printf 'PMA_single_signon_user|s:%d:"%s";' "${#db_user}" "$db_user"
+    printf 'PMA_single_signon_password|s:%d:"%s";' "${#db_pass}" "$db_pass"
+    printf 'PMA_single_signon_host|s:9:"127.0.0.1";'
+    printf 'PMA_single_signon_port|s:4:"3306";'
+    printf 'PMA_single_signon_HMAC_secret|s:64:"%s";' "$hmac"
+  )
+  tmpf=$(mktemp "${PMA_SESSION_DIR}/.signon.XXXXXX") || die "Could not stage the phpMyAdmin signon session."
+  printf '%s' "$payload" > "$tmpf" || { rm -f "$tmpf"; die "Could not write the phpMyAdmin signon session."; }
+  chown root:"$PMA_RUNTIME_USER" "$tmpf"
+  chmod 0660 "$tmpf"
+  mv -f "$tmpf" "${PMA_SESSION_DIR}/sess_${sid}" || { rm -f "$tmpf"; die "Could not commit the phpMyAdmin signon session."; }
+
+  echo "pma_session_id=${sid}"
   echo "pma_user=${db_user}"
   echo "pma_db=${db_name}"
-  echo "pma_password=${db_pass}"
-  echo "pma_host=127.0.0.1"
-  echo "pma_port=3306"
+}
+
+_db_pma_ensure_runtime() {
+  getent group "$PMA_RUNTIME_USER" >/dev/null 2>&1 || groupadd --system "$PMA_RUNTIME_USER"
+  if id "$PMA_RUNTIME_USER" >/dev/null 2>&1; then
+    usermod --gid "$PMA_RUNTIME_USER" "$PMA_RUNTIME_USER"
+  else
+    useradd --system --gid "$PMA_RUNTIME_USER" --no-create-home --shell /usr/sbin/nologin "$PMA_RUNTIME_USER"
+  fi
+  # The panel writes one short-lived signon session; phpMyAdmin can read only
+  # this group-owned directory and receives no sudo or panel-storage access.
+  usermod --append --groups "$PMA_RUNTIME_USER" aidipanel
+  # Setgid (2770) so signon-session files the panel (aidipanel) writes here
+  # inherit the aidipanel-pma group; without it phpMyAdmin (aidipanel-pma) cannot
+  # read the session and bounces to SignonURL instead of single-signon login.
+  install -d -o root -g "$PMA_RUNTIME_USER" -m 2770 "$PMA_SESSION_DIR"
+  chmod 2770 "$PMA_SESSION_DIR"
+  install -d -o "$PMA_RUNTIME_USER" -g "$PMA_RUNTIME_USER" -m 0700 /var/lib/phpmyadmin/tmp
+
+  local pool="/etc/php/${PHP_DEFAULT_VERSION}/fpm/pool.d/aidipanel-pma.conf"
+  [[ -d "$(dirname -- "$pool")" ]] || die "PHP-FPM pool directory is missing for PHP ${PHP_DEFAULT_VERSION}."
+  cat > "$pool" <<POOL
+[aidipanel-pma]
+user = ${PMA_RUNTIME_USER}
+group = ${PMA_RUNTIME_USER}
+listen = ${PMA_FPM_SOCKET}
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0660
+pm = ondemand
+pm.max_children = 3
+pm.process_idle_timeout = 10s
+pm.max_requests = 100
+php_admin_value[session.save_path] = "0;0660;${PMA_SESSION_DIR}"
+php_admin_value[session.gc_maxlifetime] = 1800
+php_admin_value[session.gc_probability] = 1
+php_admin_value[session.gc_divisor] = 100
+php_admin_value[upload_tmp_dir] = /var/lib/phpmyadmin/tmp
+php_admin_flag[display_errors] = off
+php_admin_flag[log_errors] = on
+POOL
+  chown root:root "$pool"
+  chmod 640 "$pool"
+
+  "php-fpm${PHP_DEFAULT_VERSION}" -t >> "$CLI_LOG" 2>&1 \
+    || { rm -f "$pool"; die "phpMyAdmin PHP-FPM pool validation failed."; }
+  systemctl reload "php${PHP_DEFAULT_VERSION}-fpm" >> "$CLI_LOG" 2>&1 \
+    || die "Could not reload PHP-FPM for phpMyAdmin."
+  # Refresh the panel worker's supplementary groups OUT OF BAND. This install is
+  # usually a streamed request served BY aidipanel-fpm itself, and this CLI runs
+  # inside a `systemd-run --pipe` unit tied to that worker — so reloading the
+  # service inline tears down the very request running this CLI (it dies before
+  # wiring nginx). Schedule the reload as its own transient systemd timer owned
+  # by PID 1, so it survives this unit's cleanup and fires ~10s later, after the
+  # request has finished. The refreshed group is only needed for the separate,
+  # later "Open phpMyAdmin" action.
+  systemd-run --slice=system.slice --on-active=10s systemctl reload aidipanel-fpm >/dev/null 2>&1 || true
+  local i
+  for i in {1..50}; do
+    [[ -S "$PMA_FPM_SOCKET" ]] && return 0
+    sleep 0.1
+  done
+  die "phpMyAdmin PHP-FPM socket did not become ready."
 }
 
 _db_pma_write_config() {
-  mkdir -p /etc/aidipanel /var/lib/phpmyadmin/tmp
-  chown www-data:www-data /var/lib/phpmyadmin/tmp
-  chmod 700 /var/lib/phpmyadmin/tmp
+  mkdir -p /etc/aidipanel
 
   local secret
   secret=$(openssl rand -hex 16)
@@ -7532,7 +7720,7 @@ _db_pma_write_config() {
 
 \$cfg['TempDir'] = '/var/lib/phpmyadmin/tmp';
 PHP
-  chown root:www-data "${PMA_DIR}/config.inc.php"
+  chown root:"$PMA_RUNTIME_USER" "${PMA_DIR}/config.inc.php"
   chmod 640 "${PMA_DIR}/config.inc.php"
 
   cat > "$PMA_CONF" <<PMA
@@ -7544,7 +7732,7 @@ PMA
 }
 
 _db_pma_write_nginx() {
-  local fpm_sock; fpm_sock=$(_php_sock "$PHP_DEFAULT_VERSION")
+  local fpm_sock="$PMA_FPM_SOCKET"
   [[ -S "$fpm_sock" ]] || die "PHP-FPM socket not found: ${fpm_sock}"
 
   cat > "$PMA_NGINX_SNIPPET" <<NGINX
@@ -7603,18 +7791,33 @@ _db_pma_install() {
   _require_root "db:pma-install"
   _parse_opts "$@"
 
-  local archive="/tmp/phpMyAdmin-${PMA_VERSION}-all-languages.tar.gz"
-  local extracted="/tmp/phpMyAdmin-${PMA_VERSION}-all-languages"
+  local work archive checksum extracted
+  work=$(mktemp -d /tmp/aidipanel-pma.XXXXXX)
+  archive="${work}/phpMyAdmin-${PMA_VERSION}-all-languages.tar.gz"
+  checksum="${archive}.sha256"
+  extracted="${work}/phpMyAdmin-${PMA_VERSION}-all-languages"
   local url="https://files.phpmyadmin.net/phpMyAdmin/${PMA_VERSION}/phpMyAdmin-${PMA_VERSION}-all-languages.tar.gz"
+  trap 'rm -rf -- "$work"' EXIT
 
   _progress 10 preflight "Checking phpMyAdmin"
   if [[ ! -f "${PMA_DIR}/index.php" ]]; then
-    _progress 25 download "Downloading phpMyAdmin ${PMA_VERSION}"
     log "Downloading phpMyAdmin ${PMA_VERSION}..."
-    curl -fsSL "$url" -o "$archive" || die "Could not download phpMyAdmin ${PMA_VERSION}."
+    _run_heartbeat 25 download "Downloading phpMyAdmin ${PMA_VERSION}" -- \
+      curl -fsSL --proto '=https' --tlsv1.2 "$url" -o "$archive" \
+      || die "Could not download phpMyAdmin ${PMA_VERSION}."
+    curl -fsSL --proto '=https' --tlsv1.2 "${url}.sha256" -o "$checksum" \
+      || die "Could not download the phpMyAdmin checksum."
+    (cd "$work" && sha256sum -c "$(basename -- "$checksum")" >/dev/null) \
+      || die "phpMyAdmin checksum verification failed."
     _progress 45 extract "Extracting phpMyAdmin"
     rm -rf "$extracted" "${PMA_DIR}.new"
-    tar -xzf "$archive" -C /tmp || die "Could not extract phpMyAdmin archive."
+    tar -tzf "$archive" | awk -v root="phpMyAdmin-${PMA_VERSION}-all-languages/" '
+      index($0, root) == 1 && $0 !~ /(^|\/)\.\.($|\/)/ { next }
+      { exit 1 }
+    ' || die "phpMyAdmin archive contains an unsafe path."
+    _run_heartbeat 45 extract "Extracting phpMyAdmin" -- \
+      tar --no-same-owner --no-same-permissions -xzf "$archive" -C "$work" \
+      || die "Could not extract phpMyAdmin archive."
     mv "$extracted" "${PMA_DIR}.new"
     rm -rf "$PMA_DIR"
     mv "${PMA_DIR}.new" "$PMA_DIR"
@@ -7625,6 +7828,8 @@ _db_pma_install() {
     rm -rf "${PMA_DIR}/setup"
   fi
 
+  _progress 65 runtime "Isolating phpMyAdmin runtime"
+  _db_pma_ensure_runtime
   _progress 70 config "Writing phpMyAdmin signon config"
   _db_pma_write_config
   _progress 80 nginx "Writing nginx configuration"
@@ -7639,6 +7844,8 @@ _db_pma_install() {
   echo "pma_url=${PMA_URL_PATH}"
   echo "pma_version=${PMA_VERSION}"
   _progress 100 "done" "Done"
+  trap - EXIT
+  rm -rf -- "$work"
 }
 
 # ===========================================================================
@@ -9661,31 +9868,79 @@ _log_tail() {
 
 _self_update() {
   _require_root "self:update"
-  log "Checking for AidiPanel CLI updates..."
-  local install_url="https://raw.githubusercontent.com/rezzaidr/AidiPanel/master/aidipanel"
-  # Optional override: /etc/aidipanel/update.conf may set UPDATE_URL=...
+  log "Checking for AidiPanel release updates..."
+  local install_url="https://github.com/rezzaidr/AidiPanel/releases/latest/download/aidipanel"
+  local panel_url="https://github.com/rezzaidr/AidiPanel/releases/latest/download/aidipanel-panel-app.tar.gz"
+  local checksum_url="https://github.com/rezzaidr/AidiPanel/releases/latest/download/SHA256SUMS"
+  # Optional root-owned overrides are parsed as inert values, never sourced.
   if [[ -r /etc/aidipanel/update.conf ]]; then
-    # shellcheck disable=SC1091
-    source /etc/aidipanel/update.conf
-    [[ -n "${UPDATE_URL:-}" ]] && install_url="$UPDATE_URL"
+    local configured_url configured_panel configured_checksum
+    configured_url=$(sed -n 's/^UPDATE_URL=//p' /etc/aidipanel/update.conf | tail -1)
+    configured_panel=$(sed -n 's/^UPDATE_PANEL_URL=//p' /etc/aidipanel/update.conf | tail -1)
+    configured_checksum=$(sed -n 's/^UPDATE_CHECKSUM_URL=//p' /etc/aidipanel/update.conf | tail -1)
+    [[ -n "$configured_url" ]] && install_url="$configured_url"
+    [[ -n "$configured_panel" ]] && panel_url="$configured_panel"
+    [[ -n "$configured_checksum" ]] && checksum_url="$configured_checksum"
   fi
-  local tmp_file; tmp_file=$(mktemp /tmp/aidipanel-cli.XXXXXX)
+  [[ "$install_url" == https://* && "$panel_url" == https://* && "$checksum_url" == https://* ]] \
+    || die "Update URLs must use HTTPS."
 
-  curl -fsSL "$install_url" -o "$tmp_file" 2>/dev/null \
+  local tmp_dir tmp_file panel_archive manifest checksum_line panel_checksum_line current_bin staged
+  tmp_dir=$(mktemp -d /tmp/aidipanel-update.XXXXXX)
+  trap 'rm -rf -- "$tmp_dir"' EXIT
+  tmp_file="${tmp_dir}/aidipanel"
+  panel_archive="${tmp_dir}/aidipanel-panel-app.tar.gz"
+  manifest="${tmp_dir}/SHA256SUMS"
+
+  curl -fsSL --proto '=https' --tlsv1.2 "$install_url" -o "$tmp_file" 2>/dev/null \
     || die "Failed to download update. Check internet connection."
+  curl -fsSL --proto '=https' --tlsv1.2 "$checksum_url" -o "$manifest" 2>/dev/null \
+    || die "Failed to download the release checksum manifest."
+  curl -fsSL --proto '=https' --tlsv1.2 "$panel_url" -o "$panel_archive" 2>/dev/null \
+    || die "Failed to download the matching panel application release."
+
+  checksum_line=$(awk '$2 == "aidipanel" || $2 == "*aidipanel" { print; found=1 } END { if (!found) exit 1 }' "$manifest") \
+    || die "The release checksum manifest has no AidiPanel CLI entry."
+  [[ "$checksum_line" =~ ^[0-9a-fA-F]{64}[[:space:]]+\*?aidipanel$ ]] \
+    || die "The AidiPanel CLI checksum entry is invalid."
+  (cd "$tmp_dir" && printf '%s\n' "$checksum_line" | sha256sum -c - >/dev/null) \
+    || die "Downloaded AidiPanel CLI failed checksum verification."
+
+  panel_checksum_line=$(awk '$2 == "aidipanel-panel-app.tar.gz" || $2 == "*aidipanel-panel-app.tar.gz" { print; found=1 } END { if (!found) exit 1 }' "$manifest") \
+    || die "The release checksum manifest has no panel application entry."
+  [[ "$panel_checksum_line" =~ ^[0-9a-fA-F]{64}[[:space:]]+\*?aidipanel-panel-app\.tar\.gz$ ]] \
+    || die "The panel application checksum entry is invalid."
+  (cd "$tmp_dir" && printf '%s\n' "$panel_checksum_line" | sha256sum -c - >/dev/null) \
+    || die "Downloaded panel application failed checksum verification."
 
   bash -n "$tmp_file" || die "Downloaded script has syntax errors — aborting update."
 
-  local current_bin; current_bin=$(command -v aidipanel)
-  cp "$tmp_file" "$current_bin"
-  chmod +x "$current_bin"
-  rm -f "$tmp_file"
+  tar -tzf "$panel_archive" | awk '
+    index($0, "panel-app/") == 1 && $0 !~ /(^|\/)\.\.($|\/)/ { next }
+    { exit 1 }
+  ' || die "Panel application archive contains an unsafe path."
+  tar --no-same-owner --no-same-permissions -xzf "$panel_archive" -C "$tmp_dir" \
+    || die "Could not extract the verified panel application."
+  [[ -f "${tmp_dir}/panel-app/deploy-panel.sh" && -d "${tmp_dir}/panel-app/public" ]] \
+    || die "Verified panel archive is incomplete."
+  bash "${tmp_dir}/panel-app/deploy-panel.sh" \
+    || die "Verified panel application deployment failed."
 
-  ok "AidiPanel CLI updated: ${current_bin}"
+  current_bin=$(command -v aidipanel)
+  [[ -n "$current_bin" && -f "$current_bin" ]] || die "Installed AidiPanel CLI was not found."
+  staged="${current_bin}.new.$$"
+  install -o root -g root -m 0755 "$tmp_file" "$staged" \
+    || die "Could not stage the verified CLI update."
+  mv -f -- "$staged" "$current_bin" \
+    || { rm -f -- "$staged"; die "Could not activate the verified CLI update."; }
+
+  ok "AidiPanel updated: panel and CLI (${current_bin})"
   # Self-heal Redis ACL isolation in case a stack/dist upgrade dropped our
   # redis.conf directives (backlog #6). No-op when ACL mode is not enabled.
   "$current_bin" cache:redis-acl --action reconcile >/dev/null 2>&1 || true
   aidipanel --version 2>/dev/null || true
+  trap - EXIT
+  rm -rf -- "$tmp_dir"
 }
 
 # ---------------------------------------------------------------------------

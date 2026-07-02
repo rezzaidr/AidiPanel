@@ -121,6 +121,7 @@ class SiteController extends BaseController
 
         // Build CLI args
         $args = ['--domain', $domain, '--type', $type, '--php', $phpVer];
+        $wpSecret = '';
         if ($siteUser !== '') {           // blank => CLI derives it from the domain
             $args[] = '--user';
             $args[] = $siteUser;
@@ -136,10 +137,11 @@ class SiteController extends BaseController
                 $args,
                 '--wp-title',       $wpTitle,
                 '--wp-admin-user',  $wpUser,
-                '--wp-admin-pass',  $wpPass,
+                '--wp-admin-pass-stdin',
                 '--wp-admin-email', $wpEmail,
                 '--wp-multisite',   $wpMulti
             );
+            $wpSecret = $wpPass;
         }
 
         // A WordPress create downloads core + installs WP (~1 min), on top of any
@@ -163,7 +165,9 @@ class SiteController extends BaseController
             $lock = $guard['handle'];
         }
 
-        $result = run_cli('site:add', $args);
+        $result = $type === 'wordpress'
+            ? run_cli_stdin('site:add', $args, $wpSecret)
+            : run_cli('site:add', $args);
         php_install_end($lock);
 
         if (!$result['success']) {
@@ -199,6 +203,7 @@ class SiteController extends BaseController
         $siteUser  = strtolower(trim((string) $this->request->post('site_user', '')));
 
         $args = ['--domain', $domain, '--type', $type, '--php', $phpVer];
+        $wpSecret = '';
         if ($siteUser !== '') {
             $args[] = '--user';
             $args[] = $siteUser;
@@ -208,11 +213,12 @@ class SiteController extends BaseController
             $args[] = $proxyPass;
         }
         if ($type === 'wordpress') {
+            $wpSecret = (string) $this->request->post('admin_pass', '');
             array_push(
                 $args,
                 '--wp-title',       trim((string) $this->request->post('site_title', '')),
                 '--wp-admin-user',  trim((string) $this->request->post('admin_user', '')),
-                '--wp-admin-pass',  (string) $this->request->post('admin_pass', ''),
+                '--wp-admin-pass-stdin',
                 '--wp-admin-email', trim((string) $this->request->post('admin_email', '')),
                 '--wp-multisite',   (string) $this->request->post('multisite', 'off')
             );
@@ -220,7 +226,7 @@ class SiteController extends BaseController
 
         $result = run_cli_stream('site:add', $args, function (string $pct, string $key, string $msg): void {
             stream_send(['t' => 'p', 'pct' => (int) $pct, 'key' => $key, 'msg' => $msg]);
-        });
+        }, $wpSecret);
 
         if (!$result['success']) {
             // The CLI's die() message is the last line; drop the [ERROR]/[INFO] tag.

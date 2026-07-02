@@ -44,19 +44,22 @@ final class TwoFactor
      */
     public static function verifyTotp(int $userId, string $code): bool
     {
-        $row = DB::instance()->row('SELECT totp_secret, totp_last_step FROM users WHERE id = ?', [$userId]);
-        if ($row === null || empty($row['totp_secret'])) {
-            return false;
-        }
-        $step = Totp::verify((string) $row['totp_secret'], $code);
-        if ($step === false) {
-            return false;
-        }
-        if ($row['totp_last_step'] !== null && $step <= (int) $row['totp_last_step']) {
-            return false;   // replay of an already-used (or older) code
-        }
-        DB::instance()->run('UPDATE users SET totp_last_step = ? WHERE id = ?', [$step, $userId]);
-        return true;
+        $db = DB::instance();
+        return $db->immediateTransaction(static function (DB $db) use ($userId, $code): bool {
+            $row = $db->row('SELECT totp_secret, totp_last_step FROM users WHERE id = ?', [$userId]);
+            if ($row === null || empty($row['totp_secret'])) {
+                return false;
+            }
+            $step = Totp::verify((string) $row['totp_secret'], $code);
+            if ($step === false) {
+                return false;
+            }
+            if ($row['totp_last_step'] !== null && $step <= (int) $row['totp_last_step']) {
+                return false;
+            }
+            $db->run('UPDATE users SET totp_last_step = ? WHERE id = ?', [$step, $userId]);
+            return true;
+        });
     }
 
     /**
@@ -82,16 +85,21 @@ final class TwoFactor
     /** Redeem a recovery code (single-use). True if it matched an unused code. */
     public static function verifyRecoveryCode(int $userId, string $code): bool
     {
-        $db  = DB::instance();
-        $row = $db->row(
-            'SELECT id FROM user_recovery_codes WHERE user_id = ? AND code_hash = ? AND used_at IS NULL LIMIT 1',
-            [$userId, self::hashCode($code)]
-        );
-        if ($row === null) {
-            return false;
-        }
-        $db->run('UPDATE user_recovery_codes SET used_at = ? WHERE id = ?', [gmdate('Y-m-d H:i:s'), (int) $row['id']]);
-        return true;
+        $db = DB::instance();
+        return $db->immediateTransaction(static function (DB $db) use ($userId, $code): bool {
+            $row = $db->row(
+                'SELECT id FROM user_recovery_codes WHERE user_id = ? AND code_hash = ? AND used_at IS NULL LIMIT 1',
+                [$userId, self::hashCode($code)]
+            );
+            if ($row === null) {
+                return false;
+            }
+            $db->run(
+                'UPDATE user_recovery_codes SET used_at = ? WHERE id = ? AND used_at IS NULL',
+                [gmdate('Y-m-d H:i:s'), (int) $row['id']]
+            );
+            return true;
+        });
     }
 
     public static function remainingRecoveryCodes(int $userId): int

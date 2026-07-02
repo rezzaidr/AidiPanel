@@ -4,13 +4,18 @@
 
 AidiPanel is a server control panel for Ubuntu/Debian VPS, built on Nginx + FastCGI Cache + PHP-FPM + MariaDB/MySQL + Redis. It installs the full stack and a web panel in one command, and focuses on a small, fast footprint: page caching lives inside Nginx itself, and each site runs under its own isolated Linux user.
 
-## Quick Install
+## Install
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/rezzaidr/AidiPanel/master/install.sh)
+curl -fLO https://github.com/rezzaidr/AidiPanel/releases/latest/download/install-aidipanel.sh
+curl -fLO https://github.com/rezzaidr/AidiPanel/releases/latest/download/SHA256SUMS
+grep ' install-aidipanel.sh$' SHA256SUMS | sha256sum -c -
+sudo bash install-aidipanel.sh
 ```
 
-One command installs the full stack **and** deploys the web panel. A random admin password is printed at the end and saved to `/opt/aidipanel/credentials.conf`.
+The checksum step must report `install-aidipanel.sh: OK`. The installer deploys the full stack and web panel. A random admin password is printed at the end and saved to `/opt/aidipanel/credentials.conf`.
+
+Use a fresh, dedicated VPS: the installer provisions the system web/database stack and is not intended to adopt an existing production server.
 
 ## Stack
 

@@ -13,7 +13,9 @@ This is per-user process and file isolation, not container-level sandboxing.
 
 ## Privilege Boundary
 
-- The web panel runs as `www-data` and holds no direct root privileges.
+- The web panel runs as the dedicated `aidipanel` system user. Nginx remains
+  `www-data`; it can connect to the panel FastCGI socket but cannot invoke the
+  root wrapper or read panel runtime storage.
 - It can only invoke `aidipanel-web-run`, a root wrapper allowed through a single narrow sudoers rule.
 - The wrapper enforces a fixed allowlist of subcommands; anything else is rejected.
 - CLI arguments are passed as argv values and never interpolated into shell strings.

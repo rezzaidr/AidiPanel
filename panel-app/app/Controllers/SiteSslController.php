@@ -101,27 +101,40 @@ class SiteSslController extends BaseController
         // Stage the PEMs in a private temp dir and pass FILE PATHS to the CLI, so
         // the private key never appears in process args. Cleaned up afterwards.
         $stageDir = '/opt/aidipanel/storage/tmp/ssl-import-'
-            . preg_replace('/[^a-z0-9.]/i', '', $domain) . '-' . bin2hex(random_bytes(4));
+            . preg_replace('/[^a-z0-9.]/i', '', $domain) . '-' . bin2hex(random_bytes(16));
         if (!@mkdir($stageDir, 0700, true) && !is_dir($stageDir)) {
             $this->error('Could not prepare import (storage not writable).', $this->tab($domain));
         }
         $certPath = "{$stageDir}/cert.pem";
         $keyPath  = "{$stageDir}/key.pem";
-        file_put_contents($certPath, $cert); @chmod($certPath, 0600);
-        file_put_contents($keyPath,  $key);  @chmod($keyPath,  0600);
+        $paths = [$certPath, $keyPath];
+        $writePem = function (string $path, string $pem) use ($domain): void {
+            $written = file_put_contents($path, $pem, LOCK_EX);
+            if ($written !== strlen($pem) || !chmod($path, 0600)) {
+                $this->error('Could not stage the certificate securely.', $this->tab($domain));
+            }
+        };
 
-        $args = ['--domain', $domain, '--cert', $certPath, '--key', $keyPath];
-        if ($chain !== '') {
-            $chainPath = "{$stageDir}/chain.pem";
-            file_put_contents($chainPath, $chain); @chmod($chainPath, 0600);
-            $args[] = '--chain'; $args[] = $chainPath;
+        try {
+            $writePem($certPath, $cert);
+            $writePem($keyPath, $key);
+
+            $args = ['--domain', $domain, '--cert', $certPath, '--key', $keyPath];
+            if ($chain !== '') {
+                $chainPath = "{$stageDir}/chain.pem";
+                $paths[] = $chainPath;
+                $writePem($chainPath, $chain);
+                $args[] = '--chain'; $args[] = $chainPath;
+            }
+
+            $result = run_cli('ssl:import', $args);
+        } finally {
+            // The private key must not survive write failures, CLI failures, or redirects.
+            foreach ($paths as $path) {
+                @unlink($path);
+            }
+            @rmdir($stageDir);
         }
-
-        $result = run_cli('ssl:import', $args);
-
-        // Always clean up the staged PEMs (especially the private key).
-        @unlink($certPath); @unlink($keyPath); @unlink("{$stageDir}/chain.pem");
-        @rmdir($stageDir);
 
         if (!$result['success']) {
             $this->error('Import failed: ' . $result['output'], $this->tab($domain));

@@ -58,10 +58,13 @@ Only the default version is installed at provisioning time. Other supported vers
 
 ## Privileged Operations
 
-The web panel runs as `www-data` and cannot perform privileged actions directly. It invokes a single wrapper, `aidipanel-web-run`, via a narrowly scoped sudoers rule:
+The web panel runs as the dedicated `aidipanel` system user and cannot perform
+privileged actions directly. Nginx remains `www-data` and can only connect to
+the panel FPM socket. The panel invokes a single wrapper,
+`aidipanel-web-run`, through a narrowly scoped sudoers rule:
 
 ```
-www-data ALL=(root) NOPASSWD: /usr/local/sbin/aidipanel-web-run *
+aidipanel ALL=(root) NOPASSWD: /usr/local/sbin/aidipanel-web-run *
 ```
 
 The wrapper hard-codes an allowlist of permitted subcommands (defense in depth: the wrapper allowlist **and** the CLI's own validation). Arguments are passed as separate argv values, never interpolated into a shell string.

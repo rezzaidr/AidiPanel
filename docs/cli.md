@@ -171,6 +171,10 @@ aidipanel log:tail --domain example.com --type access   # access | error | php
 aidipanel self:update
 ```
 
+`self:update` downloads the matching CLI and web-panel release assets, verifies
+both against the release `SHA256SUMS`, and deploys them together. Existing panel
+users, passwords, sites, databases, and runtime storage are preserved.
+
 ---
 
 ## Quick Reference

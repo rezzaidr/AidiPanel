@@ -100,7 +100,7 @@ class Router
 
         if ($scope === RoutePolicy::SITE_SETTINGS) {
             if (!Access::canEditSiteSettings()) {
-                $this->deny(403, 'You cannot change PHP settings.');
+                $this->deny(403, 'You cannot change server settings.');
             }
             return;
         }
