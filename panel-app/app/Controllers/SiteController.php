@@ -867,7 +867,7 @@ class SiteController extends BaseController
                          ['value' => 'subdomain', 'label' => 'Subdomain (needs wildcard SSL)', 'disabled' => true],
                      ],
                      'note' => 'site.add.f.multisite_note'],
-                    $phpField,
+                    $phpField + ['full' => true],
                 ],
             ],
             'php' => [

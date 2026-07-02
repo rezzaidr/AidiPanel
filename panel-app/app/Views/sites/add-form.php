@@ -20,8 +20,11 @@ $renderField = function (array $f): void {
     $soon  = $dis ? ' <span class="tag tag-soon">' . e(t('site.add.soon')) . '</span>' : '';
     $inCls = 'inp' . ($dis ? ' inp-soon' : '') . (!empty($f['mono']) ? ' mono' : '');
     $da    = $dis ? ' disabled' : '';
+    // Domain and the application selector lead full-width; other fields flow
+    // two-per-row. A field can force full width with 'full' => true.
+    $full  = !empty($f['full']) || ($f['key'] ?? '') === 'domain' || ($f['input'] ?? '') === 'application';
 
-    echo '<div>';
+    echo '<div' . ($full ? ' class="col-span-2"' : '') . '>';
     echo '<label class="lbl">' . e(t($f['label'])) . $req . $soon . '</label>';
 
     switch ($f['input']) {
@@ -87,7 +90,7 @@ $renderField = function (array $f): void {
 };
 ?>
 
-<div class="max-w-xl mx-auto">
+<div class="max-w-4xl mx-auto">
   <div class="flex items-center gap-1.5 text-xs text-zinc-400 mb-3">
     <a href="/sites/add" class="hover:text-ink flex items-center gap-1"><?= icon('arrow-left', 'text-sm') ?> <?= e(t('site.add.back')) ?></a>
     <span>·</span><span class="mono text-zinc-500">/sites/add/<?= e($form['slug']) ?></span>
@@ -118,7 +121,7 @@ $renderField = function (array $f): void {
       <?php endif; ?>
 
       <div data-op-fields>
-        <div class="space-y-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <?php foreach ($form['fields'] as $f) { $renderField($f); } ?>
         </div>
 
