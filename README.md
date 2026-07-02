@@ -6,14 +6,32 @@ AidiPanel is a server control panel for Ubuntu/Debian VPS, built on Nginx + Fast
 
 ## Install
 
+Start with a fresh Ubuntu/Debian VPS and fully update the base system first:
+
+```bash
+sudo apt update
+sudo apt upgrade -y
+```
+
+If the upgrade creates `/var/run/reboot-required`, run `sudo reboot`, reconnect,
+and only then start the AidiPanel installer:
+
+```bash
+curl -fsSL https://get.aidipanel.com | sudo bash
+```
+
+The installer deploys the full stack and web panel. A random admin password is printed at the end and saved to `/opt/aidipanel/credentials.conf`.
+
+### Verify before running (recommended)
+
+`get.aidipanel.com` redirects to the latest release installer. To review the script and check its checksum before running it as root:
+
 ```bash
 curl -fLO https://github.com/rezzaidr/AidiPanel/releases/latest/download/install-aidipanel.sh
 curl -fLO https://github.com/rezzaidr/AidiPanel/releases/latest/download/SHA256SUMS
-grep ' install-aidipanel.sh$' SHA256SUMS | sha256sum -c -
+grep ' install-aidipanel.sh$' SHA256SUMS | sha256sum -c -   # must print: install-aidipanel.sh: OK
 sudo bash install-aidipanel.sh
 ```
-
-The checksum step must report `install-aidipanel.sh: OK`. The installer deploys the full stack and web panel. A random admin password is printed at the end and saved to `/opt/aidipanel/credentials.conf`.
 
 Use a fresh, dedicated VPS: the installer provisions the system web/database stack and is not intended to adopt an existing production server.
 
@@ -26,6 +44,16 @@ Use a fresh, dedicated VPS: the installer provisions the system web/database sta
 - **Certbot** (Let's Encrypt) with automatic renewal
 - **UFW** firewall + **Fail2ban**
 
+## Included in v1.2.0
+
+- Site management for WordPress, PHP, Laravel, static sites, and reverse proxies
+- File manager, per-site databases and phpMyAdmin, cron jobs, and PHP tuning
+- Local site backups plus scheduled S3-compatible remote backups
+- Opt-in jailed SFTP with password or SSH-key authentication
+- Per-site Basic Auth, IP blocking, Cloudflare-only origin access, SSL controls, and cache controls
+- Admin, manager, and client panel accounts with site assignment and optional two-factor authentication
+- Service status, traffic metrics, cloud metadata, and read-only web-delivery diagnostics
+
 ## Site Isolation
 
 Each site gets a **dedicated, no-login Linux user** and its **own PHP-FPM pool** running as that user:
@@ -34,7 +62,7 @@ Each site gets a **dedicated, no-login Linux user** and its **own PHP-FPM pool**
 /home/<site-user>/htdocs/<domain>
 ```
 
-If one site's PHP is compromised, the process runs only as that site's user and cannot read other sites' files. This is per-user process/file isolation — not container-level sandboxing. SFTP/SSH login for site users is **disabled by default**.
+If one site's PHP is compromised, the process runs only as that site's user and cannot read other sites' files. This is per-user process/file isolation — not container-level sandboxing. Login is disabled by default; jailed SFTP-only access can be enabled per site without enabling an interactive SSH shell.
 
 ## Supported OS
 
@@ -58,14 +86,14 @@ Architecture: x86_64 and aarch64.
 ## CLI
 
 ```bash
-aidipanel site:add    --domain example.com --user example --type wordpress
+aidipanel site:add    --domain example.com --user example --type php
 aidipanel ssl:install --domain example.com --email admin@example.com
 aidipanel cache:purge --domain example.com
 aidipanel db:add      --name mydb --user myuser
 aidipanel service:status
 ```
 
-The default PHP version (8.4) is used when `--php` is omitted. See [docs/cli.md](docs/cli.md) for the full reference.
+WordPress creation installs WordPress, its database, and its admin account in one transaction, so it requires the WordPress setup fields documented in [Sites](docs/sites.md). The default PHP version (8.4) is used when `--php` is omitted. See [docs/cli.md](docs/cli.md) for the full reference.
 
 ## Documentation
 
@@ -75,6 +103,7 @@ The default PHP version (8.4) is used when `--php` is omitted. See [docs/cli.md]
 - [FastCGI Cache](docs/fastcgi-cache.md)
 - [SSL / TLS](docs/ssl.md)
 - [Security model](docs/security.md)
+- [Security policy](SECURITY.md)
 - [Architecture](docs/architecture.md)
 - [Roadmap](docs/roadmap.md)
 

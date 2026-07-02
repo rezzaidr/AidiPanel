@@ -12,7 +12,10 @@ Every site AidiPanel creates gets:
 - a web root at **`/home/<site-user>/htdocs/<domain>`**
 - its **own PHP-FPM pool** that runs as that user
 
-This keeps sites isolated from one another: a compromised site's PHP runs only as that site's user and cannot read other sites' files. SFTP/SSH login for site users is **disabled by default**.
+This keeps sites isolated from one another: a compromised site's PHP runs only
+as that site's user and cannot read other sites' files. Login is disabled by
+default; jailed SFTP-only access can be enabled per site with a password or SSH
+keys, while interactive SSH remains disabled.
 
 ---
 
@@ -21,7 +24,7 @@ This keeps sites isolated from one another: a compromised site's PHP runs only a
 ### Via CLI
 
 ```bash
-aidipanel site:add --domain example.com --user example --type wordpress
+sudo aidipanel site:add --domain example.com --user example --type php
 ```
 
 | Option | Default | Description |
@@ -31,12 +34,20 @@ aidipanel site:add --domain example.com --user example --type wordpress
 | `--type` | `php` | `wordpress`, `laravel`, `php`, `static`, `proxy` |
 | `--php` | `8.4` | PHP version (must be installed; see PHP management) |
 
+WordPress sites also require `--wp-title`, `--wp-admin-user`,
+`--wp-admin-pass-stdin`, and `--wp-admin-email`. Reverse proxies accept
+`--proxy-pass` (default `http://127.0.0.1:3000`).
+
 ### Via Web Panel
 
 1. Log into `https://<server-ip>:8443`
 2. Go to **Sites → Add Site**
 3. Fill in domain, site user, type, and PHP version
 4. Click **Create**
+
+The panel exposes site-specific tabs for files, databases/phpMyAdmin, backups,
+cron jobs, SFTP, SSL, security rules, cache controls, PHP settings, and the Nginx
+configuration. Access depends on the panel account's role and site assignment.
 
 ### Site Types
 
@@ -74,26 +85,27 @@ When you add `example.com` with user `example`, AidiPanel creates:
 ## Installing WordPress
 
 ```bash
-# 1. Add the site
-aidipanel site:add --domain example.com --user example --type wordpress
-
-# 2. Install SSL
-aidipanel ssl:install --domain example.com --email admin@example.com
-
-# 3. Create a database
-aidipanel db:add --name wp_example --user wp_example_user
-
-# 4. Download WordPress
-cd /home/example/htdocs/example.com
-curl -O https://wordpress.org/latest.tar.gz
-tar xzf latest.tar.gz --strip-components=1
-rm latest.tar.gz
-
-# 5. Set ownership to the site user
-chown -R example:example /home/example/htdocs/example.com
+printf '%s\n' 'StrongPassword123!' |
+sudo aidipanel site:add \
+  --domain example.com \
+  --user example \
+  --type wordpress \
+  --wp-title 'Example Site' \
+  --wp-admin-user admin \
+  --wp-admin-pass-stdin \
+  --wp-admin-email admin@example.com
 ```
 
-Then complete WordPress setup at `https://example.com`.
+This single operation creates the site user, database, encrypted database
+credential, WordPress configuration, and admin account. A failure rolls the
+half-created site back. Use `--wp-multisite subdir` for subdirectory multisite;
+wildcard subdomain multisite is not yet managed.
+
+Install a trusted certificate after DNS points to the server:
+
+```bash
+sudo aidipanel ssl:install --domain example.com --email admin@example.com
+```
 
 ---
 

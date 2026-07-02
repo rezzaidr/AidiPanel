@@ -52,8 +52,8 @@ This:
 
 ### Via Web Panel
 
-1. Go to **SSL** in the panel
-2. Select your domain
+1. Go to **Sites** and open the domain
+2. Open the **SSL** tab
 3. Enter your email
 4. Click **Install Certificate**
 
@@ -132,15 +132,26 @@ Before you have a domain pointing to your server, AidiPanel uses a **self-signed
 /etc/ssl/aidipanel/aidipanel.key
 ```
 
-This is **only for the panel UI** on port 8443. Your user sites should use Let's Encrypt.
+The panel uses this certificate on port 8443, and new site vhosts use it as a
+temporary fallback until a trusted certificate is installed. It is not intended
+as the final public certificate for user sites.
 
 Your browser will show a warning for self-signed certs — this is expected. Click "Advanced" → "Proceed" to access the panel.
 
 ---
 
-## HTTPS Redirect
+## HTTPS Redirect and HSTS
 
-AidiPanel vhosts automatically redirect HTTP → HTTPS:
+New sites initially serve HTTP and use a self-signed HTTPS certificate so DNS
+and content can be prepared without forcing visitors through a certificate
+warning. After installing a trusted certificate, enable **Force HTTPS** from the
+site's SSL tab or CLI:
+
+```bash
+aidipanel ssl:force-https --domain example.com --action on
+```
+
+The resulting HTTP redirect is:
 
 ```nginx
 server {
@@ -150,11 +161,18 @@ server {
 }
 ```
 
+HSTS is also off by default. Enable it only after HTTPS is trusted and stable:
+
+```bash
+aidipanel ssl:hsts --domain example.com --action on
+```
+
 ---
 
 ## SSL Security Configuration
 
-AidiPanel configures strong SSL defaults:
+AidiPanel configures TLS 1.2/1.3, OCSP stapling, and common security headers.
+HSTS is shown below as an optional line rather than a new-site default:
 
 ```nginx
 ssl_protocols       TLSv1.2 TLSv1.3;
@@ -166,10 +184,13 @@ ssl_session_timeout 1d;
 ssl_stapling        on;
 ssl_stapling_verify on;
 
+# Optional after a trusted certificate is active:
 add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
 ```
 
-This configuration scores **A+** on [SSL Labs](https://www.ssllabs.com/ssltest/).
+TLS results depend on the active certificate, DNS, Nginx build, and any manual
+vhost changes. Validate public sites with a current external TLS scanner rather
+than relying on a fixed grade claim.
 
 ---
 

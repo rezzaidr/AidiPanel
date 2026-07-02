@@ -14,9 +14,35 @@
 > PHP-FPM, database, Redis, firewall defaults, and service configuration; it is
 > not an in-place importer for an existing production web stack.
 
+Before installing AidiPanel, update and upgrade the fresh base system:
+
+```bash
+sudo apt update
+sudo apt upgrade -y
+```
+
+Wait for both commands to finish successfully. If
+`/var/run/reboot-required` exists afterward, run `sudo reboot`, reconnect to the
+server, and continue only after the reboot completes.
+
 ---
 
-## Verified Release Install
+## Quick Install
+
+On a fresh VPS:
+
+```bash
+curl -fsSL https://get.aidipanel.com | sudo bash
+```
+
+`get.aidipanel.com` redirects to the installer from the latest stable GitHub
+release. To pass installer options through the pipe, use `bash -s --`:
+
+```bash
+curl -fsSL https://get.aidipanel.com | sudo bash -s -- --db-engine mysql84 --port 9443
+```
+
+## Verify Before Running (recommended)
 
 ```bash
 curl -fLO https://github.com/rezzaidr/AidiPanel/releases/latest/download/install-aidipanel.sh
@@ -41,13 +67,13 @@ At the end, it prints a **random panel password**. Save it — it is also writte
 
 ---
 
-## Install from a Release Archive
+## Install from a Source Archive
 
-If you downloaded a release archive:
+If you downloaded the GitHub source archive for a tagged release:
 
 ```bash
-unzip aidipanel-<version>.zip
-cd aidipanel-<version>
+unzip AidiPanel-<version>.zip
+cd AidiPanel-<version>
 sudo bash install.sh
 ```
 
@@ -58,7 +84,7 @@ The installer detects and deploys the `panel-app/` directory alongside it.
 ## Options
 
 ```bash
-bash install.sh [OPTIONS]
+sudo bash install.sh [OPTIONS]
 
   --port PORT           Panel HTTPS port (default: 8443)
   --db-engine ENGINE    Database engine (default: mariadb1011)
@@ -71,13 +97,13 @@ bash install.sh [OPTIONS]
 
 ```bash
 # Custom panel port
-bash install.sh --port 9443
+sudo bash install.sh --port 9443
 
 # MySQL 8.4 instead of MariaDB
-bash install.sh --db-engine mysql84
+sudo bash install.sh --db-engine mysql84
 
 # Without Redis
-bash install.sh --no-redis
+sudo bash install.sh --no-redis
 ```
 
 ---
@@ -107,26 +133,40 @@ Login with `admin` and the random password shown at the end of the install.
 ### 2. Add your first site
 
 ```bash
-aidipanel site:add --domain example.com --user example --type wordpress
+sudo aidipanel site:add --domain example.com --user example --type php
 ```
 
-This creates a dedicated Linux user `example`, the web root at `/home/example/htdocs/example.com`, and a PHP-FPM pool running as that user. PHP defaults to 8.4 — pass `--php 8.3` to choose another installed version.
+This creates a dedicated Linux user `example`, the web root at
+`/home/example/htdocs/example.com`, and a PHP-FPM pool running as that user.
+PHP defaults to 8.4; pass `--php 8.3` to choose another installed version.
+
+For WordPress, the web panel provides the simplest setup form. The equivalent
+CLI flow installs WordPress, its database, and its admin account together:
+
+```bash
+printf '%s\n' 'StrongPassword123!' |
+sudo aidipanel site:add \
+  --domain blog.example.com \
+  --user blog \
+  --type wordpress \
+  --wp-title 'Example Blog' \
+  --wp-admin-user admin \
+  --wp-admin-pass-stdin \
+  --wp-admin-email admin@example.com
+```
+
+Use a unique password and avoid a literal `--wp-admin-pass` on a shared shell
+because it can be retained in shell history. Subdirectory multisite is available
+with `--wp-multisite subdir`; wildcard subdomain multisite is not yet managed.
 
 ### 3. Install SSL
 
 ```bash
-aidipanel ssl:install --domain example.com --email admin@example.com
+sudo aidipanel ssl:install --domain example.com --email admin@example.com
 ```
 
-### 4. Deploy WordPress
-
-```bash
-cd /home/example/htdocs/example.com
-curl -O https://wordpress.org/latest.tar.gz
-tar xzf latest.tar.gz --strip-components=1
-rm latest.tar.gz
-chown -R example:example .
-```
+Once a trusted certificate is active, enable force HTTPS and HSTS from the
+site's SSL tab when appropriate.
 
 ---
 
@@ -156,6 +196,21 @@ sudo cat /opt/aidipanel/credentials.conf
 ```
 
 Keep this file secure — it contains the database root password and panel admin password.
+
+---
+
+## Updating an Existing Installation
+
+Do not run the installer again on an installed server; it refuses to overwrite
+an existing panel. Use the verified updater instead:
+
+```bash
+sudo aidipanel self:update
+```
+
+The updater downloads matching CLI and panel release assets, verifies them
+against `SHA256SUMS`, and preserves panel users, passwords, sites, databases,
+configuration, and runtime storage.
 
 ---
 

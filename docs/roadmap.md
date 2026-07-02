@@ -14,21 +14,26 @@ This roadmap is indicative and may change. It describes direction, not commitmen
 - Let's Encrypt SSL with auto-renewal
 - CLI + web panel management
 - Guarded site delete (validated by an ownership marker)
+- File manager with chunked uploads, archive operations, and safe path containment
+- Per-site database and database-user management with isolated phpMyAdmin sign-on
+- Local site backups and scheduled S3-compatible remote backups
+- Per-site cron jobs and a WordPress real-cron preset
+- Opt-in jailed SFTP with passwords and managed SSH keys
+- Per-site PHP version and runtime setting controls
+- Basic Auth, IP blocking, Cloudflare-only origin access, and Cloudflare real-IP restoration
+- Panel custom domain and trusted TLS certificate management
+- Admin, manager, and client accounts with site assignment
+- Two-factor authentication and recovery codes for panel accounts
+- Service health, traffic history, cloud metadata, and web-delivery diagnostics
 
 ## Planned
 
-- **Per-site SFTP/SSH access** (opt-in, key-managed) — disabled by default today
-- **File manager** in the panel
-- **Backups** (site files + databases) with scheduling
-- **Database tab** in the panel
-- **Live health checks** for pools, sockets, and services
-- **Two-factor authentication** for panel login
 - Additional performance options (e.g. HTTP/3, Brotli) under evaluation
 
 ## Under consideration
 
-- Per-site PHP `.ini` overrides from the panel
 - Additional database engines / versions
 - Multi-server / multi-node management
+- Notifications and external monitoring integrations
 
 Suggestions are welcome through the repository's issue tracker.
