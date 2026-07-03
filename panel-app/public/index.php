@@ -88,6 +88,7 @@ $router->post('/sites/{domain}/php', 'SiteController@changePhp');
 $router->post('/sites/{domain}/php-settings', 'SiteController@phpSettings');
 $router->get('/sites/{domain}/nginx','SiteController@nginxEditor');
 $router->post('/sites/{domain}/nginx','SiteController@saveNginx');
+$router->post('/sites/{domain}/proxy','SiteController@updateProxy');
 $router->post('/sites/{domain}/ssl/install', 'SiteSslController@install');
 $router->post('/sites/{domain}/ssl/renew',   'SiteSslController@renew');
 $router->post('/sites/{domain}/ssl/import',  'SiteSslController@import');

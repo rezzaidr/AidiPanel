@@ -48,24 +48,31 @@ $cloudflareOnlyInfo = $cloudflareOnlyInfo ?? [];
 $cfoEnabled = ($cloudflareOnlyInfo['enabled'] ?? '0') === '1';
 $cfoError = (string) ($cloudflareOnlyInfo['error'] ?? '');
 
-$appIcon = static function (string $type): string {
-    return match ($type) {
+$appIcon = static function (string $kind): string {
+    return match ($kind) {
         'wordpress' => 'ti-brand-wordpress',
         'laravel'   => 'ti-code',
+        'nodejs'    => 'ti-brand-nodejs',
+        'python'    => 'ti-brand-python',
         'proxy'     => 'ti-arrow-guide',
         'static'    => 'ti-file-text',
         default     => 'ti-code',
     };
 };
-$appLabel = static function (string $type): string {
-    return match ($type) {
+$appLabel = static function (string $kind): string {
+    return match ($kind) {
         'wordpress' => t('app.wordpress'),
         'laravel'   => t('app.laravel'),
+        'nodejs'    => t('app.nodejs'),
+        'python'    => t('app.python'),
         'static'    => t('app.static'),
         'proxy'     => t('app.proxy'),
         default     => t('app.php'),
     };
 };
+// Node/Python reverse-proxy sites carry an app_flavor; show that identity
+// instead of the raw "proxy" type across this page.
+$appKind = ($site['app_flavor'] ?? '') ?: $type;
 
 $tabs = [
     'overview'    => ['icon' => 'ti-layout-grid',  'label' => t('site.tab.overview')],
@@ -94,7 +101,7 @@ $tabs = [
           <?= icon('arrow-left') ?>
         </a>
         <span class="w-10 h-10 rounded-lg <?= $iconBg ?> flex items-center justify-center shrink-0">
-          <?= icon($appIcon($type), $iconColor . ' text-xl') ?>
+          <?= icon($appIcon($appKind), $iconColor . ' text-xl') ?>
         </span>
         <div>
           <div class="flex items-center gap-2">
@@ -106,7 +113,7 @@ $tabs = [
             </span>
           </div>
           <p class="text-xs text-zinc-400 mt-1.5">
-            <?= e($appLabel($type)) ?>
+            <?= e($appLabel($appKind)) ?>
             <?php if ($phpVer && $type !== 'static' && $type !== 'proxy'): ?>
               · <span class="mono">PHP <?= e($phpVer) ?></span>
             <?php endif; ?>
@@ -216,7 +223,7 @@ $tabs = [
           </div>
           <div>
             <p class="eyebrow mb-1"><?= e(t('site.detail.app_type')) ?></p>
-            <p class="text-sm text-zinc-800"><?= e($appLabel($type)) ?></p>
+            <p class="text-sm text-zinc-800"><?= e($appLabel($appKind)) ?></p>
           </div>
           <?php if ($phpVer && $type !== 'static' && $type !== 'proxy'): ?>
           <div>
@@ -249,6 +256,28 @@ $tabs = [
           <?php endif; ?>
         </div>
       </div>
+
+      <?php if ($type === 'proxy'): ?>
+      <!-- reverse proxy upstream -->
+      <div class="card p-5">
+        <div class="flex items-center gap-2 mb-1">
+          <?= icon('arrow-guide', 'text-ink text-base') ?>
+          <h2 class="font-head font-semibold text-sm text-zinc-900"><?= e(t('site.proxy.title')) ?></h2>
+        </div>
+        <p class="text-xs text-zinc-400 mb-4 leading-relaxed"><?= e(t('site.proxy.hint')) ?></p>
+        <form method="POST" action="/sites/<?= e($domain) ?>/proxy" class="flex flex-col sm:flex-row gap-2 sm:items-end">
+          <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token) ?>">
+          <div class="flex-1">
+            <label class="lbl"><?= e(t('site.proxy.upstream')) ?></label>
+            <input type="text" name="proxy_pass" value="<?= e($proxyUpstream) ?>" class="inp mono"
+                   autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:3000" required>
+          </div>
+          <button type="submit" class="btn btn-primary shrink-0">
+            <?= icon('device-floppy', 'text-sm') ?> <?= e(t('common.save')) ?>
+          </button>
+        </form>
+      </div>
+      <?php endif; ?>
 
       <!-- recent activity -->
       <div class="card overflow-hidden">

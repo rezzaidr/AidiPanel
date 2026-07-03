@@ -327,6 +327,8 @@ return [
     'app.php'               => 'PHP',
     'app.static'            => 'Static',
     'app.proxy'             => 'Reverse Proxy',
+    'app.nodejs'            => 'Node.js',
+    'app.python'            => 'Python',
 
     // Sites snapshot (dashboard)
     'dash.sites'            => 'Sites',
@@ -850,11 +852,11 @@ return [
     'site.add.proxy.title'   => 'Add Reverse Proxy',
     'site.add.proxy.desc'    => 'Forwards traffic to an app already running on a port.',
     'site.add.node.title'    => 'Add Node.js Site',
-    'site.add.node.desc'     => 'Preview — provisioning lands in a later phase.',
+    'site.add.node.desc'     => 'Reverse-proxy your domain to a Node.js app you run.',
     'site.add.python.title'  => 'Add Python Site',
-    'site.add.python.desc'   => 'Preview — provisioning lands in a later phase.',
-    'site.add.node.banner'   => "Node.js hosting needs a runtime + process manager on the server. The form below previews the fields; it can't create a site yet.",
-    'site.add.python.banner' => "Python hosting needs a runtime + WSGI/ASGI process manager. The form below previews the fields; it can't create a site yet.",
+    'site.add.python.desc'   => 'Reverse-proxy your domain to a Python app you run.',
+    'site.add.node.banner'   => 'AidiPanel points your domain — with SSL and an isolated user — at a Node.js app you run on the local port below. You start and keep that app alive yourself (a systemd service or pm2); automated runtime management comes later. The docs include a ready-to-run example.',
+    'site.add.python.banner' => 'AidiPanel points your domain — with SSL and an isolated user — at a Python app (Flask, Django, FastAPI…) you run on the local port below. You start and keep that app alive yourself (a systemd service or Gunicorn); automated runtime management comes later. The docs include a ready-to-run example.',
     'site.add.python.docs'   => 'Need another version? Check the docs.',
 
     // Add Site wizard — shared field labels
@@ -868,6 +870,9 @@ return [
     'site.detail.site_user'     => 'Site User',
     'site.detail.fpm_socket'    => 'PHP-FPM',
     'site.detail.no_login'      => 'no-login · SFTP disabled',
+    'site.proxy.title'          => 'Reverse Proxy',
+    'site.proxy.upstream'       => 'Upstream Address',
+    'site.proxy.hint'           => 'AidiPanel forwards this domain to the address below. Your app must be listening there — keep it running yourself (a systemd service or pm2). See the docs for a ready-to-run example.',
     'site.add.f.site_user_pass' => 'Site User Password',
     'site.add.f.admin_user'     => 'Admin Username',
     'site.add.f.admin_pass'     => 'Admin Password',
@@ -877,6 +882,7 @@ return [
     'site.add.f.node_version'   => 'Node.js Version',
     'site.add.f.python_version' => 'Python Version',
     'site.add.f.app_port'       => 'App Port',
+    'site.add.f.app_port_note'  => 'The local port your app listens on — AidiPanel proxies your domain to 127.0.0.1 on this port.',
     'common.cancel'         => 'Cancel',
     'common.save'           => 'Save',
     'common.delete'         => 'Delete',

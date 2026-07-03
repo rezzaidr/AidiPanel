@@ -61,6 +61,78 @@ configuration. Access depends on the panel account's role and site assignment.
 
 ---
 
+## Hosting a Node.js or Python App
+
+Node.js and Python sites are served as **reverse proxies**: AidiPanel terminates
+TLS and forwards the domain to an app you run locally on a port. The panel gives
+the site its own Linux user, SSL, and the usual per-site tabs (files, SFTP, logs,
+…); you provide the running process.
+
+> AidiPanel does not manage the runtime or keep the process alive yet — you start
+> the app and supervise it (a `systemd` service, or a manager such as `pm2`).
+> Automated runtime management is planned for a later release.
+
+**1. Create the site.** In **Sites → Add Site**, choose **Node.js** or **Python**,
+enter the domain and the local **App Port** your app listens on (e.g. `3000`).
+AidiPanel proxies the domain to `http://127.0.0.1:<port>`.
+
+**2. Upload your app** to `/home/<user>/htdocs/<domain>/` (Files tab or SFTP).
+
+**3. Run it as the site user, bound to loopback.** A minimal example:
+
+```js
+// server.js — Node.js, zero dependencies
+const http = require('http');
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Hello from Node behind AidiPanel\n');
+}).listen(3000, '127.0.0.1');
+```
+
+```python
+# app.py — Python, standard library only
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b'Hello from Python behind AidiPanel\n')
+HTTPServer(('127.0.0.1', 8090), H).serve_forever()
+```
+
+**4. Keep it running** with a `systemd` unit so it survives reboots and crashes.
+Save as `/etc/systemd/system/myapp.service` (adjust user, path, and command):
+
+```ini
+[Unit]
+Description=My app for example.com
+After=network.target
+
+[Service]
+User=example
+WorkingDirectory=/home/example/htdocs/example.com
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now myapp
+```
+
+For Python, point `ExecStart` at `python3 app.py` — or a Gunicorn/Uvicorn command
+for Flask, Django, or FastAPI. Always bind the app to `127.0.0.1` and the same
+port you set in the panel.
+
+**Changing the port later:** open the site's **Overview** tab and edit the
+**Upstream Address** — AidiPanel re-points the proxy and reloads Nginx.
+
+---
+
 ## Directory Structure
 
 When you add `example.com` with user `example`, AidiPanel creates:

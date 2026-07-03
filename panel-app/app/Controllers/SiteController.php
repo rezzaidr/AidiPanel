@@ -56,6 +56,17 @@ class SiteController extends BaseController
         $phpVer    = (string) $this->request->post('php_version', php_policy()['default']);
         $proxyPass = (string) $this->request->post('proxy_pass', 'http://127.0.0.1:3000');
         $siteUser  = strtolower(trim((string) $this->request->post('site_user', '')));
+        $appPort   = trim((string) $this->request->post('app_port', ''));
+
+        // Node/Python cards submit type=proxy plus a local port instead of a full
+        // upstream URL. Lock the upstream to loopback so it can never be pointed at
+        // an arbitrary host, then let the shared proxy validation below re-check it.
+        if ($type === 'proxy' && $appPort !== '') {
+            if (!preg_match('/^\d{1,5}$/', $appPort) || (int) $appPort < 1 || (int) $appPort > 65535) {
+                $this->error('Invalid application port: use a number between 1 and 65535.');
+            }
+            $proxyPass = 'http://127.0.0.1:' . (int) $appPort;
+        }
 
         // WordPress provisioning fields (only read/validated for --type wordpress).
         $wpTitle = trim((string) $this->request->post('site_title', ''));
@@ -178,6 +189,13 @@ class SiteController extends BaseController
         $this->syncOneSite($domain, $type, $phpVer);
         \Core\DB::log('site:add', "Added site: {$domain} ({$type}, PHP {$phpVer})");
 
+        // Tag Node/Python reverse-proxy sites with their flavor for a first-class
+        // identity in the UI (the vhost itself is a plain reverse proxy).
+        $appFlavor = (string) $this->request->post('app_flavor', '');
+        if ($type === 'proxy' && in_array($appFlavor, ['nodejs', 'python'], true)) {
+            $this->db->run('UPDATE sites SET app_flavor = ? WHERE domain = ?', [$appFlavor, $domain]);
+        }
+
         if ($type === 'wordpress') {
             $kv       = parse_kv_output($result['output']);
             $adminUrl = $kv['admin_url'] ?? "https://{$domain}/wp-admin";
@@ -201,6 +219,18 @@ class SiteController extends BaseController
         $phpVer    = (string) $this->request->post('php_version', php_policy()['default']);
         $proxyPass = (string) $this->request->post('proxy_pass', 'http://127.0.0.1:3000');
         $siteUser  = strtolower(trim((string) $this->request->post('site_user', '')));
+        $appPort   = trim((string) $this->request->post('app_port', ''));
+
+        // Node/Python cards submit a local port; lock the upstream to loopback.
+        // (Mirror add(); the CLI re-validates the resulting URL as the real gate.)
+        if ($type === 'proxy' && $appPort !== '') {
+            if (!preg_match('/^\d{1,5}$/', $appPort) || (int) $appPort < 1 || (int) $appPort > 65535) {
+                stream_send(['t' => 'done', 'ok' => false,
+                             'message' => 'Invalid application port: use a number between 1 and 65535.']);
+                exit;
+            }
+            $proxyPass = 'http://127.0.0.1:' . (int) $appPort;
+        }
 
         $args = ['--domain', $domain, '--type', $type, '--php', $phpVer];
         $wpSecret = '';
@@ -241,6 +271,11 @@ class SiteController extends BaseController
         // Persist to the panel DB, exactly like add().
         $this->syncOneSite($domain, $type, $phpVer);
         \Core\DB::log('site:add', "Added site: {$domain} ({$type}, PHP {$phpVer})");
+
+        $appFlavor = (string) $this->request->post('app_flavor', '');
+        if ($type === 'proxy' && in_array($appFlavor, ['nodejs', 'python'], true)) {
+            $this->db->run('UPDATE sites SET app_flavor = ? WHERE domain = ?', [$appFlavor, $domain]);
+        }
 
         $kv      = parse_kv_output($result['output']);
         $message = $type === 'wordpress'
@@ -492,6 +527,12 @@ class SiteController extends BaseController
         // hasCache is still needed for the Overview tab cache card (cheap DB read)
         $hasCache = (bool) ($site['cache_enabled'] ?? false);
 
+        // Reverse-proxy upstream, parsed from the vhost — powers the Overview edit card.
+        $proxyUpstream = '';
+        if ($type === 'proxy' && preg_match('/proxy_pass\s+(\S+);/', $nginxConf, $m)) {
+            $proxyUpstream = $m[1];
+        }
+
         $this->view('sites/detail', compact(
             'site', 'nginxConf', 'ssl', 'sslExpiry', 'sslDaysLeft',
             'logs', 'activeTab', 'diskSize', 'hasCache',
@@ -500,7 +541,7 @@ class SiteController extends BaseController
             'databases', 'dbUsers', 'dbHost', 'dbPort', 'dbPrefix', 'pmaInstalled', 'pmaUrl', 'wpDbInfo',
             'basicAuthInfo', 'cloudflareInfo', 'ipBlockInfo', 'ipBlockList', 'cloudflareOnlyInfo',
             'cronJobs', 'cronManualCount',
-            'backupEntries'
+            'backupEntries', 'proxyUpstream'
         ) + ['_full_bleed' => true]);
     }
 
@@ -761,6 +802,77 @@ class SiteController extends BaseController
         $this->success('Nginx configuration saved and reloaded.', "/sites/{$domain}?tab=settings");
     }
 
+    /**
+     * Update the upstream of a reverse-proxy site. Accepts a bare local port
+     * (Node/Python style, locked to loopback) or a full URL, rewrites every
+     * proxy_pass line in the vhost, and applies it through vhost:save (which
+     * runs nginx -t first, so a bad value can never break the server).
+     */
+    public function updateProxy(array $params = []): void
+    {
+        $domain = $params['domain'] ?? '';
+        $site   = $this->db->row('SELECT * FROM sites WHERE domain = ?', [$domain]);
+
+        if (!$site || !is_valid_domain($domain)) {
+            $this->error("Site not found: {$domain}");
+        }
+        if (($site['type'] ?? '') !== 'proxy') {
+            $this->error('This site is not a reverse proxy.');
+        }
+
+        $appPort   = trim((string) $this->request->post('app_port', ''));
+        $proxyPass = trim((string) $this->request->post('proxy_pass', ''));
+        if ($appPort !== '') {
+            if (!preg_match('/^\d{1,5}$/', $appPort) || (int) $appPort < 1 || (int) $appPort > 65535) {
+                $this->error('Invalid application port: use a number between 1 and 65535.');
+            }
+            $proxyPass = 'http://127.0.0.1:' . (int) $appPort;
+        }
+        if (!is_valid_proxy_url($proxyPass)) {
+            $this->error('Invalid reverse proxy URL.');
+        }
+
+        $confFile = "/etc/nginx/sites-available/{$domain}.conf";
+        if (!is_readable($confFile)) {
+            $this->error("Nginx config not found for: {$domain}");
+        }
+        $content = (string) file_get_contents($confFile);
+
+        // A proxy vhost can serve on both :80 and :443, each with its own
+        // `location /` proxy_pass — rewrite them all so they stay identical.
+        // A callback keeps the URL from being read as a regex backreference.
+        $new = preg_replace_callback(
+            '/proxy_pass\s+\S+;/',
+            fn() => 'proxy_pass         ' . $proxyPass . ';',
+            $content,
+            -1,
+            $count
+        );
+        if ($new === null || $count === 0) {
+            $this->error('Could not find the upstream directive in the vhost.');
+        }
+
+        $tmpDir = STORAGE_ROOT . '/tmp/vhost';
+        if (!is_dir($tmpDir)) {
+            @mkdir($tmpDir, 0770, true);
+        }
+        $tmpFile = tempnam($tmpDir, $domain . '.');
+        if ($tmpFile === false || file_put_contents($tmpFile, $new) === false) {
+            $this->error('Could not write temporary Nginx config.');
+        }
+        @chmod($tmpFile, 0640);
+
+        $result = run_cli('vhost:save', ['--domain', $domain, '--file', $tmpFile]);
+        @unlink($tmpFile);
+
+        if (!$result['success']) {
+            $this->error('Nginx config test failed: ' . $result['output']);
+        }
+
+        \Core\DB::log('site:proxy', "Updated upstream for {$domain} -> {$proxyPass}");
+        $this->success("Upstream updated to {$proxyPass}.", "/sites/{$domain}");
+    }
+
     /** Decode a --json CLI result into an array, isolating the JSON in case of stray output. */
     private function decodeCliJson(array $result): array
     {
@@ -812,9 +924,9 @@ class SiteController extends BaseController
         return [
             ['slug' => 'wordpress',     'icon' => 'ti-brand-wordpress', 'title' => 'site.add.card.wp.title',     'desc' => 'site.add.card.wp.desc',     'soon' => false],
             ['slug' => 'php',           'icon' => 'ti-brand-php',       'title' => 'site.add.card.php.title',    'desc' => 'site.add.card.php.desc',    'soon' => false],
-            ['slug' => 'nodejs',        'icon' => 'ti-brand-nodejs',    'title' => 'site.add.card.node.title',   'desc' => 'site.add.card.node.desc',   'soon' => true],
+            ['slug' => 'nodejs',        'icon' => 'ti-brand-nodejs',    'title' => 'site.add.card.node.title',   'desc' => 'site.add.card.node.desc',   'soon' => false],
             ['slug' => 'static',        'icon' => 'ti-file-text',       'title' => 'site.add.card.static.title', 'desc' => 'site.add.card.static.desc', 'soon' => false],
-            ['slug' => 'python',        'icon' => 'ti-brand-python',    'title' => 'site.add.card.python.title', 'desc' => 'site.add.card.python.desc', 'soon' => true],
+            ['slug' => 'python',        'icon' => 'ti-brand-python',    'title' => 'site.add.card.python.title', 'desc' => 'site.add.card.python.desc', 'soon' => false],
             ['slug' => 'reverse-proxy', 'icon' => 'ti-arrow-guide',     'title' => 'site.add.card.proxy.title',  'desc' => 'site.add.card.proxy.desc',  'soon' => false],
         ];
     }
@@ -900,25 +1012,28 @@ class SiteController extends BaseController
                     $userField,
                 ],
             ],
+            // Node/Python are served as reverse-proxy sites: the panel proxies the
+            // domain (with SSL + isolated user) to the app the user runs on a local
+            // port. It does NOT manage the runtime/process yet — the banner says so.
+            // `type => 'proxy'` so create() takes the proxy path; app_port becomes
+            // http://127.0.0.1:<port>.
             'nodejs' => [
-                'type' => null, 'icon' => 'ti-brand-nodejs',
-                'title' => 'site.add.node.title', 'desc' => 'site.add.node.desc', 'creatable' => false,
+                'type' => 'proxy', 'app_flavor' => 'nodejs', 'icon' => 'ti-brand-nodejs',
+                'title' => 'site.add.node.title', 'desc' => 'site.add.node.desc', 'creatable' => true,
                 'banner' => 'site.add.node.banner',
                 'fields' => [
-                    ['key' => 'domain',       'label' => 'site.add.f.domain',       'input' => 'text',   'required' => true,  'enabled' => false, 'placeholder' => 'example.com'],
-                    ['key' => 'node_version', 'label' => 'site.add.f.node_version', 'input' => 'select', 'required' => false, 'enabled' => false, 'options' => ['Node 22 LTS', 'Node 20 LTS', 'Node 18 LTS', 'Node 16 LTS']],
-                    ['key' => 'app_port',     'label' => 'site.add.f.app_port',     'input' => 'text',   'required' => true,  'enabled' => false, 'placeholder' => '3000'],
+                    ['key' => 'domain',   'label' => 'site.add.f.domain',   'input' => 'text', 'required' => true, 'enabled' => true, 'placeholder' => 'example.com'],
+                    ['key' => 'app_port', 'label' => 'site.add.f.app_port', 'input' => 'text', 'required' => true, 'enabled' => true, 'mono' => true, 'value' => '3000', 'note' => 'site.add.f.app_port_note'],
                     $userField,
                 ],
             ],
             'python' => [
-                'type' => null, 'icon' => 'ti-brand-python',
-                'title' => 'site.add.python.title', 'desc' => 'site.add.python.desc', 'creatable' => false,
+                'type' => 'proxy', 'app_flavor' => 'python', 'icon' => 'ti-brand-python',
+                'title' => 'site.add.python.title', 'desc' => 'site.add.python.desc', 'creatable' => true,
                 'banner' => 'site.add.python.banner',
                 'fields' => [
-                    ['key' => 'domain',         'label' => 'site.add.f.domain',         'input' => 'text',   'required' => true,  'enabled' => false, 'placeholder' => 'example.com'],
-                    ['key' => 'python_version', 'label' => 'site.add.f.python_version', 'input' => 'select', 'required' => false, 'enabled' => false, 'options' => ['Python 3.12'], 'note' => 'site.add.python.docs'],
-                    ['key' => 'app_port',       'label' => 'site.add.f.app_port',       'input' => 'text',   'required' => true,  'enabled' => false, 'value' => '8090'],
+                    ['key' => 'domain',   'label' => 'site.add.f.domain',   'input' => 'text', 'required' => true, 'enabled' => true, 'placeholder' => 'example.com'],
+                    ['key' => 'app_port', 'label' => 'site.add.f.app_port', 'input' => 'text', 'required' => true, 'enabled' => true, 'mono' => true, 'value' => '8090', 'note' => 'site.add.f.app_port_note'],
                     $userField,
                 ],
             ],

@@ -273,6 +273,7 @@ select.inp {
 .tbl td            { padding: .875rem .75rem; vertical-align: middle; }
 /* Center a header/cell without an inline style (beats `.tbl thead th { text-align:left }`). */
 .tbl .th-center    { text-align: center; }
+.tbl .th-right     { text-align: right; }
 
 /* --- Live status dot (server badge, "online") ---------------------------- */
 .pulse { position: relative; display: inline-flex; height: .5rem; width: .5rem; }

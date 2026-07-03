@@ -119,6 +119,9 @@ $renderField = function (array $f): void {
       <?php if ($creatable && !$hasApp): ?>
         <input type="hidden" name="type" value="<?= e($form['type']) ?>">
       <?php endif; ?>
+      <?php if (!empty($form['app_flavor'])): ?>
+        <input type="hidden" name="app_flavor" value="<?= e($form['app_flavor']) ?>">
+      <?php endif; ?>
 
       <div data-op-fields>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">

@@ -2,19 +2,23 @@
 $pageTitle = t('nav.sites');
 $count     = count($sites);
 
-$appIcon = static function (string $type): string {
-    return match ($type) {
+$appIcon = static function (string $kind): string {
+    return match ($kind) {
         'wordpress' => 'ti-brand-wordpress',
         'laravel'   => 'ti-code',
+        'nodejs'    => 'ti-brand-nodejs',
+        'python'    => 'ti-brand-python',
         'proxy'     => 'ti-arrow-guide',
         'static'    => 'ti-file-text',
         default     => 'ti-code',
     };
 };
-$appLabel = static function (string $type): string {
-    return match ($type) {
+$appLabel = static function (string $kind): string {
+    return match ($kind) {
         'wordpress' => t('app.wordpress'),
         'laravel'   => t('app.laravel'),
+        'nodejs'    => t('app.nodejs'),
+        'python'    => t('app.python'),
         'static'    => t('app.static'),
         'proxy'     => t('app.proxy'),
         default     => t('app.php'),
@@ -67,6 +71,8 @@ $usesPhp = static function (string $type): bool {
     <option value="laravel"><?= e(t('app.laravel')) ?></option>
     <option value="php"><?= e(t('app.php')) ?></option>
     <option value="static"><?= e(t('app.static')) ?></option>
+    <option value="nodejs"><?= e(t('app.nodejs')) ?></option>
+    <option value="python"><?= e(t('app.python')) ?></option>
     <option value="proxy"><?= e(t('app.proxy')) ?></option>
   </select>
 </div>
@@ -78,12 +84,13 @@ $usesPhp = static function (string $type): bool {
       <tr>
         <th><?= e(t('col.domain')) ?></th>
         <th><?= e(t('col.app')) ?></th>
-        <th class="text-right"><?= e(t('col.action')) ?></th>
+        <th class="th-right"><?= e(t('col.action')) ?></th>
       </tr>
     </thead>
     <tbody>
     <?php foreach ($sites as $site):
         $type       = $site['type'] ?? 'php';
+        $appKind    = ($site['app_flavor'] ?? '') ?: $type;   // Node/Python identity over the raw proxy type
         $domain     = $site['domain'];
         $isStatic   = $type === 'static';
         $iconBg     = $isStatic ? 'bg-zinc-100' : 'bg-ink-pale';
@@ -94,11 +101,11 @@ $usesPhp = static function (string $type): bool {
         $createdAt  = $site['created_at'] ?? '';
         $createdFmt = $createdAt ? date('M j, Y', strtotime($createdAt)) : '';
     ?>
-      <tr data-domain="<?= e($domain) ?>" data-type="<?= e($type) ?>">
+      <tr data-domain="<?= e($domain) ?>" data-type="<?= e($appKind) ?>">
         <td class="px-5 py-3.5">
           <div class="flex items-center gap-3">
             <span class="w-8 h-8 rounded-lg <?= $iconBg ?> flex items-center justify-center shrink-0">
-              <?= icon($appIcon($type), $iconColor) ?>
+              <?= icon($appIcon($appKind), $iconColor) ?>
             </span>
             <div>
               <div class="font-medium flex items-center gap-1.5">
@@ -117,7 +124,7 @@ $usesPhp = static function (string $type): bool {
           </div>
         </td>
         <td class="px-3 py-3.5">
-          <span class="text-xs text-zinc-700"><?= e($appLabel($type)) ?></span>
+          <span class="text-xs text-zinc-700"><?= e($appLabel($appKind)) ?></span>
           <?php if ($phpVer && $usesPhp($type)): ?>
             <span class="mono text-[11px] text-zinc-400">· PHP <?= e($phpVer) ?></span>
           <?php endif; ?>

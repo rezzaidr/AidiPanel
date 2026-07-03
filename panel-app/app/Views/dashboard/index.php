@@ -308,19 +308,19 @@ $range = $history['range'] ?? '1h';
             <th><?= e(t('col.app')) ?></th>
             <th><?= e(t('col.ssl')) ?></th>
             <th><?= e(t('col.requests')) ?></th>
-            <th class="text-right"><?= e(t('col.action')) ?></th>
+            <th class="th-right"><?= e(t('col.action')) ?></th>
           </tr>
         </thead>
         <tbody>
-          <?php foreach ($sites as $site): ?>
+          <?php foreach ($sites as $site): $appKind = ($site['app_flavor'] ?? '') ?: (string) $site['type']; ?>
           <tr>
             <td>
               <a href="/sites/<?= e($site['domain']) ?>" class="flex items-center gap-2.5 font-medium text-zinc-900 hover:text-ink">
-                <span class="w-8 h-8 rounded-lg bg-ink-pale flex items-center justify-center shrink-0"><?= icon($appIcon($site['type']), 'text-ink') ?></span>
+                <span class="w-8 h-8 rounded-lg bg-ink-pale flex items-center justify-center shrink-0"><?= icon($appIcon($appKind), 'text-ink') ?></span>
                 <?= e($site['domain']) ?>
               </a>
             </td>
-            <td><span class="text-xs text-zinc-700"><?= e(ucfirst($site['type'])) ?></span> <span class="mono text-[11px] text-zinc-400">· PHP <?= e($site['php_version']) ?></span></td>
+            <td><span class="text-xs text-zinc-700"><?= e(t('app.' . $appKind)) ?></span><?php if (in_array($appKind, ['wordpress', 'laravel', 'php'], true)): ?> <span class="mono text-[11px] text-zinc-400">· PHP <?= e($site['php_version']) ?></span><?php endif; ?></td>
             <td>
               <?php if (($site['ssl_type'] ?? '') === 'letsencrypt'): ?>
                 <span class="badge badge-ok"><?= icon('lock-check', 'text-xs') ?> <?= e(t('ssl.le')) ?></span>

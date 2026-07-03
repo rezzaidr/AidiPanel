@@ -157,6 +157,10 @@ class DB
         $this->addColumnIfMissing('sites', 'php_settings', 'TEXT');
         $this->addColumnIfMissing('sites', 'php_extra', 'TEXT');
 
+        // App flavor for reverse-proxy sites: 'nodejs' | 'python' | NULL (generic).
+        // Cosmetic identity only — the vhost is a plain reverse proxy either way.
+        $this->addColumnIfMissing('sites', 'app_flavor', 'TEXT');
+
         // Account-settings profile fields (self-service Settings → Profile tab).
         $this->addColumnIfMissing('users', 'email',      'TEXT');
         $this->addColumnIfMissing('users', 'first_name', 'TEXT');
