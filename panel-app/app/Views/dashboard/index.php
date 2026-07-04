@@ -188,8 +188,8 @@ $range = $history['range'] ?? '1h';
 </div>
 
 <!-- traffic analytics (cache effectiveness) -->
-<div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">
-  <div class="card lg:col-span-2 overflow-hidden">
+<div class="mb-5">
+  <div class="card overflow-hidden">
     <div class="card-head">
       <h2 class="card-title"><?= icon('chart-area-line', 'text-ink') ?> <?= e(t('dash.traffic.title')) ?> <span class="text-zinc-300 font-sans font-normal text-xs">· <?= e(t('dash.traffic.window')) ?></span></h2>
       <?php if ($hasSeries): ?>
@@ -205,25 +205,6 @@ $range = $history['range'] ?? '1h';
       <div class="flex flex-col items-center justify-center text-center px-4 py-16">
         <?= icon('chart-area-line', 'text-4xl text-zinc-200 mb-2') ?>
         <p class="text-sm text-zinc-400"><?= e($analyticsReady ? t('dash.traffic.empty') : $analyticsHint) ?></p>
-      </div>
-    <?php endif; ?>
-  </div>
-
-  <div class="card overflow-hidden flex flex-col">
-    <div class="card-head"><h2 class="card-title"><?= icon('rocket', 'text-speed') ?> <?= e(t('dash.cacheperf.title')) ?></h2></div>
-    <?php if ($analyticsReady && $cacheable > 0): ?>
-      <div data-cache-performance-body class="grid grid-cols-[112px_minmax(0,1fr)] items-center gap-2 px-3 py-3 flex-1">
-        <div id="chartHit"></div>
-        <div class="space-y-2 text-xs min-w-0">
-        <div class="flex items-center justify-between"><span class="flex items-center gap-2 text-zinc-500"><span class="w-2 h-2 rounded-full bg-speed"></span> <?= e(t('dash.cacheperf.served')) ?></span><span class="mono font-semibold text-zinc-800"><?= e($compact($analytics['cached'])) ?></span></div>
-        <div class="flex items-center justify-between"><span class="flex items-center gap-2 text-zinc-500"><span class="w-2 h-2 rounded-full bg-ink"></span> <?= e(t('dash.cacheperf.origin')) ?></span><span class="mono font-semibold text-zinc-800"><?= e($compact($analytics['origin'])) ?></span></div>
-        <div class="flex items-center justify-between pt-2 border-t border-zinc-100"><span class="flex items-center gap-2 text-zinc-500"><?= icon('arrow-guide', 'text-zinc-400') ?> <?= e(t('dash.cacheperf.bypass')) ?></span><span class="mono font-semibold text-zinc-800"><?= e($compact($analytics['bypass'])) ?></span></div>
-        </div>
-      </div>
-    <?php else: ?>
-      <div class="flex-1 flex flex-col items-center justify-center text-center px-4 py-12">
-        <span class="w-10 h-10 rounded-full bg-speed-pale flex items-center justify-center mb-2"><?= icon('rocket', 'text-speed text-xl') ?></span>
-        <p class="text-sm text-zinc-400"><?= e($analyticsReady ? t('dash.cacheperf.empty') : $analyticsHint) ?></p>
       </div>
     <?php endif; ?>
   </div>
@@ -436,16 +417,6 @@ $range = $history['range'] ?? '1h';
     const spk = $('#spkReq');
     if (spk) new ApexCharts(spk, { chart: { type: 'area', height: 38, sparkline: { enabled: true } }, series: [{ name: 'Req', data: totals }], stroke: { curve: 'smooth', width: 2 }, colors: ['#322C7A'], fill: { type: 'solid', opacity: 0.12 }, tooltip: { enabled: false } }).render();
   })();
-  <?php endif; ?>
-
-  <?php if ($cacheable > 0): ?>
-  new ApexCharts($('#chartHit'), {
-    chart: { type: 'radialBar', height: 128, sparkline: { enabled: true }, fontFamily: '"Plus Jakarta Sans"' },
-    series: [<?= (float) $analytics['hit_ratio'] ?>], colors: ['#0891B2'], labels: [<?= json_encode(t('dash.cacheperf.hit')) ?>], stroke: { lineCap: 'round' },
-    plotOptions: { radialBar: { hollow: { size: '60%' }, track: { background: CH.track, strokeWidth: '100%' },
-      dataLabels: { name: { show: true, offsetY: 17, color: CH.axis, fontSize: '9px', fontWeight: 600 },
-        value: { show: true, offsetY: -8, color: CH.text, fontSize: '21px', fontWeight: 700, fontFamily: '"JetBrains Mono"', formatter: v => (Math.round(v * 10) / 10) + '%' } } } },
-  }).render();
   <?php endif; ?>
 })();
 </script>

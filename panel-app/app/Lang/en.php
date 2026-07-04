@@ -273,12 +273,6 @@ return [
     'dash.traffic.cached'     => 'Cached',
     'dash.traffic.origin'     => 'Origin / PHP',
     'dash.traffic.empty'      => 'No requests recorded yet today.',
-    'dash.cacheperf.title'    => 'Cache Performance',
-    'dash.cacheperf.hit'      => 'Cache hit',
-    'dash.cacheperf.served'   => 'Served from cache',
-    'dash.cacheperf.origin'   => 'Eligible origin',
-    'dash.cacheperf.bypass'    => 'Bypassed',
-    'dash.cacheperf.empty'    => 'No eligible FastCGI cache requests yet.',
 
     // Dashboard — monitoring (historical charts)
     'dash.system.title'       => 'Monitoring',
