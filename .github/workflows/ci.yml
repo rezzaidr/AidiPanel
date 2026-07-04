@@ -104,6 +104,8 @@ jobs:
           grep -Fqx "readonly PANEL_VERSION=\"${source_version}\"" install.sh
           grep -Fqx "readonly CLI_VERSION=\"${source_version}\"" aidipanel
           grep -Fqx "readonly PANEL_VERSION=\"${source_version}\"" panel-app/deploy-panel.sh
+          # PANEL_VERSION the panel renders (footer) is defined here, separately.
+          grep -Fqx "define('PANEL_VERSION', '${source_version}');" panel-app/public/index.php
 
       - name: Package install script
         run: |

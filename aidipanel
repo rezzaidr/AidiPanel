@@ -5,7 +5,7 @@
 #
 #  Install : cp aidipanel /usr/local/bin/aidipanel && chmod +x /usr/local/bin/aidipanel
 #  Usage   : aidipanel <command> [options]
-#  Version : 1.2.0
+#  Version : 1.2.1
 #  Author  : AidiPanel Team — by rezzaid
 # =============================================================================
 
