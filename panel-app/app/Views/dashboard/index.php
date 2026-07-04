@@ -143,10 +143,10 @@ $range = $history['range'] ?? '1h';
   <?php endif; ?>
 </div>
 
-<!-- KPI row — performance-led -->
-<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
+<!-- KPI strip — performance-led, four stats sharing one card -->
+<div class="card kpi-strip mb-5">
   <!-- Origin requests -->
-  <div class="card p-4">
+  <div>
     <div class="flex items-center justify-between">
       <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('arrow-bounce', 'text-ink') ?> <?= e(t('dash.kpi.requests')) ?></span>
     </div>
@@ -154,7 +154,7 @@ $range = $history['range'] ?? '1h';
     <div id="spkReq" class="mt-1 -mb-1"></div>
   </div>
   <!-- Cache hit ratio -->
-  <div class="card p-4">
+  <div>
     <div class="flex items-center justify-between">
       <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('bolt', 'text-speed') ?> <?= e(t('dash.kpi.hit_ratio')) ?></span>
     </div>
@@ -170,7 +170,7 @@ $range = $history['range'] ?? '1h';
     </p>
   </div>
   <!-- Served from cache -->
-  <div class="card p-4">
+  <div>
     <div class="flex items-center justify-between">
       <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('arrow-down-circle', 'text-emerald-500') ?> <?= e(t('dash.kpi.served_cache')) ?></span>
     </div>
@@ -178,7 +178,7 @@ $range = $history['range'] ?? '1h';
     <p class="text-[11px] text-zinc-400 mt-2"><?= $analyticsReady ? e(t('dash.kpi.served_cache_hint')) : e($analyticsHint) ?></p>
   </div>
   <!-- Data cached -->
-  <div class="card p-4">
+  <div>
     <div class="flex items-center justify-between">
       <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('database', 'text-ink') ?> <?= e(t('dash.kpi.data_cached')) ?></span>
     </div>
@@ -191,7 +191,7 @@ $range = $history['range'] ?? '1h';
 <div class="mb-5">
   <div class="card overflow-hidden">
     <div class="card-head">
-      <h2 class="card-title"><?= icon('chart-area-line', 'text-ink') ?> <?= e(t('dash.traffic.title')) ?> <span class="text-zinc-300 font-sans font-normal text-xs">· <?= e(t('dash.traffic.window')) ?></span></h2>
+      <h2 class="card-title"><?= icon('chart-area-line', 'text-ink') ?> <?= e(t('dash.traffic.title')) ?> <span class="text-zinc-400 font-sans font-normal text-xs">· <?= e(t('dash.traffic.window')) ?></span></h2>
       <?php if ($hasSeries): ?>
       <div class="flex items-center gap-4">
         <span class="flex items-center gap-1.5 text-[11px] text-zinc-500"><span class="w-2.5 h-2.5 rounded-sm bg-speed"></span> <?= e(t('dash.traffic.cached')) ?></span>
@@ -220,7 +220,7 @@ $range = $history['range'] ?? '1h';
     <?php endforeach; ?>
   </select>
 </div>
-<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-5">
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
   <div class="card p-4">
     <div class="flex items-center justify-between mb-1">
       <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('cpu', 'text-ink') ?> <?= e(t('chart.cpu')) ?></span>
@@ -242,38 +242,48 @@ $range = $history['range'] ?? '1h';
     </div>
     <div id="chartLoad"></div>
   </div>
-  <div class="card p-4">
-    <div class="flex items-center justify-between mb-1">
-      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('device-floppy', 'text-amber-500') ?> <?= e(t('chart.disk')) ?></span>
-      <span class="mono text-sm font-semibold text-zinc-500"><?= e($diskTotal) ?></span>
+</div>
+
+<!-- more metrics — disk · network · disk IO, collapsed by default to keep the overview calm -->
+<div x-data="{ open: false }" class="mb-5">
+  <button type="button" @click="open = !open; if (open) window.__renderMore && window.__renderMore()"
+          class="inline-flex items-center gap-2 text-xs font-semibold text-zinc-500 hover:text-ink transition-colors">
+    <span class="more-caret" :class="{ 'is-open': open }"><?= icon('chevron-right', 'text-zinc-400') ?></span>
+    <?= e(t('dash.system.more')) ?>
+    <span class="font-normal text-zinc-400">· <?= e(t('chart.disk')) ?> · <?= e(t('chart.network')) ?> · <?= e(t('chart.diskio')) ?></span>
+  </button>
+  <div x-show="open" x-cloak class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-3">
+    <div class="card p-4">
+      <div class="flex items-center justify-between mb-1">
+        <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('device-floppy', 'text-amber-500') ?> <?= e(t('chart.disk')) ?></span>
+        <span class="mono text-sm font-semibold text-zinc-500"><?= e($diskTotal) ?></span>
+      </div>
+      <div id="chartDisk"></div>
     </div>
-    <div id="chartDisk"></div>
-  </div>
-  <div class="card p-4">
-    <div class="flex items-center justify-between mb-1">
-      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('arrows-up-down', 'text-emerald-500') ?> <?= e(t('chart.network')) ?></span>
-      <span class="mono font-semibold text-xs text-zinc-700"><span class="text-emerald-600">↓<span id="vNetIn">0</span></span> <span class="text-ink">↑<span id="vNetOut">0</span></span> <span class="text-zinc-300">Mbps</span></span>
+    <div class="card p-4">
+      <div class="flex items-center justify-between mb-1">
+        <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('arrows-up-down', 'text-emerald-500') ?> <?= e(t('chart.network')) ?></span>
+        <span class="mono font-semibold text-xs text-zinc-700"><span class="text-emerald-600">↓<span id="vNetIn">0</span></span> <span class="text-ink">↑<span id="vNetOut">0</span></span> <span class="text-zinc-300">Mbps</span></span>
+      </div>
+      <div id="chartNet"></div>
     </div>
-    <div id="chartNet"></div>
-  </div>
-  <div class="card p-4">
-    <div class="flex items-center justify-between mb-1">
-      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('database-cog', 'text-speed') ?> <?= e(t('chart.diskio')) ?></span>
-      <span class="mono font-semibold text-xs text-zinc-700"><span class="text-speed">R <span id="vDioR">0</span></span> <span class="text-violet-600">W <span id="vDioW">0</span></span> <span class="text-zinc-300">MB/s</span></span>
+    <div class="card p-4">
+      <div class="flex items-center justify-between mb-1">
+        <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('database-cog', 'text-speed') ?> <?= e(t('chart.diskio')) ?></span>
+        <span class="mono font-semibold text-xs text-zinc-700"><span class="text-speed">R <span id="vDioR">0</span></span> <span class="text-violet-600">W <span id="vDioW">0</span></span> <span class="text-zinc-300">MB/s</span></span>
+      </div>
+      <div id="chartDio"></div>
     </div>
-    <div id="chartDio"></div>
   </div>
 </div>
 <?php endif; ?>
 
-<!-- top sites + needs attention -->
-<div class="grid grid-cols-1 <?= !empty($showServerMetrics) ? 'lg:grid-cols-3' : '' ?> gap-5">
-  <div class="card <?= !empty($showServerMetrics) ? 'lg:col-span-2' : '' ?> overflow-hidden">
-    <div class="card-head">
-      <h2 class="card-title"><?= icon('flame', 'text-amber-500') ?> <?= e(t('dash.top_sites')) ?> <span class="text-zinc-300 font-sans font-normal text-xs">· <?= e(t('dash.top_sites.hint')) ?></span></h2>
-      <a href="/sites" class="btn btn-sm btn-ghost"><?= e(t('sites.view_all')) ?> →</a>
-    </div>
-    <?php if (empty($sites)): ?>
+<!-- top sites -->
+<div class="flex items-center justify-between mb-2.5 mt-1">
+  <h2 class="font-head font-semibold text-sm text-zinc-700 flex items-center gap-2"><?= icon('flame', 'text-amber-500') ?> <?= e(t('dash.top_sites')) ?> <span class="text-zinc-400 font-sans font-normal text-xs">· <?= e(t('dash.top_sites.hint')) ?></span></h2>
+  <a href="/sites" class="btn btn-sm btn-ghost"><?= e(t('sites.view_all')) ?> →</a>
+</div>
+<?php if (empty($sites)): ?>
       <div class="px-6 py-12 text-center">
         <?= icon('world', 'text-4xl text-zinc-200 block mb-2') ?>
         <p class="text-sm font-medium text-zinc-600"><?= e(t('sites.empty')) ?></p>
@@ -316,33 +326,27 @@ $range = $history['range'] ?? '1h';
         </tbody>
       </table>
     <?php endif; ?>
-  </div>
 
-  <?php if (!empty($showServerMetrics)): ?>
-  <div class="card overflow-hidden flex flex-col">
-    <div class="card-head">
-      <h2 class="card-title"><?= icon('bell', 'text-amber-500') ?> <?= e(t('dash.attention')) ?></h2>
-      <?php if (!empty($alerts)): ?><span class="badge badge-warn"><?= count($alerts) ?></span><?php endif; ?>
-    </div>
-    <?php if (empty($alerts)): ?>
-      <div class="flex-1 flex flex-col items-center justify-center text-center px-4 py-12">
-        <span class="w-10 h-10 rounded-full bg-emerald-50 flex items-center justify-center mb-2"><?= icon('circle-check', 'text-emerald-500 text-xl') ?></span>
-        <p class="text-sm text-zinc-500"><?= e(t('dash.allclear')) ?></p>
-      </div>
-    <?php else: ?>
-      <?php $alertStyle = ['danger' => 'bg-red-50 text-red-500', 'warn' => 'bg-amber-50 text-amber-500', 'info' => 'bg-sky-50 text-sky-500']; ?>
-      <div class="divide-y divide-zinc-50 flex-1">
-        <?php foreach ($alerts as $a): ?>
-          <div class="flex items-start gap-2.5 px-4 py-3">
-            <span class="w-6 h-6 rounded-md flex items-center justify-center shrink-0 mt-0.5 <?= $alertStyle[$a['level']] ?? $alertStyle['info'] ?>"><?= icon($a['icon'], 'text-sm') ?></span>
-            <p class="text-xs text-zinc-700 leading-snug flex-1"><?= e($a['text']) ?></p>
-          </div>
-        <?php endforeach; ?>
-      </div>
-    <?php endif; ?>
-  </div>
-  <?php endif; ?>
+<?php if (!empty($showServerMetrics)): ?>
+<!-- needs attention -->
+<div class="flex items-center justify-between mb-2.5 mt-6">
+  <h2 class="font-head font-semibold text-sm text-zinc-700 flex items-center gap-2"><?= icon('bell', 'text-amber-500') ?> <?= e(t('dash.attention')) ?></h2>
+  <?php if (!empty($alerts)): ?><span class="badge badge-warn"><?= count($alerts) ?></span><?php endif; ?>
 </div>
+<?php if (empty($alerts)): ?>
+  <p class="flex items-center gap-2 text-sm text-zinc-500"><?= icon('circle-check', 'text-emerald-500') ?> <?= e(t('dash.allclear')) ?></p>
+<?php else: ?>
+  <?php $alertStyle = ['danger' => 'bg-red-50 text-red-500', 'warn' => 'bg-amber-50 text-amber-500', 'info' => 'bg-sky-50 text-sky-500']; ?>
+  <div class="divide-y divide-zinc-100">
+    <?php foreach ($alerts as $a): ?>
+      <div class="flex items-start gap-2.5 py-3">
+        <span class="w-6 h-6 rounded-md flex items-center justify-center shrink-0 mt-0.5 <?= $alertStyle[$a['level']] ?? $alertStyle['info'] ?>"><?= icon($a['icon'], 'text-sm') ?></span>
+        <p class="text-xs text-zinc-700 leading-snug flex-1"><?= e($a['text']) ?></p>
+      </div>
+    <?php endforeach; ?>
+  </div>
+<?php endif; ?>
+<?php endif; ?>
 
 <?php if (!empty($showServerMetrics)): ?>
 <script src="/assets/vendor/apexcharts.min.js"></script>
@@ -389,11 +393,19 @@ $range = $history['range'] ?? '1h';
   build('#chartCpu',  ['#322C7A'], 'area', 100, false, '%', [{ name: 'CPU', data: H.cpu }]);
   build('#chartMem',  ['#0891B2'], 'area', 100, false, '%', [{ name: 'Memory', data: H.mem }]);
   build('#chartLoad', ['#322C7A', '#0891B2', '#F59E0B'], 'line', undefined, true, '', [{ name: '1m', data: H.l1 }, { name: '5m', data: H.l5 }, { name: '15m', data: H.l15 }]);
-  build('#chartDisk', ['#F59E0B'], 'area', 100, false, '%', [{ name: 'Disk', data: H.disk }]);
-  build('#chartNet',  ['#10B981', '#322C7A'], 'area', undefined, true, ' Mb', [{ name: 'In', data: H.nin }, { name: 'Out', data: H.nout }]);
-  build('#chartDio',  ['#0891B2', '#7C3AED'], 'area', undefined, true, ' MB', [{ name: 'Read', data: H.dr }, { name: 'Write', data: H.dw }]);
-  setT('vNetIn', last(H.nin)); setT('vNetOut', last(H.nout));
-  setT('vDioR', last(H.dr));   setT('vDioW', last(H.dw));
+
+  // Disk / Network / Disk IO live in the collapsed "More metrics" panel — render
+  // them lazily on first expand so ApexCharts measures a real (non-zero) width.
+  let moreRendered = false;
+  window.__renderMore = function () {
+    if (moreRendered) return;
+    moreRendered = true;
+    build('#chartDisk', ['#F59E0B'], 'area', 100, false, '%', [{ name: 'Disk', data: H.disk }]);
+    build('#chartNet',  ['#10B981', '#322C7A'], 'area', undefined, true, ' Mb', [{ name: 'In', data: H.nin }, { name: 'Out', data: H.nout }]);
+    build('#chartDio',  ['#0891B2', '#7C3AED'], 'area', undefined, true, ' MB', [{ name: 'Read', data: H.dr }, { name: 'Write', data: H.dw }]);
+    setT('vNetIn', last(H.nin)); setT('vNetOut', last(H.nout));
+    setT('vDioR', last(H.dr));   setT('vDioW', last(H.dw));
+  };
 
   // ── traffic & cache analytics (persisted by the per-minute collector) ─────
   <?php if ($hasSeries): ?>

@@ -277,6 +277,7 @@ return [
     // Dashboard — monitoring (historical charts)
     'dash.system.title'       => 'Monitoring',
     'dash.system.refresh'     => 'auto-refresh · 5s',
+    'dash.system.more'        => 'More metrics',
 
     // Dashboard — top sites
     'dash.top_sites'          => 'Top Sites',

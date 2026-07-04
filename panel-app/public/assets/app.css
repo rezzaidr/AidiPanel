@@ -521,3 +521,25 @@ select.inp {
 [data-theme="dark"] .text-gray-400        { color: var(--text-faint); }
 [data-theme="dark"] .border-gray-200,
 [data-theme="dark"] .border-gray-300      { border-color: var(--border); }
+
+/* ── Dashboard KPI strip — four stats sharing one card instead of four floating
+   cards; themed hairline dividers keep it calm. Stacks on mobile, 4-up at lg. */
+.kpi-strip { display: grid; grid-template-columns: 1fr; }
+.kpi-strip > * { padding: 1rem 1.125rem; min-width: 0; }
+.kpi-strip > * + * { border-top: 1px solid var(--border); }
+@media (min-width: 640px) {
+  .kpi-strip { grid-template-columns: 1fr 1fr; }
+  .kpi-strip > * + * { border-top: 0; }
+  .kpi-strip > *:nth-child(n+3) { border-top: 1px solid var(--border); }
+  .kpi-strip > *:nth-child(even) { border-left: 1px solid var(--border); }
+}
+@media (min-width: 1024px) {
+  .kpi-strip { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .kpi-strip > *:nth-child(n+3) { border-top: 0; }
+  .kpi-strip > * { border-left: 1px solid var(--border); }
+  .kpi-strip > *:first-child { border-left: 0; }
+}
+
+/* Collapsible "More metrics" disclosure caret on the dashboard */
+.more-caret { display: inline-flex; transition: transform .18s ease; }
+.more-caret.is-open { transform: rotate(90deg); }
