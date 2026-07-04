@@ -5222,6 +5222,13 @@ _cache_zone_enable() {
   # 3. Create the zone-config dir FIRST, then the cache dir, then the shim (idempotent).
   mkdir -p "$NGINX_ZONE_CONF_DIR"
   install -d -o www-data -g www-data -m 0750 "$cdir"
+  # Let the panel runtime (collect-metrics runs as aidipanel) measure this zone's
+  # on-disk size for the dashboard "Data Cached" tile. Read-only, this dir only;
+  # default ACL so cache files nginx writes later inherit the read grant. No-op if
+  # acl/user is absent, so this never breaks zone creation.
+  if command -v setfacl >/dev/null 2>&1 && id -u aidipanel >/dev/null 2>&1; then
+    setfacl -R -m u:aidipanel:rX -m d:u:aidipanel:rX "$cdir" 2>/dev/null || true
+  fi
   local shim_created=0
   if [[ ! -f "$NGINX_ZONE_SHIM" ]]; then
     printf 'include %s/*.conf;\n' "$NGINX_ZONE_CONF_DIR" > "$NGINX_ZONE_SHIM"

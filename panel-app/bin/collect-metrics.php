@@ -59,22 +59,30 @@ function tc_measure_cache_bytes(): ?int
     }
     if ($paths === []) return 0;
 
-    $command = 'timeout 5s ionice -c3 nice -n 10 du -sb -- '
+    // du routinely exits non-zero against a live cache: entries get evicted
+    // mid-scan (transient ENOENT), or a freshly created subdir has not inherited
+    // the read ACL yet. It still prints the sizes it *could* sum to stdout, so we
+    // parse those best-effort rather than gate on the exit code. The old
+    // "&& printf MARKER" approach threw away a perfectly good partial total the
+    // instant du touched a single unreadable dir, so the tile always read "—".
+    // Only a total read failure — no numeric line at all, e.g. the top cache dir
+    // itself is unreadable — returns null, which the dashboard renders as "—".
+    $command = 'timeout 10s ionice -c3 nice -n 10 du -sb -- '
         . implode(' ', array_map('escapeshellarg', $paths))
-        . " 2>/dev/null && printf '\\n__AIDIPANEL_DU_OK__\\n'";
+        . ' 2>/dev/null';
     $output = @shell_exec($command);
-    if (!is_string($output) || trim($output) === '') return null;
+    if (!is_string($output)) return null;
 
-    $lines = preg_split('/\r?\n/', trim($output)) ?: [];
-    if (array_pop($lines) !== '__AIDIPANEL_DU_OK__' || $lines === []) return null;
     $total = 0;
-    foreach ($lines as $line) {
-        if (preg_match('/^(\d+)\s/', $line, $match) !== 1) return null;
+    $matched = false;
+    foreach (preg_split('/\r?\n/', $output) ?: [] as $line) {
+        if (preg_match('/^(\d+)\t/', $line, $match) !== 1) continue;
         $bytes = (int) $match[1];
         if ($bytes < 0 || $total > PHP_INT_MAX - $bytes) return null;
         $total += $bytes;
+        $matched = true;
     }
-    return $total;
+    return $matched ? $total : null;
 }
 
 function tc_collect(DB $db, int $now, ?int $cacheBytes, bool $cacheAttempted): void
