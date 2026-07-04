@@ -767,6 +767,71 @@ _grant_cache_acl() {
   setfacl -R -m "u:${PANEL_USER}:rX" -m "d:u:${PANEL_USER}:rX" "$NGINX_CACHE_DIR" 2>/dev/null
 }
 
+# Replace the stock Ubuntu MOTD with the AidiPanel SSH login banner and silence
+# the distro welcome/help/ESM/updates noise. The banner reads live values (panel
+# URL, version, load/mem/disk) at each login and embeds no secrets.
+# NOTE: keep the heredoc in sync with `_apply_motd` in the aidipanel CLI, which
+# re-applies it on self:update so existing servers pick it up on upgrade.
+_install_motd() {
+  [[ "$DRY_RUN" == "true" ]] && return 0
+  local d=/etc/update-motd.d s
+  [[ -d "$d" ]] || return 0
+  cat > "$d/00-aidipanel" <<'AIDIPANEL_MOTD'
+#!/bin/sh
+# AidiPanel — SSH login banner (dynamic MOTD). POSIX sh, cheap reads only so it
+# stays instant. Reads live values at each login; embeds no secrets.
+e=$(printf '\033')
+ind="${e}[38;5;63m"    # brand indigo (~#322C7A, brightened for dark terminals)
+cya="${e}[38;5;44m"    # brand cyan (~#0891B2)
+dim="${e}[38;5;245m"
+grn="${e}[38;5;42m"
+bld="${e}[1m"
+rst="${e}[0m"
+
+# panel URL: configured hostname first, else primary IP + port
+url=""
+p=""
+if [ -r /opt/aidipanel/config/panel.conf ]; then
+  h=$(sed -n 's/^[[:space:]]*PANEL_HOSTNAME[[:space:]]*=[[:space:]]*//p' /opt/aidipanel/config/panel.conf | tr -d '"' | head -n1)
+  p=$(sed -n 's/^[[:space:]]*PANEL_PORT[[:space:]]*=[[:space:]]*//p' /opt/aidipanel/config/panel.conf | tr -d '"' | head -n1)
+  [ -n "$h" ] && url="https://$h"
+fi
+if [ -z "$url" ]; then
+  ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+  [ -z "$p" ] && p=8443
+  [ -n "$ip" ] && url="https://${ip}:${p}"
+fi
+[ -z "$url" ] && url="run: aidipanel panel:hostname <fqdn>"
+
+ver=$(sed -n 's/.*CLI_VERSION="\([^"]*\)".*/v\1/p' /usr/local/bin/aidipanel 2>/dev/null | head -n1)
+
+load=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null)
+memp=$(free 2>/dev/null | awk '/^Mem:/{if($2>0)printf "%d%%",$3/$2*100}')
+disk=$(df -h / 2>/dev/null | awk 'NR==2{print $5" of "$2}')
+
+printf '\n'
+printf ' %s╭─────╮%s\n' "$ind" "$rst"
+printf ' %s│%s  %s∧%s  %s│%s   %s%sAidiPanel%s\n' "$ind" "$rst" "$cya" "$rst" "$ind" "$rst" "$bld" "$ind" "$rst"
+printf ' %s│%s  %s·%s  %s│%s   %sManage fast LEMP sites without the bloat.%s\n' "$ind" "$rst" "$cya" "$rst" "$ind" "$rst" "$dim" "$rst"
+printf ' %s╰─────╯%s\n' "$ind" "$rst"
+printf '  %s──────────────────────────────────────────────%s\n' "$dim" "$rst"
+printf '   %sPanel%s   %s\n' "$cya" "$rst" "$url"
+printf '   %sDocs%s    https://aidipanel.com/docs\n' "$cya" "$rst"
+printf '   %sCLI%s     aidipanel  %s%s%s\n' "$cya" "$rst" "$dim" "$ver" "$rst"
+printf '\n'
+printf '   %s●%s online   %sload%s %s   %smem%s %s   %sdisk%s %s\n' "$grn" "$rst" "$dim" "$rst" "$load" "$dim" "$rst" "$memp" "$dim" "$rst" "$disk"
+printf '\n'
+AIDIPANEL_MOTD
+  chmod 0755 "$d/00-aidipanel"
+  # Silence the stock Ubuntu login noise (guarded; harmless when a script is absent).
+  for s in 00-header 10-help-text 50-landscape-sysinfo 50-motd-news 80-esm \
+           85-fwupd 88-esm-announce 90-updates-available 91-contract-ua-esm-status \
+           91-release-upgrade 95-hwe-eol 98-fsck-at-reboot; do
+    if [[ -f "$d/$s" ]]; then chmod -x "$d/$s" 2>/dev/null || true; fi
+  done
+  return 0
+}
+
 _create_fastcgi_params_snippet() {
   log "Writing FastCGI params snippet..."
   [[ "$DRY_RUN" == "true" ]] && return 0
@@ -2349,6 +2414,7 @@ main() {
     fi
   fi
   _deploy_panel_app;      ui_ok "Web UI deployed"
+  _install_motd;          ui_ok "SSH login banner installed"
   _setup_cron;            ui_ok "Maintenance cron configured"
   _test_and_start_services
   _provision_cloudflare_realip; ui_ok "Cloudflare real-IP foundation configured"
