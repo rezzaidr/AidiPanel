@@ -495,7 +495,14 @@ $cmVer   = @filemtime(PUBLIC_ROOT . '/assets/vendor/codemirror.js') ?: PANEL_VER
         if (!j || !j.success) return [];
         return j.data.entries.filter(function (e) { return e.type === 'dir' && !e.blocked; });
       },
-      async loadTreeRoot() { const dirs = await this.listDirs(''); this.tree = dirs.map((d) => this.mkNode(d.name, d.name, 0)); },
+      async loadTreeRoot() {
+        // synthetic "files" root (the site home) wrapping the top-level dirs
+        const dirs = await this.listDirs('');
+        const root = this.mkNode('files', '', 0);
+        root.children = dirs.map((d) => this.mkNode(d.name, d.name, 1));
+        root.loaded = true; root.hasChildren = root.children.length > 0; root.open = true;
+        this.tree = [root];
+      },
       async toggleNode(node) {
         if (!node.loaded) {
           const dirs = await this.listDirs(node.path);
@@ -508,8 +515,11 @@ $cmVer   = @filemtime(PUBLIC_ROOT . '/assets/vendor/codemirror.js') ?: PANEL_VER
       // Expand + highlight the current folder in the tree (keeps it in sync with the main view).
       async revealInTree(path) {
         if (!path) return;
+        const root = this.tree[0];
+        if (!root) return;
+        root.open = true;
         const segs = path.split('/');
-        let nodes = this.tree, acc = '';
+        let nodes = root.children, acc = '';
         for (let i = 0; i < segs.length; i++) {
           acc = acc ? acc + '/' + segs[i] : segs[i];
           const node = nodes.find((n) => n.path === acc);
