@@ -95,17 +95,17 @@ $tabs = [
   <div class="max-w-[1100px] mx-auto">
 
     <!-- identity row -->
-    <div class="flex items-center justify-between mb-4">
-      <div class="flex items-center gap-3">
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+      <div class="flex items-center gap-3 min-w-0">
         <a href="/sites" class="text-zinc-400 hover:text-ink flex items-center text-sm" title="<?= e(t('site.back')) ?>">
           <?= icon('arrow-left') ?>
         </a>
         <span class="w-10 h-10 rounded-lg <?= $iconBg ?> flex items-center justify-center shrink-0">
           <?= icon($appIcon($appKind), $iconColor . ' text-xl') ?>
         </span>
-        <div>
-          <div class="flex items-center gap-2">
-            <h1 class="font-head font-bold text-[19px] text-zinc-900 leading-none"><?= e($domain) ?></h1>
+        <div class="min-w-0">
+          <div class="flex items-center gap-2 min-w-0">
+            <h1 class="font-head font-bold text-[19px] text-zinc-900 leading-none truncate"><?= e($domain) ?></h1>
             <span class="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full cursor-help <?= $hasTrustedSsl ? 'text-emerald-700 bg-emerald-50' : 'text-zinc-600 bg-zinc-100' ?>"
                   title="<?= e($hasTrustedSsl ? t('site.active_hint') : t('site.configured_hint')) ?>">
               <span class="w-1.5 h-1.5 rounded-full <?= $hasTrustedSsl ? 'bg-emerald-500' : 'bg-zinc-400' ?>"></span>
@@ -1159,7 +1159,7 @@ $tabs = [
 
   <!-- Protocol & Compression (server-level, detected) -->
   <div class="bg-zinc-50 rounded-xl border border-zinc-200/70 px-5 py-4">
-    <div class="flex items-center justify-between">
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
       <div>
         <h2 class="font-head font-semibold text-sm text-zinc-700 flex items-center gap-2">
           <?= icon('rocket', 'text-zinc-400') ?>
@@ -1448,7 +1448,7 @@ $tabs = [
       <?php endif; ?>
 
       <!-- metric tiles: Valid until · Provider · Auto-renew -->
-      <div class="grid grid-cols-3 divide-x divide-zinc-100 border-t border-b border-zinc-100">
+      <div class="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-zinc-100 border-t border-b border-zinc-100">
         <div class="px-5 py-3.5">
           <p class="eyebrow mb-1.5"><?= e(t('site.ssl.f.valid_until')) ?></p>
           <p class="text-sm font-semibold text-zinc-800">

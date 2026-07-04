@@ -86,7 +86,7 @@ $assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROO
 
   <script defer src="/assets/vendor/alpine.min.js"></script>
 </head>
-<body class="min-h-screen flex flex-col text-zinc-800 antialiased" x-data="{ userMenu: false }">
+<body class="min-h-screen flex flex-col text-zinc-800 antialiased" x-data="{ userMenu: false, mobileNav: false }">
 
 <!-- ===== TOP BAR ===== -->
 <header class="h-16 bg-white border-b border-zinc-200/80 flex items-center px-5 gap-4">
@@ -99,7 +99,7 @@ $assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROO
     <span class="font-head font-bold text-[15px] text-zinc-900"><?= e(t('app.name')) ?></span>
   </a>
 
-  <nav class="flex items-center gap-1">
+  <nav class="flex items-center gap-1 ap-desktop-only">
     <a href="/dashboard" class="topnav <?= $navDashboard ?>"<?= $navDashboard ? ' aria-current="page"' : '' ?>><?= icon('chart-line', 'text-base') ?> <?= e(t('nav.dashboard')) ?></a>
     <a href="/sites" class="topnav <?= $navSites ?>"<?= $navSites ? ' aria-current="page"' : '' ?>><?= icon('world', 'text-base') ?> <?= e(t('nav.sites')) ?></a>
     <?php if (\Core\Access::canAccessAdminArea()): ?>
@@ -110,7 +110,7 @@ $assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROO
   <div class="ml-auto flex items-center gap-2.5">
     <button type="button" x-data="{ copied: false }" data-ip="<?= e($_ip) ?>"
             @click="navigator.clipboard && navigator.clipboard.writeText($el.dataset.ip); copied = true; setTimeout(() => copied = false, 1200)"
-            class="flex items-center gap-2 text-xs font-medium text-zinc-700 bg-zinc-50 hover:bg-zinc-100 border border-zinc-200 rounded-lg px-2.5 py-1.5 cursor-pointer transition"
+            class="ap-desktop-only flex items-center gap-2 text-xs font-medium text-zinc-700 bg-zinc-50 hover:bg-zinc-100 border border-zinc-200 rounded-lg px-2.5 py-1.5 cursor-pointer transition"
             title="<?= e(t('topbar.copy_ip')) ?>">
       <span class="pulse"></span>
       <span class="mono" x-show="!copied"><?= e($_ip) ?></span>
@@ -125,8 +125,13 @@ $assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROO
       <span x-show="dark" x-cloak><?= icon('sun', 'text-[18px]') ?></span>
     </button>
 
+    <!-- mobile hamburger (opens the drawer below; hidden on desktop) -->
+    <button type="button" @click="mobileNav = true" class="ap-ham w-8 h-8 rounded-lg hover:bg-zinc-100 text-zinc-400" aria-label="Open menu">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+
     <!-- account menu -->
-    <div class="relative">
+    <div class="relative ap-desktop-only">
       <button type="button" @click="userMenu = !userMenu" class="flex items-center gap-1.5 pl-1 hover:bg-zinc-100 rounded-lg py-1 pr-1.5" title="<?= e(t('topbar.account')) ?>">
         <div class="w-8 h-8 rounded-full bg-ink-pale flex items-center justify-center text-ink text-xs font-bold font-head"><?= e($_initials) ?></div>
         <?= icon('chevron-down', 'text-zinc-400 text-sm') ?>
@@ -156,6 +161,39 @@ $assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROO
   </div>
 </header>
 
+<!-- ===== MOBILE NAV DRAWER (< md) ===== -->
+<div class="ap-mobnav" :class="{ 'is-open': mobileNav }" x-cloak
+     @keydown.escape.window="mobileNav = false" role="dialog" aria-modal="true" aria-label="<?= e(t('app.name')) ?> menu">
+  <div class="ap-mobnav-backdrop" @click="mobileNav = false"></div>
+  <aside class="ap-mobnav-sheet">
+    <div class="ap-mobnav-head">
+      <span class="flex items-center gap-2">
+        <svg viewBox="0 0 32 32" class="w-8 h-8" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#322C7A"/><path d="M8 22 L16 10 L24 22" stroke="#fff" stroke-width="2.5" fill="none" stroke-linejoin="round"/><circle cx="16" cy="22" r="2" fill="#fff"/></svg>
+        <span class="font-head font-bold text-[15px] text-zinc-900"><?= e(t('app.name')) ?></span>
+      </span>
+      <button type="button" @click="mobileNav = false" class="w-8 h-8 rounded-lg hover:bg-zinc-100 flex items-center justify-center text-zinc-400" aria-label="Close menu"><?= icon('x', 'text-lg') ?></button>
+    </div>
+    <nav class="ap-mobnav-body">
+      <a href="/dashboard" class="sidenav-item <?= $navDashboard ?>"<?= $navDashboard ? ' aria-current="page"' : '' ?>><?= icon('chart-line', 'text-[18px]') ?><span class="flex-1"><?= e(t('nav.dashboard')) ?></span></a>
+      <a href="/sites" class="sidenav-item <?= $navSites ?>"<?= $navSites ? ' aria-current="page"' : '' ?>><?= icon('world', 'text-[18px]') ?><span class="flex-1"><?= e(t('nav.sites')) ?></span></a>
+      <?php if (\Core\Access::canAccessAdminArea()): ?>
+      <a href="/admin" class="sidenav-item <?= $navAdmin ?>"<?= $navAdmin ? ' aria-current="page"' : '' ?>><?= icon('server-cog', 'text-[18px]') ?><span class="flex-1"><?= e(t('nav.admin')) ?></span></a>
+      <?php endif; ?>
+    </nav>
+    <div class="ap-mobnav-foot">
+      <button type="button" x-data="{ copied: false }" data-ip="<?= e($_ip) ?>"
+              @click="navigator.clipboard && navigator.clipboard.writeText($el.dataset.ip); copied = true; setTimeout(() => copied = false, 1200)"
+              class="sidenav-item" title="<?= e(t('topbar.copy_ip')) ?>">
+        <span class="inline-flex items-center justify-center" style="width:18px"><span class="pulse"></span></span>
+        <span class="mono text-xs" x-show="!copied"><?= e($_ip) ?></span>
+        <span class="mono text-xs text-emerald-600" x-show="copied" x-cloak><?= e(t('topbar.copied')) ?></span>
+      </button>
+      <a href="/settings" class="sidenav-item"><?= icon('settings', 'text-[18px]') ?><span class="flex-1"><?= e(t('topbar.settings')) ?></span></a>
+      <a href="/logout" class="sidenav-item"><?= icon('logout', 'text-[18px]') ?><span class="flex-1"><?= e(t('topbar.logout')) ?></span></a>
+    </div>
+  </aside>
+</div>
+
 <!-- ===== CONTENT ===== -->
 <div data-app-content class="flex-1">
 <?php if (!empty($_full_bleed)): ?>
@@ -163,7 +201,7 @@ $assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROO
 <?php elseif (!empty($_is_admin_area)): ?>
   <!-- Admin Area shell: persistent left sidebar + section content on the right. -->
   <main class="mx-auto px-6 py-6 max-w-[1280px]">
-    <div class="flex gap-7 items-start">
+    <div class="flex gap-7 items-start ap-admin-shell">
       <aside class="w-56 shrink-0 sticky top-6">
         <nav class="sidenav">
           <?php foreach ($adminSections as $s): ?>
