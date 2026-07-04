@@ -10,7 +10,7 @@ set -Eeuo pipefail
 PANEL_DIR="/opt/aidipanel"
 PANEL_USER="aidipanel"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly PANEL_VERSION="1.2.0"
+readonly PANEL_VERSION="1.2.1"
 readonly DEPLOY_LOCK="/run/lock/aidipanel-deploy.lock"
 
 # Resolve the default PHP version from the installed policy file, fallback 8.4.
