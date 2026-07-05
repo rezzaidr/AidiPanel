@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  AidiPanel — Deploy Panel Web App v1.2.1
+#  AidiPanel — Deploy Panel Web App v1.2.2
 #  Usage: bash deploy-panel.sh [--dir /opt/aidipanel]
 #  Author: AidiPanel Team — by rezzaid
 # =============================================================================
@@ -10,7 +10,7 @@ set -Eeuo pipefail
 PANEL_DIR="/opt/aidipanel"
 PANEL_USER="aidipanel"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly PANEL_VERSION="1.2.1"
+readonly PANEL_VERSION="1.2.2"
 readonly DEPLOY_LOCK="/run/lock/aidipanel-deploy.lock"
 
 # Resolve the default PHP version from the installed policy file, fallback 8.4.
