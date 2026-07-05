@@ -236,26 +236,28 @@ class SiteFileController extends BaseController
     }
 
     /**
-     * Read-only demo: hide the *contents* of secret-bearing files (wp-config.php,
-     * .env, private keys, ...). Browsing/listing stays open so the File Manager
-     * still demos; only read + download are gated — the same credential-leak class
-     * we keep db:pma-credentials out of the demo allowlist for. No-op off-demo.
+     * Read-only demo: DEFAULT-DENY. The public demo must assume a hostile,
+     * anonymous visitor, so only an explicit allowlist of clearly-safe content
+     * types may be opened/downloaded. Everything else — PHP, JSON, YAML, INI,
+     * .env, dotfiles, anything that could carry secrets — is hidden. Browsing
+     * the tree (files:list) still works; only contents are gated. A denylist of
+     * known-secret names is too fragile (any new framework config convention not
+     * yet on the list would silently leak), so we allowlist instead. No-op off-demo.
      */
     private function demoHidesPath(string $path): bool
     {
         if (!demo_mode()) { return false; }
         $norm = strtolower(str_replace('\\', '/', $path));
         $base = basename($norm);
-        $names = [
-            'wp-config.php', '.env', '.htpasswd', '.my.cnf', '.pgpass', 'auth.json',
-            'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519',
-        ];
-        if (in_array($base, $names, true)) { return true; }
-        if (preg_match('/^\.env(\..+)?$/', $base)) { return true; }            // .env.local, .env.production
-        if (preg_match('/\.(key|pem|p12|pfx|ppk)$/', $base)) { return true; }  // private keys / cert bundles
-        if (preg_match('/^id_(rsa|dsa|ecdsa|ed25519)/', $base)) { return true; }
+
+        // Never expose dotfiles or the VCS dir (.env, .git, .htaccess, ...).
+        if ($base !== '' && str_starts_with($base, '.')) { return true; }
         if ($norm === '.git' || str_starts_with($norm, '.git/') || str_contains($norm, '/.git/')) { return true; }
-        return false;
+
+        // Allow only safe-to-demo content. Anything else — config, scripts,
+        // structured data, unknown/extensionless files — is denied by default.
+        $allowed = '/\.(txt|md|markdown|html?|css|js|mjs|svg|png|jpe?g|gif|webp|ico|bmp|avif|mp4|webm|ogg|mp3|wav|pdf|woff2?|ttf|otf|eot)$/i';
+        return !preg_match($allowed, $base);
     }
 
     /** Read paths[] from POST or JSON body as a clean string list. */

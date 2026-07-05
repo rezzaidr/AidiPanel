@@ -309,9 +309,25 @@ class SiteController extends BaseController
             $site['ssl_type'] = $ssl['state'];
         }
 
-        $logs = $this->db->rows(
-            'SELECT * FROM activity_log WHERE detail LIKE ? ORDER BY created_at DESC LIMIT 15',
+        // Site activity feed. detail is free-form text (e.g. "domain=example.com
+        // path=… ok", "Saved Nginx config for example.com"). A bare LIKE
+        // '%domain%' would also match a LONGER neighbour domain written to the
+        // same column (example.com vs shop.example.com / api.example.com), leaking
+        // another tenant's username/action/timestamp. Fetch a window with LIKE,
+        // then keep only rows where the domain appears as a real token (bounded by
+        // non-hostname characters), so a domain matches only itself.
+        $logRows = $this->db->rows(
+            'SELECT * FROM activity_log WHERE detail LIKE ? ORDER BY created_at DESC LIMIT 60',
             ["%{$domain}%"]
+        );
+        $domainBoundary = '/(?<![a-zA-Z0-9.\-])' . preg_quote($domain, '/') . '(?![a-zA-Z0-9.\-])/i';
+        $logs = array_slice(
+            array_values(array_filter(
+                $logRows,
+                static fn($r) => (bool) preg_match($domainBoundary, (string) ($r['detail'] ?? ''))
+            )),
+            0,
+            15
         );
 
         $type          = (string) ($site['type'] ?? 'php');
@@ -384,11 +400,21 @@ class SiteController extends BaseController
                     }
                 }
             }
-            $lastPurgeRow = $this->db->row(
-                "SELECT created_at FROM activity_log WHERE action = 'cache:purge' AND detail LIKE ? ORDER BY created_at DESC LIMIT 1",
+            // Same token-boundary guard as the activity feed above: only a row
+            // whose detail actually references THIS domain (not a superset) counts
+            // as the last purge for this site.
+            $purgeRows = $this->db->rows(
+                "SELECT created_at, detail FROM activity_log WHERE action = 'cache:purge' AND detail LIKE ? ORDER BY created_at DESC LIMIT 10",
                 ["%{$domain}%"]
             );
-            $lastPurge = $lastPurgeRow ? $lastPurgeRow['created_at'] : null;
+            $purgeBoundary = '/(?<![a-zA-Z0-9.\-])' . preg_quote($domain, '/') . '(?![a-zA-Z0-9.\-])/i';
+            $lastPurge = null;
+            foreach ($purgeRows as $r) {
+                if (preg_match($purgeBoundary, (string) ($r['detail'] ?? ''))) {
+                    $lastPurge = $r['created_at'];
+                    break;
+                }
+            }
 
             // Zone-aware cache size: du the dir this site actually writes to (its own
             // dedicated zone dir, or the shared zone). $cacheShared drives the "(shared)"

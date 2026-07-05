@@ -49,11 +49,16 @@ class AuthController extends BaseController
 
         $user = Auth::verifyCredentials($username, $password);
         if ($user !== null) {
-            \Core\DB::clearFailedLogins($ip, $username);
             if ((int) $user['totp_enabled'] === 1) {
+                // Do NOT clear failed_logins here: the user has only proven their
+                // password, not completed 2FA. Clearing at this stage lets an
+                // attacker who possesses the password reset the 2FA attempt budget
+                // by re-submitting /login between guesses. The counter persists and
+                // is cleared only after the full 2FA challenge succeeds (verify2fa).
                 Auth::startPending((int) $user['id']);
                 redirect('/login/2fa');
             }
+            \Core\DB::clearFailedLogins($ip, $username);
             Auth::login($user);
             \Core\DB::log('login', "User {$username} logged in");
             redirect('/dashboard');

@@ -86,16 +86,35 @@ class Auth
     }
 
     /**
+     * A fixed-cost bcrypt hash used only to equalize the wall-clock time of a
+     * failed login when the username does not exist or is inactive — so an
+     * attacker cannot enumerate valid/active usernames via response latency. Its
+     * verification result is discarded; it is run purely for its bcrypt cost.
+     */
+    private const DUMMY_HASH = '$2y$12$RrAWIu1.PNM9enWS1q5DAeoeSIt3iCCZCX2juibt9jBuKGYZ1FPSq';
+
+    /**
      * Validate username + password. Returns the user row on success (caller then
      * either logs in directly or starts a 2FA challenge), or null on failure.
+     *
+     * Timing is equalized across every failure branch (unknown user, inactive
+     * user, wrong password) by always running exactly one bcrypt password_verify
+     * — against the real hash when the row exists, or against DUMMY_HASH when it
+     * does not — before returning null. The `active` flag is checked AFTER the
+     * verify (not in the SQL) so an inactive account pays the same bcrypt cost as
+     * an active one, removing the active/inactive timing signal too.
      */
     public static function verifyCredentials(string $username, string $password): ?array
     {
         $user = DB::instance()->row(
-            'SELECT * FROM users WHERE username = ? AND active = 1 LIMIT 1',
+            'SELECT * FROM users WHERE username = ? LIMIT 1',
             [$username]
         );
-        if (!$user || !password_verify($password, (string) $user['password_hash'])) {
+        $hash = $user ? (string) $user['password_hash'] : self::DUMMY_HASH;
+        if (!password_verify($password, $hash)) {
+            return null;
+        }
+        if (!$user || (int) $user['active'] !== 1) {
             return null;
         }
         return $user;

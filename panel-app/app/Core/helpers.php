@@ -604,6 +604,13 @@ function php_versions_status(): array
 
     $out = [];
     foreach ($policy['available'] as $ver) {
+        // $ver is parsed from /etc/aidipanel/php.conf (root-owned, constrained
+        // to [0-9. ] by the parser). Validate it is a plain major.minor number
+        // before interpolating it into a systemctl unit name — defence in depth,
+        // never trust a config-parsed string inside a shell command.
+        if (!preg_match('/^[0-9]+\.[0-9]+$/', (string) $ver)) {
+            continue;
+        }
         $installed = php_is_installed($ver);
         $running   = $installed
             && trim((string) shell_exec("systemctl is-active php{$ver}-fpm 2>/dev/null")) === 'active';
