@@ -681,7 +681,12 @@ class SiteController extends BaseController
         $defaults = self::phpSettingsDefaults();
         $settings = [];
         foreach (array_keys($defaults) as $key) {
-            $settings[$key] = $this->_cleanPhpSetting($key, (string) $this->request->post($key, ''));
+            // PHP mangles dots (and spaces) in $_POST keys to underscores, so a
+            // form field named "date.timezone" arrives as "date_timezone". Read
+            // the unmangled key — every other setting already uses underscores, so
+            // this is a no-op for them and only matters for date.timezone.
+            $postKey = str_replace('.', '_', $key);
+            $settings[$key] = $this->_cleanPhpSetting($key, (string) $this->request->post($postKey, ''));
         }
         // post_max_size must be >= upload_max_filesize.
         $up = _shorthand_bytes((string) $settings['upload_max_filesize']);

@@ -1250,7 +1250,7 @@ $tabs = [
               <?php endforeach; ?>
               <div>
                 <label class="lbl">date.timezone</label>
-                <select name="date.timezone" class="inp w-full" <?= $phpCanEdit ? '' : 'disabled' ?>>
+                <select name="date_timezone" class="inp w-full" <?= $phpCanEdit ? '' : 'disabled' ?>>
                   <?php foreach ($phpTzGroups as $continent => $zones): ?>
                     <?php if ($continent === ''): ?>
                       <?php foreach ($zones as $z): ?>
