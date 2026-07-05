@@ -260,8 +260,6 @@ return [
     'dash.kpi.hit_ratio_empty' => 'No cacheable requests yet',
     'dash.kpi.served_cache'    => 'Served from Cache',
     'dash.kpi.served_cache_hint'=> 'response data served from FastCGI cache',
-    'dash.kpi.data_cached'     => 'Data Cached',
-    'dash.kpi.data_cached_hint'=> 'shared + dedicated FastCGI cache on disk',
     'dash.analytics.collecting'=> 'Collecting origin data…',
     'dash.analytics.unavailable'=> 'Origin analytics unavailable',
     'dash.analytics.updated'   => 'managed sites · updated {time} · static excluded',

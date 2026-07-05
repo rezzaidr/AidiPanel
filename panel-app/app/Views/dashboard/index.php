@@ -143,7 +143,7 @@ $range = $history['range'] ?? '1h';
   <?php endif; ?>
 </div>
 
-<!-- KPI strip — performance-led, four stats sharing one card -->
+<!-- KPI strip — performance-led, three stats sharing one card -->
 <div class="card kpi-strip mb-5">
   <!-- Origin requests -->
   <div>
@@ -176,14 +176,6 @@ $range = $history['range'] ?? '1h';
     </div>
     <div class="mono font-bold text-[26px] text-zinc-900 leading-none mt-2"><?= $analyticsReady ? e(format_bytes((int) $analytics['served_bytes'])) : '<span class="text-zinc-300">—</span>' ?></div>
     <p class="text-[11px] text-zinc-400 mt-2"><?= $analyticsReady ? e(t('dash.kpi.served_cache_hint')) : e($analyticsHint) ?></p>
-  </div>
-  <!-- Data cached -->
-  <div>
-    <div class="flex items-center justify-between">
-      <span class="text-xs font-semibold text-zinc-500 flex items-center gap-1.5"><?= icon('database', 'text-ink') ?> <?= e(t('dash.kpi.data_cached')) ?></span>
-    </div>
-    <div class="mono font-bold text-[26px] text-zinc-900 leading-none mt-2"><?= ($analytics['cache_bytes'] ?? null) !== null ? e(format_bytes((int) $analytics['cache_bytes'])) : '<span class="text-zinc-300">—</span>' ?></div>
-    <p class="text-[11px] text-zinc-400 mt-2"><?= e(t('dash.kpi.data_cached_hint')) ?></p>
   </div>
 </div>
 

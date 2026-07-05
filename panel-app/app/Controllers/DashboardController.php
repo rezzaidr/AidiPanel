@@ -196,13 +196,6 @@ class DashboardController extends BaseController
             }
         }
 
-        $cacheBytes = null;
-        $cacheCheckedAt = isset($state['cache_checked_at']) ? (int) $state['cache_checked_at'] : 0;
-        if ($cacheCheckedAt > 0 && $cacheCheckedAt <= $now + 300 && $now - $cacheCheckedAt <= 900
-            && isset($state['cache_bytes']) && ctype_digit($state['cache_bytes'])) {
-            $cacheBytes = (int) $state['cache_bytes'];
-        }
-
         return [
             'status' => $status,
             'last_updated' => $lastCollected,
@@ -213,7 +206,6 @@ class DashboardController extends BaseController
             'origin' => $status === 'ready' ? $summary['cache_misses'] : null,
             'bypass' => $status === 'ready' ? $summary['cache_bypass'] : null,
             'served_bytes' => $status === 'ready' ? $summary['cache_bytes'] : null,
-            'cache_bytes' => $cacheBytes,
             'has_data' => $status === 'ready' && $summary['requests'] > 0,
             'series' => $series,
         ];

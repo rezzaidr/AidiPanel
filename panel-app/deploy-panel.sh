@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  AidiPanel — Deploy Panel Web App v1.2.2
+#  AidiPanel — Deploy Panel Web App v1.2.3
 #  Usage: bash deploy-panel.sh [--dir /opt/aidipanel]
 #  Author: AidiPanel Team — by rezzaid
 # =============================================================================
@@ -10,7 +10,7 @@ set -Eeuo pipefail
 PANEL_DIR="/opt/aidipanel"
 PANEL_USER="aidipanel"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly PANEL_VERSION="1.2.2"
+readonly PANEL_VERSION="1.2.3"
 readonly DEPLOY_LOCK="/run/lock/aidipanel-deploy.lock"
 
 # Resolve the default PHP version from the installed policy file, fallback 8.4.
@@ -31,41 +31,6 @@ die() { echo -e "${RED}[ERROR]${RESET} $*" >&2; exit 1; }
 credential_line() {
   local key="$1" value="$2"
   printf '%s=%q\n' "$key" "$value"
-}
-
-# Heal v1.2.1 installations where the fresh installer failed to install `acl`.
-# This is deliberately best-effort: panel updates must not fail because a package
-# repository or a live cache entry is temporarily unavailable.
-_repair_cache_acl() {
-  local cache_dir repaired=0 failed=0
-
-  if ! command -v setfacl >/dev/null 2>&1; then
-    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends acl \
-        >> /var/log/aidipanel-install.log 2>&1; then
-      warn "Cache ACL repair skipped: the acl package could not be installed"
-      return 0
-    fi
-  fi
-  command -v setfacl >/dev/null 2>&1 || {
-    warn "Cache ACL repair skipped: setfacl is unavailable"
-    return 0
-  }
-
-  for cache_dir in /var/cache/nginx/fastcgi /var/cache/nginx/aidipanel/*/fastcgi; do
-    [[ -d "$cache_dir" ]] || continue
-    if setfacl -R -m "u:${PANEL_USER}:rX" -m "d:u:${PANEL_USER}:rX" "$cache_dir" 2>/dev/null; then
-      repaired=1
-    else
-      failed=1
-    fi
-  done
-
-  if [[ "$failed" -eq 1 ]]; then
-    warn "Cache ACL repair was incomplete; the Data Cached tile may read as —"
-  elif [[ "$repaired" -eq 1 ]]; then
-    ok "FastCGI cache ACL repaired for Dashboard metrics"
-  fi
-  return 0
 }
 
 while [[ $# -gt 0 ]]; do
@@ -145,7 +110,6 @@ else
     useradd --system --gid "$PANEL_USER" --no-create-home --shell /usr/sbin/nologin "$PANEL_USER"
 fi
 getent group adm >/dev/null 2>&1 && usermod --append --groups adm "$PANEL_USER"
-_repair_cache_acl
 
 PANEL_FPM_CONF="/etc/aidipanel/php-fpm/php-fpm.conf"
 [[ -f "$PANEL_FPM_CONF" ]] || die "Panel FPM config not found: ${PANEL_FPM_CONF}"

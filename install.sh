@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  AidiPanel Installer v1.2.2
+#  AidiPanel Installer v1.2.3
 #  Stack: Nginx + FastCGI Cache + PHP-FPM (multi-version) + MySQL/MariaDB + Redis
 #  Supported OS: Debian 11/12, Ubuntu 22.04/24.04 (x86_64 & arm64)
 #
@@ -26,7 +26,7 @@ IFS=$'\n\t'
 # 0. GLOBAL CONSTANTS & DEFAULTS
 # ---------------------------------------------------------------------------
 readonly PANEL_NAME="AidiPanel"
-readonly PANEL_VERSION="1.2.2"
+readonly PANEL_VERSION="1.2.3"
 readonly PANEL_USER="aidipanel"
 readonly PANEL_DIR="/opt/aidipanel"
 readonly PANEL_LOG="/var/log/aidipanel-install.log"
@@ -476,7 +476,7 @@ _install_base_packages() {
   echo 'DPkg::Lock::Timeout "300";' > /etc/apt/apt.conf.d/99aidipanel-lock-timeout
   _apt_install \
     curl wget gnupg2 lsb-release ca-certificates apt-transport-https \
-    software-properties-common acl unzip zip tar rclone \
+    software-properties-common unzip zip tar rclone \
     git cron ufw fail2ban \
     openssl certbot \
     sqlite3 python3 \
@@ -750,21 +750,6 @@ _create_fastcgi_cache_dir() {
   [[ "$DRY_RUN" == "true" ]] && return 0
   install -d -o www-data -g www-data -m 0750 "$NGINX_CACHE_DIR"
   ok "FastCGI cache dir: $NGINX_CACHE_DIR"
-}
-
-# Grant the panel runtime (collect-metrics runs as the unprivileged ${PANEL_USER})
-# read-only access to the FastCGI cache dir so it can measure the on-disk size for
-# the dashboard "Data Cached" tile. rX = read + directory-traverse only — the panel
-# never writes here, so there is no cache-poisoning surface — and a default ACL
-# makes cache files nginx writes later inherit the grant. Must run after the panel
-# user exists. Returns non-zero if it could not be applied (caller downgrades to a
-# warning; the metric just reads as "—", nothing else breaks).
-_grant_cache_acl() {
-  [[ "$DRY_RUN" == "true" ]] && return 0
-  command -v setfacl >/dev/null 2>&1 || _apt_install acl
-  command -v setfacl >/dev/null 2>&1 || return 1
-  [[ -d "$NGINX_CACHE_DIR" ]] || return 1
-  setfacl -R -m "u:${PANEL_USER}:rX" -m "d:u:${PANEL_USER}:rX" "$NGINX_CACHE_DIR" 2>/dev/null
 }
 
 # Replace the stock Ubuntu MOTD with the AidiPanel SSH login banner and silence
@@ -2399,7 +2384,6 @@ main() {
   # SFTP is disabled by default (per-site users are no-login). ProFTPD setup
   # is retained as _install_proftpd() for a future opt-in SFTP feature.
   _create_panel_user;     ui_ok "System user created: aidipanel"
-  if _grant_cache_acl; then ui_ok "FastCGI cache readable by ${PANEL_USER} (dashboard Data Cached)"; else ui_warn "Cache ACL not applied — the Data Cached tile will read as —"; fi
   _create_panel_scaffold; ui_ok "Panel directory prepared: ${PANEL_DIR}"
   _setup_panel_fpm;       ui_ok "Panel PHP-FPM service: aidipanel-fpm (aidipanel)"
   _configure_panel_vhost; ui_ok "Self-signed panel SSL generated"

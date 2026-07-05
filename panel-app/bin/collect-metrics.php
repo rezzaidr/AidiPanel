@@ -48,44 +48,7 @@ function tc_set_state(DB $db, string $key, string|int $value): void
     );
 }
 
-function tc_measure_cache_bytes(): ?int
-{
-    $paths = [];
-    foreach (['/var/cache/nginx/fastcgi'] as $path) {
-        if (is_dir($path)) $paths[] = $path;
-    }
-    foreach (glob('/var/cache/nginx/aidipanel/*/fastcgi', GLOB_ONLYDIR) ?: [] as $path) {
-        $paths[] = $path;
-    }
-    if ($paths === []) return 0;
-
-    // du routinely exits non-zero against a live cache: entries get evicted
-    // mid-scan (transient ENOENT), or a freshly created subdir has not inherited
-    // the read ACL yet. It still prints the sizes it *could* sum to stdout, so we
-    // parse those best-effort rather than gate on the exit code. The old
-    // "&& printf MARKER" approach threw away a perfectly good partial total the
-    // instant du touched a single unreadable dir, so the tile always read "—".
-    // Only a total read failure — no numeric line at all, e.g. the top cache dir
-    // itself is unreadable — returns null, which the dashboard renders as "—".
-    $command = 'timeout 10s ionice -c3 nice -n 10 du -sb -- '
-        . implode(' ', array_map('escapeshellarg', $paths))
-        . ' 2>/dev/null';
-    $output = @shell_exec($command);
-    if (!is_string($output)) return null;
-
-    $total = 0;
-    $matched = false;
-    foreach (preg_split('/\r?\n/', $output) ?: [] as $line) {
-        if (preg_match('/^(\d+)\t/', $line, $match) !== 1) continue;
-        $bytes = (int) $match[1];
-        if ($bytes < 0 || $total > PHP_INT_MAX - $bytes) return null;
-        $total += $bytes;
-        $matched = true;
-    }
-    return $matched ? $total : null;
-}
-
-function tc_collect(DB $db, int $now, ?int $cacheBytes, bool $cacheAttempted): void
+function tc_collect(DB $db, int $now): void
 {
     $domains = array_column($db->rows('SELECT domain FROM sites ORDER BY domain'), 'domain');
     $unreadableLogs = 0;
@@ -140,7 +103,7 @@ function tc_collect(DB $db, int $now, ?int $cacheBytes, bool $cacheAttempted): v
         $updates[] = compact('domain', 'logPath', 'next', 'minutes');
     }
 
-    $db->immediateTransaction(static function (DB $db) use ($updates, $unreadableLogs, $dataErrors, $now, $cacheBytes, $cacheAttempted): void {
+    $db->immediateTransaction(static function (DB $db) use ($updates, $unreadableLogs, $dataErrors, $now): void {
         if (tc_state($db, 'coverage_started_at') === null || $unreadableLogs > 0 || $dataErrors > 0) {
             tc_set_state($db, 'coverage_started_at', $now);
         }
@@ -183,11 +146,6 @@ function tc_collect(DB $db, int $now, ?int $cacheBytes, bool $cacheAttempted): v
         tc_set_state($db, 'last_collected_at', $now);
         tc_set_state($db, 'unreadable_logs', $unreadableLogs);
         tc_set_state($db, 'data_errors', $dataErrors);
-        if ($cacheAttempted) tc_set_state($db, 'cache_last_attempt_at', $now);
-        if ($cacheBytes !== null) {
-            tc_set_state($db, 'cache_bytes', $cacheBytes);
-            tc_set_state($db, 'cache_checked_at', $now);
-        }
     });
 }
 
@@ -293,11 +251,7 @@ try {
     // retention: keep ~8 days of per-minute samples
     $db->run('DELETE FROM metrics WHERE ts < ?', [time() - 8 * 86400]);
 
-    $now = time();
-    $lastCacheAttempt = (int) (tc_state($db, 'cache_last_attempt_at') ?? 0);
-    $cacheAttempted = $now - $lastCacheAttempt >= 300;
-    $cacheBytes = $cacheAttempted ? tc_measure_cache_bytes() : null;
-    tc_collect($db, $now, $cacheBytes, $cacheAttempted);
+    tc_collect($db, time());
 } catch (\Throwable $e) {
     fwrite(STDERR, 'collect-metrics: ' . $e->getMessage() . "\n");
     exit(1);
