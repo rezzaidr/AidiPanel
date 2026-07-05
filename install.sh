@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  AidiPanel Installer v1.2.3
+#  AidiPanel Installer v1.2.4
 #  Stack: Nginx + FastCGI Cache + PHP-FPM (multi-version) + MySQL/MariaDB + Redis
 #  Supported OS: Debian 11/12, Ubuntu 22.04/24.04 (x86_64 & arm64)
 #
@@ -26,7 +26,7 @@ IFS=$'\n\t'
 # 0. GLOBAL CONSTANTS & DEFAULTS
 # ---------------------------------------------------------------------------
 readonly PANEL_NAME="AidiPanel"
-readonly PANEL_VERSION="1.2.3"
+readonly PANEL_VERSION="1.2.4"
 readonly PANEL_USER="aidipanel"
 readonly PANEL_DIR="/opt/aidipanel"
 readonly PANEL_LOG="/var/log/aidipanel-install.log"
@@ -2158,7 +2158,14 @@ _health_check() {
   _svc_row "$(_db_service_name)"
   [[ "$INSTALL_REDIS" == "true" ]] && _svc_row redis-server
   if [[ -d "$NGINX_CACHE_DIR" ]]; then _matrix "FastCGI cache" "ready"; else _matrix "FastCGI cache" "missing"; failed=$((failed+1)); fi
-  if curl -ksfS --max-time 5 "https://127.0.0.1:${PANEL_PORT}/" -o /dev/null; then _matrix "AidiPanel port ${PANEL_PORT}" "responding"; else _matrix "AidiPanel port ${PANEL_PORT}" "no response"; fi
+  if curl -kfsS --http1.1 \
+      --connect-timeout 2 --max-time 5 \
+      --retry 5 --retry-all-errors --retry-delay 1 --retry-max-time 15 \
+      "https://127.0.0.1:${PANEL_PORT}/" -o /dev/null >> "$PANEL_LOG" 2>&1; then
+    _matrix "AidiPanel port ${PANEL_PORT}" "responding"
+  else
+    _matrix "AidiPanel port ${PANEL_PORT}" "no response"; failed=$((failed+1))
+  fi
   printf '\n'
   if (( failed > 0 )); then ui_kv "Result" "${failed} issue(s) — see ${PANEL_LOG}"; else ui_kv "Result" "all checks passed"; fi
 }
