@@ -476,7 +476,7 @@ _install_base_packages() {
   echo 'DPkg::Lock::Timeout "300";' > /etc/apt/apt.conf.d/99aidipanel-lock-timeout
   _apt_install \
     curl wget gnupg2 lsb-release ca-certificates apt-transport-https \
-    software-properties-common unzip zip tar rclone \
+    software-properties-common acl unzip zip tar rclone \
     git cron ufw fail2ban \
     openssl certbot \
     sqlite3 python3 \
@@ -761,7 +761,7 @@ _create_fastcgi_cache_dir() {
 # warning; the metric just reads as "—", nothing else breaks).
 _grant_cache_acl() {
   [[ "$DRY_RUN" == "true" ]] && return 0
-  command -v setfacl >/dev/null 2>&1 || apt_install acl
+  command -v setfacl >/dev/null 2>&1 || _apt_install acl
   command -v setfacl >/dev/null 2>&1 || return 1
   [[ -d "$NGINX_CACHE_DIR" ]] || return 1
   setfacl -R -m "u:${PANEL_USER}:rX" -m "d:u:${PANEL_USER}:rX" "$NGINX_CACHE_DIR" 2>/dev/null
