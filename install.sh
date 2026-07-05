@@ -1600,6 +1600,7 @@ pm.max_requests = 200
 php_admin_value[error_log] = /var/log/aidipanel-fpm.log
 php_admin_flag[log_errors] = on
 php_admin_flag[display_errors] = off
+php_admin_value[session.gc_maxlifetime] = 1800
 PANELFPM
 
   # Unquoted heredoc: ${fpm_bin}/${conf} expand; \$MAINPID is a systemd runtime

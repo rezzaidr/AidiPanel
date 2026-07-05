@@ -7,6 +7,12 @@ class Auth
     /** A password-verified session awaiting its 2FA code expires after this long. */
     public const PENDING_TTL = 300;   // 5 minutes
 
+    /** Max idle time between requests before the session is invalidated (L4). */
+    public const IDLE_TIMEOUT = 1800;      // 30 minutes
+
+    /** Max session age since login (absolute cap), regardless of activity (L4). */
+    public const ABSOLUTE_TIMEOUT = 28800; // 8 hours
+
     public static function check(): bool
     {
         if (!Session::has('user_id')) {
@@ -25,6 +31,25 @@ class Auth
             self::logout();
             return false;
         }
+
+        // Idle / absolute session caps (L4). A session idle longer than
+        // IDLE_TIMEOUT, or older than ABSOLUTE_TIMEOUT since login, is ended.
+        // Existing sessions from before this change have no login_at: they get a
+        // last_activity stamp on this request and are then subject to the idle
+        // cap (the absolute cap applies after the next real login), so the
+        // deploy does NOT force a one-time mass re-login.
+        $now          = time();
+        $loginAt      = (int) Session::get('login_at', 0);
+        $lastActivity = (int) Session::get('last_activity', 0);
+        if ($loginAt > 0 && ($now - $loginAt) > self::ABSOLUTE_TIMEOUT) {
+            self::logout();
+            return false;
+        }
+        if ($lastActivity > 0 && ($now - $lastActivity) > self::IDLE_TIMEOUT) {
+            self::logout();
+            return false;
+        }
+        Session::set('last_activity', $now);
 
         // Apply account and role changes to an already-open session immediately.
         Session::set('username', $user['username']);
@@ -52,6 +77,8 @@ class Auth
         Session::set('role',     $user['role']);
         Session::set('auth_hash', self::authHash((string) $user['password_hash']));
         Session::set('first_login', $wasFirstLogin);
+        Session::set('login_at', time());        // L4: absolute-cap anchor
+        Session::set('last_activity', time());   // L4: idle-cap anchor
         DB::instance()->run('UPDATE users SET last_login = ? WHERE id = ?', [gmdate('Y-m-d H:i:s'), $user['id']]);
     }
 
