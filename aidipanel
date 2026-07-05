@@ -8213,6 +8213,11 @@ _panel_acme_conf_render() {
   printf '    ssl_certificate %s;\n    ssl_certificate_key %s;\n' "$fullchain" "$privkey"
   cat <<'NGINX'
     ssl_protocols       TLSv1.2 TLSv1.3;
+    # HSTS: this block only renders once a trusted cert is active (fullchain +
+    # privkey set), so pinning HTTPS here cannot lock users out before TLS works.
+    # No includeSubDomains on purpose — only the panel host itself is pinned, so
+    # a customer subdomain that is briefly on plain HTTP during setup is unaffected.
+    add_header Strict-Transport-Security "max-age=63072000" always;
 
     root /opt/aidipanel/public;
     index index.php index.html;
