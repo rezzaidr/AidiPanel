@@ -270,6 +270,7 @@ function is_valid_domain(string $domain): bool
 
 function is_valid_proxy_url(string $url): bool
 {
+    // Reject CR/LF/semicolon/space — blocks header/config injection.
     if (preg_match('/[\r\n;\s]/', $url)) {
         return false;
     }
@@ -279,7 +280,25 @@ function is_valid_proxy_url(string $url): bool
         return false;
     }
 
-    return !empty($parts['host']);
+    // Loopback-only. The documented use case is a local app (Node/Python) on
+    // 127.0.0.1:<port>. Any other host — public, private, cloud metadata
+    // (169.254.169.254), or an internal service — is rejected, closing SSRF via
+    // the client-reachable proxy-upstream route (site:add / updateProxy). A host
+    // needing a non-loopback upstream must edit the Nginx vhost directly (admin
+    // only). Literal host check only (no DNS resolution), so DNS rebinding
+    // cannot bypass it: only the exact strings 127.0.0.1 / localhost / ::1 pass.
+    $host = strtolower((string) ($parts['host'] ?? ''));
+    $host = trim($host, '[]');   // strip IPv6 brackets (parse_url keeps them)
+    if (!in_array($host, ['127.0.0.1', 'localhost', '::1'], true)) {
+        return false;
+    }
+
+    // Optional port must be in the valid range.
+    if (isset($parts['port']) && ((int) $parts['port'] < 1 || (int) $parts['port'] > 65535)) {
+        return false;
+    }
+
+    return true;
 }
 
 function web_cli_allowed_commands(): array

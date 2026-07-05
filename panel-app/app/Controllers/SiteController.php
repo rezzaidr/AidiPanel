@@ -87,7 +87,7 @@ class SiteController extends BaseController
         // Patch C: a not-installed version is no longer blocked here — the CLI
         // (site:add) auto-installs it. The wizard confirms with the user first.
         if ($type === 'proxy' && !is_valid_proxy_url($proxyPass)) {
-            $this->error('Invalid reverse proxy URL.');
+            $this->error('The reverse proxy upstream must be loopback (e.g. http://127.0.0.1:3000). Use the Nginx editor for other upstreams.');
         }
         if ($siteUser !== '' && !preg_match('/^[a-z][a-z0-9_-]{0,31}$/', $siteUser)) {
             $this->error('Invalid site user: lowercase, start with a letter, [a-z0-9_-], max 32 chars.');
@@ -855,7 +855,7 @@ class SiteController extends BaseController
             $proxyPass = 'http://127.0.0.1:' . (int) $appPort;
         }
         if (!is_valid_proxy_url($proxyPass)) {
-            $this->error('Invalid reverse proxy URL.');
+            $this->error('The reverse proxy upstream must be loopback (e.g. http://127.0.0.1:3000). Use the Nginx editor for other upstreams.');
         }
 
         $confFile = "/etc/nginx/sites-available/{$domain}.conf";

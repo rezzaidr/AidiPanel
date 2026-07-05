@@ -157,12 +157,19 @@ _domain_valid() {
   [[ "$1" =~ ^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$ ]]
 }
 
+# Loopback-only reverse-proxy upstream. Accepts only http(s)://127.0.0.1:<port>,
+# http(s)://localhost:<port>, or http(s)://[::1]:<port>. Any other host — public,
+# private, or cloud metadata (169.254.169.254) — is rejected, closing SSRF via the
+# proxy-upstream path. Literal host check only (no DNS), so rebinding cannot
+# bypass it. Non-loopback upstreams must be set via the raw Nginx editor (admin).
 _proxy_url_valid() {
-  local url="$1"
-  [[ "$url" =~ ^https?://[a-zA-Z0-9._:-]+(/[^[:space:];]*)?$ ]] \
-    && [[ "$url" != *$'\n'* ]] \
-    && [[ "$url" != *$'\r'* ]] \
-    && [[ "$url" != *";"* ]]
+  local url="$1" host=""
+  [[ "$url" != *$'\n'* && "$url" != *$'\r'* && "$url" != *';'* ]] || return 1
+  [[ "$url" =~ ^https?://(\[[0-9A-Fa-f:]+\]|[^:/]+)(:[0-9]+)?(/[^[:space:];]*)?$ ]] || return 1
+  host="${BASH_REMATCH[1]}"
+  host="${host#\[}"; host="${host%\]}"   # strip IPv6 brackets if present
+  host="${host,,}"                        # lowercase
+  [[ "$host" == "127.0.0.1" || "$host" == "localhost" || "$host" == "::1" ]]
 }
 
 _sql_escape_literal() {
