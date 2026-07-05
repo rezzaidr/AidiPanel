@@ -76,7 +76,7 @@ final class TwoFactor
             $codes[] = $plain;
             $db->run(
                 'INSERT INTO user_recovery_codes (user_id, code_hash) VALUES (?, ?)',
-                [$userId, self::hashCode($plain)]
+                [$userId, self::hashRecovery($plain)]
             );
         }
         return $codes;
@@ -85,20 +85,43 @@ final class TwoFactor
     /** Redeem a recovery code (single-use). True if it matched an unused code. */
     public static function verifyRecoveryCode(int $userId, string $code): bool
     {
+        $normalized = self::normalize($code);
+        if ($normalized === '') {
+            return false;
+        }
         $db = DB::instance();
-        return $db->immediateTransaction(static function (DB $db) use ($userId, $code): bool {
-            $row = $db->row(
-                'SELECT id FROM user_recovery_codes WHERE user_id = ? AND code_hash = ? AND used_at IS NULL LIMIT 1',
-                [$userId, self::hashCode($code)]
+        return $db->immediateTransaction(static function (DB $db) use ($userId, $normalized): bool {
+            // bcrypt is non-deterministic, so look-up can't be by hash. Fetch the
+            // (few, <= RECOVERY_COUNT) unused codes for this user and verify each.
+            // A legacy single-pass SHA-256 hash (from before this hardening) is
+            // accepted once and upgraded to bcrypt on its successful use, so no
+            // existing recovery code is silently invalidated.
+            $rows = $db->rows(
+                'SELECT id, code_hash FROM user_recovery_codes WHERE user_id = ? AND used_at IS NULL',
+                [$userId]
             );
-            if ($row === null) {
-                return false;
+            foreach ($rows as $row) {
+                $stored = (string) $row['code_hash'];
+                $matched = str_starts_with($stored, '$2y$')
+                    ? password_verify($normalized, $stored)
+                    : hash_equals($stored, hash('sha256', $normalized));
+                if (!$matched) {
+                    continue;
+                }
+                $now = gmdate('Y-m-d H:i:s');
+                $db->run(
+                    'UPDATE user_recovery_codes SET used_at = ? WHERE id = ? AND used_at IS NULL',
+                    [$now, (int) $row['id']]
+                );
+                if (!str_starts_with($stored, '$2y$')) {
+                    $db->run(
+                        'UPDATE user_recovery_codes SET code_hash = ? WHERE id = ?',
+                        [password_hash($normalized, PASSWORD_BCRYPT, ['cost' => 12]), (int) $row['id']]
+                    );
+                }
+                return true;
             }
-            $db->run(
-                'UPDATE user_recovery_codes SET used_at = ? WHERE id = ? AND used_at IS NULL',
-                [gmdate('Y-m-d H:i:s'), (int) $row['id']]
-            );
-            return true;
+            return false;
         });
     }
 
@@ -121,9 +144,18 @@ final class TwoFactor
         return substr($raw, 0, 5) . '-' . substr($raw, 5, 5);
     }
 
-    /** Normalise (lowercase, strip non-alphanumerics) then SHA-256 for storage/compare. */
-    public static function hashCode(string $code): string
+    /** Normalise a recovery code: lowercase + strip non-alphanumerics (dashes/spaces). */
+    private static function normalize(string $code): string
     {
-        return hash('sha256', strtolower((string) preg_replace('/[^a-z0-9]/i', '', $code)));
+        return strtolower((string) preg_replace('/[^a-z0-9]/i', '', $code));
+    }
+
+    /** Hash a recovery code for storage with bcrypt cost 12 (same as user
+     *  passwords). Unlike the old single-pass SHA-256, a leaked DB cannot
+     *  brute-force these offline. Legacy SHA-256 hashes are migrated on first
+     *  successful verify (see verifyRecoveryCode). */
+    private static function hashRecovery(string $code): string
+    {
+        return password_hash(self::normalize($code), PASSWORD_BCRYPT, ['cost' => 12]);
     }
 }
