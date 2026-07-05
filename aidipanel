@@ -2909,6 +2909,7 @@ Match Group ${SFTP_GROUP}
     ChrootDirectory %h
     ForceCommand internal-sftp
     AllowTcpForwarding no
+    AllowAgentForwarding no
     X11Forwarding no
     PermitTunnel no
   PasswordAuthentication yes
@@ -3068,11 +3069,21 @@ _sftp_passwd_clear() {
 # sftp:key-add --domain X   (one SSH public key on stdin)
 _sftp_key_add() {
   _require_root "sftp:key-add"; _parse_opts "$@"
-  local domain key tmp body ak; domain=$(_opt "domain"); _require_arg "domain" "$domain" "sftp:key-add --domain X (key on stdin)"
+  local domain key tmp body ak ktype; domain=$(_opt "domain"); _require_arg "domain" "$domain" "sftp:key-add --domain X (key on stdin)"
   _files_resolve "$domain"
   _sftp_lock
   IFS= read -r key || true
   [[ -n "$key" ]] || die "No key provided."
+  # Require a bare <type> <base64> [comment] line with NO leading authorized_keys
+  # options (command=, permitopen=, no-pty, ...). Options are an injection vector;
+  # refuse them at intake so nothing but a clean key reaches authorized_keys. The
+  # sshd Match block neutralizes options too (ForceCommand internal-sftp,
+  # AllowTcpForwarding no), but we reject them here as well.
+  ktype=$(awk '{print $1}' <<<"$key")
+  case "$ktype" in
+    ssh-rsa|ssh-dss|ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521|sk-ssh-ed25519@openssh.com|sk-ecdsa-sha2-nistp256@openssh.com) ;;
+    *) die "Provide a bare SSH public key (\"<type> <key> [comment]\"). Options like command= are not allowed." ;;
+  esac
   tmp=$(mktemp); printf '%s\n' "$key" > "$tmp"
   if ! ssh-keygen -l -f "$tmp" >/dev/null 2>&1; then rm -f "$tmp"; die "That is not a valid SSH public key."; fi
   rm -f "$tmp"
