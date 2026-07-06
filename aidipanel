@@ -5,7 +5,7 @@
 #
 #  Install : cp aidipanel /usr/local/bin/aidipanel && chmod +x /usr/local/bin/aidipanel
 #  Usage   : aidipanel <command> [options]
-#  Version : 1.3.0
+#  Version : 1.3.1
 #  Author  : AidiPanel Team — by rezzaid
 # =============================================================================
 
@@ -15,7 +15,7 @@ IFS=$'\n\t'
 # ---------------------------------------------------------------------------
 # CONSTANTS
 # ---------------------------------------------------------------------------
-readonly CLI_VERSION="1.3.0"
+readonly CLI_VERSION="1.3.1"
 readonly PANEL_DIR="/opt/aidipanel"
 readonly HOME_BASE="/home"
 readonly RESERVED_SITE_USERS=(root www-data ubuntu debian nginx mysql mariadb postgres redis aidipanel aidipanel-pma daemon bin sys sync games man lp mail news uucp proxy backup list irc gnats nobody systemd-network systemd-resolve)
@@ -381,6 +381,19 @@ _db_binary() {
     echo "mariadb"
   else
     echo "mysql"
+  fi
+}
+
+_db_dump_binary() {
+  # MariaDB 11.x+/12.x ship mariadb-dump and dropped the mysqldump compat name;
+  # MySQL ships mysqldump. Prefer the engine-native dump tool so backups work on
+  # both. Returns "" if neither is present (caller's command then fails loudly).
+  if command -v mariadb-dump &>/dev/null; then
+    echo "mariadb-dump"
+  elif command -v mysqldump &>/dev/null; then
+    echo "mysqldump"
+  else
+    echo ""
   fi
 }
 
@@ -2574,7 +2587,7 @@ _backup_create() {
   else
     for db in "${dbs[@]}"; do
       [[ "$db" =~ ^[A-Za-z0-9_]+$ ]] || die "Invalid database name: $db"
-      ( set -o pipefail; mysqldump --defaults-extra-file="$BACKUP_DUMP" \
+      ( set -o pipefail; "$(_db_dump_binary)" --defaults-extra-file="$BACKUP_DUMP" \
           --single-transaction --quick --lock-tables=false \
           --routines --triggers --events --default-character-set=utf8mb4 \
           "$db" | gzip > "${BACKUP_STAGING}/db_${db}.sql.gz" ) \
@@ -7433,7 +7446,7 @@ _db_backup() {
     || { rm -f -- "$backup_staged"; die "Could not secure the temporary database backup file."; }
   log "Backing up database: ${db_name} → ${backup_file}"
 
-  if ! ( set -o pipefail; mysqldump \
+  if ! ( set -o pipefail; "$(_db_dump_binary)" \
     --defaults-extra-file=<(printf '[client]\nuser=root\npassword=%s\n' "${MYSQL_ROOT_PASSWORD}") \
     --single-transaction \
     --quick \

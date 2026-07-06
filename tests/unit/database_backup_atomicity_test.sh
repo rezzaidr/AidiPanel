@@ -11,7 +11,7 @@ require() {
 }
 
 require 'backup_staged=$(mktemp "${output_dir}/.${db_name}.XXXXXX.sql.gz")' 'database dump uses a same-directory temporary file'
-require "( set -o pipefail; mysqldump" 'database dump propagates mysqldump and gzip failures'
+require '( set -o pipefail; "$(_db_dump_binary)"' 'database dump propagates dump-tool and gzip failures'
 require 'rm -f -- "$backup_staged"' 'failed database dumps remove partial output'
 require 'chmod 600 "$backup_staged"' 'database dumps are private before publication'
 require 'mv -f -- "$backup_staged" "$backup_file"' 'completed database dump is atomically published'

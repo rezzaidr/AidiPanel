@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  AidiPanel Installer v1.3.0
+#  AidiPanel Installer v1.3.1
 #  Stack: Nginx + FastCGI Cache + PHP-FPM (multi-version) + MySQL/MariaDB + Redis
 #  Supported OS: Debian 11/12, Ubuntu 22.04/24.04/26.04 (x86_64 & arm64)
 #
@@ -26,7 +26,7 @@ IFS=$'\n\t'
 # 0. GLOBAL CONSTANTS & DEFAULTS
 # ---------------------------------------------------------------------------
 readonly PANEL_NAME="AidiPanel"
-readonly PANEL_VERSION="1.3.0"
+readonly PANEL_VERSION="1.3.1"
 readonly PANEL_USER="aidipanel"
 readonly PANEL_DIR="/opt/aidipanel"
 readonly PANEL_LOG="/var/log/aidipanel-install.log"
@@ -1007,6 +1007,49 @@ PHPCONF
 # ---------------------------------------------------------------------------
 # 10. DATABASE
 # ---------------------------------------------------------------------------
+# Upstream version string for the chosen DB engine (mysql97→9.7, mariadb123→12.3).
+# Empty for an unknown engine.
+_db_engine_version() {
+  case "$DB_ENGINE" in
+    mysql*)      local v="${DB_ENGINE#mysql}"; echo "${v:0:1}.${v:1}" ;;
+    mariadb1011) echo "10.11" ;;
+    mariadb114)  echo "11.4"  ;;
+    mariadb118)  echo "11.8"  ;;
+    mariadb123)  echo "12.3"  ;;
+    *)           echo "" ;;
+  esac
+}
+
+# Return 0 if the chosen DB engine's apt repo publishes packages for the current
+# OS codename, 1 otherwise. MySQL: repo.mysql.com; MariaDB: per-version path on
+# dlm.mariadb.com. Probes the Release file (follows redirects).
+_db_repo_codename_available() {
+  local url
+  case "$DB_ENGINE" in
+    mysql*)
+      url="https://repo.mysql.com/apt/${OS_ID}/dists/${OS_CODENAME}/Release" ;;
+    mariadb*)
+      local ver; ver=$(_db_engine_version)
+      [[ -n "$ver" ]] || return 1
+      url="https://dlm.mariadb.com/repo/mariadb-server/${ver}/repo/${OS_ID}/dists/${OS_CODENAME}/Release" ;;
+    *)
+      return 1 ;;
+  esac
+  curl -fsSL --max-time 10 "$url" >/dev/null 2>&1
+}
+
+# Fail fast, BEFORE installing anything, if the chosen DB engine cannot be
+# installed on this OS. Upstream repos lag new Ubuntu LTS releases (26.04
+# resolute is absent from repo.mysql.com entirely and from MariaDB for 10.11/11.4).
+# Gives a clear message in <1s instead of failing after Foundation/Nginx/PHP.
+_assert_db_engine_available() {
+  if ! _db_repo_codename_available; then
+    local label="${DB_ENGINE_LABELS[$DB_ENGINE]:-}"
+    [[ -n "$label" ]] || label="$(_db_engine_version 2>/dev/null)"
+    die "${label:-$DB_ENGINE} is not available on ${OS_ID^} ${OS_VERSION_ID} (${OS_CODENAME}) — the upstream repository has not published this codename. On this OS use MariaDB 12.3 (the default) or 11.8; for MySQL or older MariaDB (10.11/11.4), install on Ubuntu 24.04/22.04."
+  fi
+}
+
 _db_repo_component() {
   case "$DB_ENGINE" in
     mysql80) echo "mysql-8.0" ;;
@@ -1044,18 +1087,11 @@ _add_mysql_repo() {
     return 0
   fi
 
-  local mysql_version mysql_component v
-  v="${DB_ENGINE#mysql}"
-  mysql_version="${v:0:1}.${v:1}"   # mysql80→8.0  mysql84→8.4  mysql97→9.7
+  local mysql_version mysql_component
+  mysql_version=$(_db_engine_version)
   mysql_component=$(_db_repo_component)
   [[ -n "$mysql_component" ]] || die "Unsupported MySQL engine: ${DB_ENGINE}"
-  # Oracle's repo.mysql.com lags new Ubuntu releases (26.04 resolute was absent
-  # months after release). Fail fast with an actionable message instead of a
-  # confusing apt 404 mid-install. Self-heals the day Oracle ships the codename.
-  if ! curl -fsSL --max-time 10 \
-      "https://repo.mysql.com/apt/ubuntu/dists/${OS_CODENAME}/Release" >/dev/null 2>&1; then
-    die "MySQL ${mysql_version} is not yet available on Ubuntu ${OS_VERSION_ID} (${OS_CODENAME}) — Oracle has not published this codename on repo.mysql.com. Use MariaDB (the default, --db-engine mariadb123) or install on Ubuntu 24.04/22.04."
-  fi
+  # Codename availability is validated up front by _assert_db_engine_available.
   log "Adding MySQL ${mysql_version} apt repository (${mysql_component})..."
   [[ "$DRY_RUN" == "true" ]] && return 0
 
@@ -1097,14 +1133,8 @@ _add_mariadb_repo() {
     return 0
   fi
 
-  local mariadb_version
-  case "$DB_ENGINE" in
-    mariadb1011) mariadb_version="10.11" ;;
-    mariadb114)  mariadb_version="11.4"  ;;
-    mariadb118)  mariadb_version="11.8"  ;;
-    mariadb123)  mariadb_version="12.3"  ;;
-  esac
-
+  local mariadb_version; mariadb_version=$(_db_engine_version)
+  # Codename availability is validated up front by _assert_db_engine_available.
   log "Adding MariaDB ${mariadb_version} apt repository..."
   [[ "$DRY_RUN" == "true" ]] && return 0
 
@@ -2368,6 +2398,7 @@ main() {
   _detect_os
   _check_resources
   _check_internet
+  _assert_db_engine_available
   _check_port_free
   _check_hostname_resolves
   print_server_profile
