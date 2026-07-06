@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  AidiPanel Installer v1.2.4
+#  AidiPanel Installer v1.3.0
 #  Stack: Nginx + FastCGI Cache + PHP-FPM (multi-version) + MySQL/MariaDB + Redis
-#  Supported OS: Debian 11/12, Ubuntu 22.04/24.04 (x86_64 & arm64)
+#  Supported OS: Debian 11/12, Ubuntu 22.04/24.04/26.04 (x86_64 & arm64)
 #
 #  Quick install (installs stack + deploys panel app automatically):
 #    curl -fsSL https://get.aidipanel.com | sudo bash
 #
 #  Options:
 #    --port PORT           Panel HTTPS port (default: 8443)
-#    --db-engine ENGINE    Database engine: mysql80 | mysql84 | mariadb1011 |
-#                          mariadb114 | mariadb118  (default: mariadb1011)
+#    --db-engine ENGINE    Database engine: mysql80 | mysql84 | mysql97 | mariadb1011 |
+#                          mariadb114 | mariadb118 | mariadb123  (default: mariadb123)
 #    --db-root-pass PASS   Set DB root password non-interactively
 #    --no-redis            Skip Redis installation
 #    --dry-run             Simulate install without making changes
@@ -26,7 +26,7 @@ IFS=$'\n\t'
 # 0. GLOBAL CONSTANTS & DEFAULTS
 # ---------------------------------------------------------------------------
 readonly PANEL_NAME="AidiPanel"
-readonly PANEL_VERSION="1.2.4"
+readonly PANEL_VERSION="1.3.0"
 readonly PANEL_USER="aidipanel"
 readonly PANEL_DIR="/opt/aidipanel"
 readonly PANEL_LOG="/var/log/aidipanel-install.log"
@@ -35,18 +35,20 @@ readonly NGINX_CACHE_DIR="/var/cache/nginx/fastcgi"
 readonly NGINX_CACHE_ZONE="aidipanel_fcgi"
 readonly SITES_DIR="/var/www"
 readonly DB_NAME="aidipanel"
-PHP_DEFAULT_VERSION="8.4"
+PHP_DEFAULT_VERSION="8.5"
 
 declare -A DB_ENGINE_LABELS=(
   [mysql80]="MySQL 8.0"
   [mysql84]="MySQL 8.4 (LTS)"
-  [mariadb1011]="MariaDB 10.11 (LTS) — recommended for WordPress"
+  [mysql97]="MySQL 9.7 (LTS)"
+  [mariadb1011]="MariaDB 10.11 (LTS)"
   [mariadb114]="MariaDB 11.4 (LTS)"
   [mariadb118]="MariaDB 11.8"
+  [mariadb123]="MariaDB 12.3 (LTS) — recommended for WordPress"
 )
 
 PANEL_PORT=8443
-DB_ENGINE="mariadb1011"
+DB_ENGINE="mariadb123"
 INSTALL_REDIS=true
 DRY_RUN=false
 DB_ROOT_PASS=""
@@ -204,7 +206,7 @@ _parse_args() {
       --db-engine)
         shift
         [[ -n "${DB_ENGINE_LABELS[$1]+_}" ]] \
-          || die "--db-engine must be one of: mysql80 | mysql84 | mariadb1011 | mariadb114 | mariadb118"
+          || die "--db-engine must be one of: mysql80 | mysql84 | mysql97 | mariadb1011 | mariadb114 | mariadb118 | mariadb123"
         DB_ENGINE="$1"
         ;;
       --db-root-pass)
@@ -236,8 +238,8 @@ _parse_args() {
       --help|-h)
         echo "Usage: bash $0 [OPTIONS]"
         echo "  --port PORT           Panel HTTPS port (default: 8443)"
-        echo "  --db-engine ENGINE    Database engine (default: mariadb1011)"
-        echo "                        Options: mysql80 | mysql84 | mariadb1011 | mariadb114 | mariadb118"
+        echo "  --db-engine ENGINE    Database engine (default: mariadb123)"
+        echo "                        Options: mysql80 | mysql84 | mysql97 | mariadb1011 | mariadb114 | mariadb118 | mariadb123"
         echo "  --db-root-pass PASS   Set DB root password non-interactively"
         echo "  --no-redis            Skip Redis installation"
         echo "  --dry-run             Simulate install without making changes"
@@ -299,11 +301,12 @@ _detect_os() {
       case "$OS_VERSION_ID" in
         22.04) OS_CODENAME="jammy" ;;
         24.04) OS_CODENAME="noble" ;;
-        *) die "Unsupported Ubuntu version: $OS_VERSION_ID. Supported: 22.04, 24.04." ;;
+        26.04) OS_CODENAME="resolute" ;;
+        *) die "Unsupported Ubuntu version: $OS_VERSION_ID. Supported: 22.04, 24.04, 26.04." ;;
       esac
       ;;
     *)
-      die "Unsupported OS: '$OS_ID'. Supported: Debian 11/12, Ubuntu 22.04/24.04."
+      die "Unsupported OS: '$OS_ID'. Supported: Debian 11/12, Ubuntu 22.04/24.04/26.04."
       ;;
   esac
 
@@ -408,7 +411,7 @@ print_provisioning_plan() {
   ui_section "Provisioning Plan"
   ui_kv "Foundation"    "System tools · Swap · Base services"
   ui_kv "Web Engine"    "Nginx mainline · FastCGI Cache"
-  ui_kv "Runtime"       "PHP-FPM ${PHP_DEFAULT_VERSION} (default) · 8.2/8.3/8.5 on-demand"
+  ui_kv "Runtime"       "PHP-FPM ${PHP_DEFAULT_VERSION} (default) · 8.2/8.3/8.4 on-demand"
   ui_kv "Data Layer"    "${DB_ENGINE_LABELS[$DB_ENGINE]} · Redis"
   ui_kv "Security"      "UFW · Fail2ban · Certbot · Sudo wrapper"
   ui_kv "Control Plane" "AidiPanel Web UI · CLI · Cron"
@@ -602,15 +605,15 @@ _add_nginx_repo() {
   local nginx_repo_os="$OS_ID"
   local nginx_repo_codename="$OS_CODENAME"
 
-  if [[ "$OS_ID" == "ubuntu" && "$OS_VERSION_ID" == "24.04" ]]; then
-    # Check if noble is in nginx.org mainline
+  if [[ "$OS_ID" == "ubuntu" ]]; then
+    # Probe whether nginx.org mainline ships this codename; fall back to distro nginx.
     if curl -fsSL --max-time 10 \
-        "https://nginx.org/packages/ubuntu/dists/noble/" >/dev/null 2>&1; then
-      log "Nginx official repo supports Ubuntu 24.04 noble"
+        "https://nginx.org/packages/ubuntu/dists/${OS_CODENAME}/" >/dev/null 2>&1; then
+      log "Nginx official repo supports Ubuntu ${OS_VERSION_ID} ${OS_CODENAME}"
     else
-      warn "Nginx official repo not yet available for Ubuntu 24.04 noble — using distro nginx"
+      warn "Nginx official repo not yet available for Ubuntu ${OS_VERSION_ID} ${OS_CODENAME} — using distro nginx"
       _apt_install nginx
-      ok "Nginx installed from distro repo (Ubuntu 24.04 noble)"
+      ok "Nginx installed from distro repo (Ubuntu ${OS_VERSION_ID} ${OS_CODENAME})"
       return 0
     fi
   fi
@@ -855,6 +858,18 @@ FCGI_SNIP
 # ---------------------------------------------------------------------------
 # 9. PHP-FPM (multi-version) — tuned for lightweight VPS
 # ---------------------------------------------------------------------------
+# Configure deb.sury.org as the PHP source. Used for Debian always, and for
+# Ubuntu codenames the ondrej Launchpad PPA has not published yet (new LTS
+# series lag the PPA; sury ships the same php* packages and publishes faster).
+_configure_sury_php_repo() {
+  _install_verified_apt_key "https://packages.sury.org/php/apt.gpg" \
+    "/etc/apt/trusted.gpg.d/php-sury.gpg" \
+    "15058500A0235D97F5D10063B188E2B695BD4743"
+  cat > /etc/apt/sources.list.d/php.list <<PHP_REPO
+deb [signed-by=/etc/apt/trusted.gpg.d/php-sury.gpg] https://packages.sury.org/php/ ${OS_CODENAME} main
+PHP_REPO
+}
+
 _add_php_repo() {
   if [[ -f /etc/apt/sources.list.d/php.list ]]; then
     log "PHP apt repo already configured — skipping"
@@ -863,9 +878,10 @@ _add_php_repo() {
   log "Adding PHP repository (ondrej/sury)..."
   [[ "$DRY_RUN" == "true" ]] && { warn "[dry-run] skipping PHP repo add"; return 0; }
 
-  if [[ "$OS_ID" == "ubuntu" ]]; then
-    # Configure the public Launchpad PPA explicitly so its signing key is
-    # verified against the full fingerprint published by Launchpad.
+  if [[ "$OS_ID" == "ubuntu" ]] && curl -fsSL --max-time 10 \
+      "https://ppa.launchpadcontent.net/ondrej/php/ubuntu/dists/${OS_CODENAME}/Release" >/dev/null 2>&1; then
+    # ondrej Launchpad PPA — verified against the full fingerprint published by Launchpad.
+    log "ondrej PPA supports Ubuntu ${OS_VERSION_ID} ${OS_CODENAME}"
     _install_verified_apt_key \
       "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xB8DC7E53946656EFBCE4C1DD71DAEAAB4AD4CAB6" \
       "/etc/apt/trusted.gpg.d/php-ondrej.gpg" \
@@ -874,13 +890,13 @@ _add_php_repo() {
 deb [signed-by=/etc/apt/trusted.gpg.d/php-ondrej.gpg] https://ppa.launchpadcontent.net/ondrej/php/ubuntu ${OS_CODENAME} main
 PHP_REPO
   else
-    # Debian — use deb.sury.org
-    _install_verified_apt_key "https://packages.sury.org/php/apt.gpg" \
-      "/etc/apt/trusted.gpg.d/php-sury.gpg" \
-      "15058500A0235D97F5D10063B188E2B695BD4743"
-    cat > /etc/apt/sources.list.d/php.list <<PHP_REPO
-deb [signed-by=/etc/apt/trusted.gpg.d/php-sury.gpg] https://packages.sury.org/php/ ${OS_CODENAME} main
-PHP_REPO
+    # Debian, or an Ubuntu codename the PPA has not published yet. New LTS series
+    # can lag the PPA for months; deb.sury.org ships the same php* packages for
+    # Ubuntu codenames and publishes faster (same maintainer, Ondřej Surý).
+    if [[ "$OS_ID" == "ubuntu" ]]; then
+      warn "ondrej PPA not yet available for Ubuntu ${OS_VERSION_ID} ${OS_CODENAME} — using deb.sury.org"
+    fi
+    _configure_sury_php_repo
   fi
   _apt_update
   ok "PHP repository added"
@@ -971,7 +987,7 @@ _install_all_php_versions() {
   cat > /etc/aidipanel/php.conf <<'PHPCONF'
 # /etc/aidipanel/php.conf — AidiPanel PHP version policy (single source of truth).
 # Written by install.sh; sourced by the CLI; parsed by the panel.
-PHP_DEFAULT_VERSION="8.4"
+PHP_DEFAULT_VERSION="8.5"
 PHP_AVAILABLE_VERSIONS="8.2 8.3 8.4 8.5"
 PHP_EXTENSIONS="fpm cli common mysql sqlite3 redis xml mbstring curl zip gd intl bcmath soap imagick opcache"
 PHPCONF
@@ -995,42 +1011,51 @@ _db_repo_component() {
   case "$DB_ENGINE" in
     mysql80) echo "mysql-8.0" ;;
     mysql84) echo "mysql-8.4-lts" ;;
+    mysql97) echo "mysql-9.7-lts" ;;
     *)       echo "" ;;
   esac
 }
 
 _db_package_name() {
   case "$DB_ENGINE" in
-    mysql80|mysql84) echo "mysql-community-server" ;;
-    mariadb*)        echo "mariadb-server" ;;
+    mysql*)   echo "mysql-community-server" ;;
+    mariadb*) echo "mariadb-server" ;;
   esac
 }
 
 _db_service_name() {
   case "$DB_ENGINE" in
-    mysql80|mysql84)   echo "mysql" ;;
-    mariadb*)          echo "mariadb" ;;
+    mysql*)   echo "mysql" ;;
+    mariadb*) echo "mariadb" ;;
   esac
 }
 
 _db_client_binary() {
   case "$DB_ENGINE" in
-    mysql80|mysql84) echo "mysql" ;;
-    mariadb*)        echo "mariadb" ;;
+    mysql*)   echo "mysql" ;;
+    mariadb*) echo "mariadb" ;;
   esac
 }
 
 _add_mysql_repo() {
-  [[ "$DB_ENGINE" == mysql80 || "$DB_ENGINE" == mysql84 ]] || return 0
+  [[ "$DB_ENGINE" == mysql* ]] || return 0
   if [[ -f /etc/apt/sources.list.d/mysql.list ]]; then
     log "MySQL apt repo already configured — skipping"
     return 0
   fi
 
-  local mysql_version mysql_component
-  [[ "$DB_ENGINE" == "mysql80" ]] && mysql_version="8.0" || mysql_version="8.4"
+  local mysql_version mysql_component v
+  v="${DB_ENGINE#mysql}"
+  mysql_version="${v:0:1}.${v:1}"   # mysql80→8.0  mysql84→8.4  mysql97→9.7
   mysql_component=$(_db_repo_component)
   [[ -n "$mysql_component" ]] || die "Unsupported MySQL engine: ${DB_ENGINE}"
+  # Oracle's repo.mysql.com lags new Ubuntu releases (26.04 resolute was absent
+  # months after release). Fail fast with an actionable message instead of a
+  # confusing apt 404 mid-install. Self-heals the day Oracle ships the codename.
+  if ! curl -fsSL --max-time 10 \
+      "https://repo.mysql.com/apt/ubuntu/dists/${OS_CODENAME}/Release" >/dev/null 2>&1; then
+    die "MySQL ${mysql_version} is not yet available on Ubuntu ${OS_VERSION_ID} (${OS_CODENAME}) — Oracle has not published this codename on repo.mysql.com. Use MariaDB (the default, --db-engine mariadb123) or install on Ubuntu 24.04/22.04."
+  fi
   log "Adding MySQL ${mysql_version} apt repository (${mysql_component})..."
   [[ "$DRY_RUN" == "true" ]] && return 0
 
@@ -1040,7 +1065,11 @@ _add_mysql_repo() {
   local mysql_key_fingerprint="BCA43417C3B485DD128EC6D4B7B3B788A8D3785C" tmp_gpg key_file actual_fingerprint
   tmp_gpg=$(mktemp -d)
   key_file="${tmp_gpg}/mysql.asc"
-  curl -fsSL --proto '=https' --tlsv1.2 "https://repo.mysql.com/RPM-GPG-KEY-mysql-2023" -o "$key_file" \
+  # Oracle extends this key's expiry and re-publishes under a new year file
+  # (same fingerprint BCA43417…). RPM-GPG-KEY-mysql-2023 expired 2025-10; the
+  # 2025 file re-publishes the same key with an extended expiry. If apt later
+  # complains EXPKEYSIG again, bump to the newest RPM-GPG-KEY-mysql-* year.
+  curl -fsSL --proto '=https' --tlsv1.2 "https://repo.mysql.com/RPM-GPG-KEY-mysql-2025" -o "$key_file" \
     || { rm -rf "$tmp_gpg"; die "Could not download the MySQL repository signing key."; }
   gpg --homedir "$tmp_gpg" --batch --import "$key_file" >> "$PANEL_LOG" 2>&1 \
     || { rm -rf "$tmp_gpg"; die "Could not import the MySQL repository signing key."; }
@@ -1073,6 +1102,7 @@ _add_mariadb_repo() {
     mariadb1011) mariadb_version="10.11" ;;
     mariadb114)  mariadb_version="11.4"  ;;
     mariadb118)  mariadb_version="11.8"  ;;
+    mariadb123)  mariadb_version="12.3"  ;;
   esac
 
   log "Adding MariaDB ${mariadb_version} apt repository..."
@@ -1115,12 +1145,9 @@ _preseed_mysql_root_password() {
 _assert_db_package_candidate() {
   [[ "$DB_ENGINE" == mysql* ]] || return 0
 
-  local pkg="$1" expected_major candidate
-  case "$DB_ENGINE" in
-    mysql80) expected_major="8.0." ;;
-    mysql84) expected_major="8.4." ;;
-    *) die "Unsupported MySQL engine: ${DB_ENGINE}" ;;
-  esac
+  local pkg="$1" expected_major candidate v
+  v="${DB_ENGINE#mysql}"
+  expected_major="${v:0:1}.${v:1}."   # mysql80→8.0.  mysql84→8.4.  mysql97→9.7.
 
   candidate=$(apt-cache policy "$pkg" | awk '/Candidate:/ {candidate=$2} END {print candidate}')
   [[ -n "$candidate" && "$candidate" != "(none)" ]] \
@@ -1285,6 +1312,19 @@ _configure_redis() {
   ok "Redis configured (maxmemory: ${redis_maxmem}, policy: allkeys-lru, persistence: off, aclfile)"
 }
 
+# Download the first reachable URL into $1. HTTPS + TLS1.2 enforced; returns 0
+# on the first success. Used for assets whose primary mirror may rate-limit.
+_download_first() {
+  local dest="$1"; shift
+  local url
+  for url in "$@"; do
+    if curl -fsSL --proto '=https' --tlsv1.2 -o "$dest" "$url" 2>/dev/null; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 _install_wpcli() {
   if command -v wp &>/dev/null; then
     log "WP-CLI already installed — skipping"
@@ -1295,10 +1335,15 @@ _install_wpcli() {
   tmp_dir=$(mktemp -d)
   phar="${tmp_dir}/wp-cli.phar"
   checksum="${tmp_dir}/wp-cli.phar.sha512"
-  if curl -fsSL --proto '=https' --tlsv1.2 -o "$phar" \
-       "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar" 2>/dev/null \
-     && curl -fsSL --proto '=https' --tlsv1.2 -o "$checksum" \
-       "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar.sha512" 2>/dev/null \
+  # Prefer the jsdelivr CDN mirror of wp-cli/builds; raw.githubusercontent.com
+  # rate-limits (HTTP 429) back-to-back requests from cloud IPs, which left the
+  # sha512 fetch failing and WP-CLI uninstalled on fresh cloud VPS installs.
+  if _download_first "$phar" \
+       "https://cdn.jsdelivr.net/gh/wp-cli/builds@gh-pages/phar/wp-cli.phar" \
+       "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar" \
+     && _download_first "$checksum" \
+       "https://cdn.jsdelivr.net/gh/wp-cli/builds@gh-pages/phar/wp-cli.phar.sha512" \
+       "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar.sha512" \
      && printf '%s  %s\n' "$(cat "$checksum")" "$phar" | sha512sum -c - >/dev/null 2>&1; then
     install -o root -g root -m 0755 "$phar" /usr/local/bin/wp
     rm -rf "$tmp_dir"
@@ -2354,7 +2399,7 @@ main() {
   printf '%s\n' "Runtime bundle (PHP ${PHP_DEFAULT_VERSION})"
   ui_note "PHP-FPM · CLI · MySQL · Redis · SQLite · XML · mbstring"
   ui_note "curl · zip · GD · intl · bcmath · SOAP · imagick · OPcache"
-  ui_note "Versions 8.2 / 8.3 / 8.5 install on-demand (aidipanel php:install)"
+  ui_note "Versions 8.2 / 8.3 / 8.4 install on-demand (aidipanel php:install)"
   printf '\n'
   t=$SECONDS
   _add_php_repo
