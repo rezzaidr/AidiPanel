@@ -7,7 +7,7 @@ AidiPanel is a server control panel for Ubuntu/Debian. It provisions a complete 
 | Layer | Software | Role |
 |-------|----------|------|
 | Web server | Nginx (mainline) | Serves sites, terminates TLS, runs FastCGI Cache |
-| Runtime | PHP-FPM | One pool per site; default version 8.4 |
+| Runtime | PHP-FPM | One pool per site; default version 8.5 |
 | Database | MariaDB / MySQL | Application data |
 | Cache | Redis | Object cache and session storage |
 | TLS | Certbot (Let's Encrypt) | Certificates with auto-renewal |
@@ -50,7 +50,7 @@ A `/home/<site-user>/.aidipanel-managed` marker (owned `root:root`) records whic
 `/etc/aidipanel/php.conf` is the single source of truth:
 
 ```sh
-PHP_DEFAULT_VERSION="8.4"
+PHP_DEFAULT_VERSION="8.5"
 PHP_AVAILABLE_VERSIONS="8.2 8.3 8.4 8.5"
 ```
 

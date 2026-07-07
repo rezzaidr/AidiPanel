@@ -38,8 +38,8 @@ Use a fresh, dedicated VPS: the installer provisions the system web/database sta
 ## Stack
 
 - **Nginx** (official mainline) with FastCGI Cache
-- **PHP-FPM** — 8.4 installed by default; 8.2, 8.3, 8.4, 8.5 available on-demand, switchable per site
-- **MariaDB** 10.11 LTS by default (MariaDB 11.4 / 11.8 or MySQL 8.0 / 8.4 selectable at install)
+- **PHP-FPM** — 8.5 installed by default; 8.2, 8.3, 8.4 available on-demand, switchable per site
+- **MariaDB** 12.3 LTS by default (MariaDB 11.8 / 11.4 / 10.11 or MySQL 9.7 / 8.4 / 8.0 selectable at install)
 - **Redis** for object cache and session storage
 - **Certbot** (Let's Encrypt) with automatic renewal
 - **UFW** firewall + **Fail2ban**
@@ -68,16 +68,18 @@ If one site's PHP is compromised, the process runs only as that site's user and 
 
 | OS | Versions |
 |----|----------|
-| Ubuntu | 22.04 LTS (jammy), 24.04 LTS (noble) |
+| Ubuntu | 22.04 LTS (jammy), 24.04 LTS (noble), 26.04 LTS (resolute) |
 | Debian | 11 (bullseye), 12 (bookworm) |
 
 Architecture: x86_64 and aarch64.
+
+> On Ubuntu 26.04 only MariaDB 11.8 / 12.3 can install (MySQL and MariaDB 10.11 / 11.4 are upstream-blocked). Recommended: Ubuntu 24.04 LTS.
 
 ## Install Options
 
 ```
 --port PORT           Panel HTTPS port (default: 8443)
---db-engine ENGINE    mariadb1011 | mariadb114 | mariadb118 | mysql80 | mysql84
+--db-engine ENGINE    mariadb123 | mariadb118 | mariadb114 | mariadb1011 | mysql97 | mysql84 | mysql80
 --db-root-pass PASS   Set DB root password non-interactively
 --no-redis            Skip Redis installation
 --dry-run             Simulate without making changes
@@ -93,7 +95,7 @@ aidipanel db:add      --name mydb --user myuser
 aidipanel service:status
 ```
 
-WordPress creation installs WordPress, its database, and its admin account in one transaction, so it requires the WordPress setup fields documented in [Sites](docs/sites.md). The default PHP version (8.4) is used when `--php` is omitted. See [docs/cli.md](docs/cli.md) for the full reference.
+WordPress creation installs WordPress, its database, and its admin account in one transaction, so it requires the WordPress setup fields documented in [Sites](docs/sites.md). The default PHP version (8.5) is used when `--php` is omitted. See [docs/cli.md](docs/cli.md) for the full reference.
 
 ## Documentation
 

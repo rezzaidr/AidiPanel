@@ -60,7 +60,7 @@ class DB
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
                 domain        TEXT    NOT NULL UNIQUE,
                 type          TEXT    NOT NULL DEFAULT 'php',
-                php_version   TEXT    NOT NULL DEFAULT '8.4',
+                php_version   TEXT    NOT NULL DEFAULT '8.5',
                 webroot       TEXT    NOT NULL,
                 site_user     TEXT,
                 ssl_type      TEXT    NOT NULL DEFAULT 'self-signed',

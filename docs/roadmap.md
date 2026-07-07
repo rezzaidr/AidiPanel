@@ -7,7 +7,7 @@ This roadmap is indicative and may change. It describes direction, not commitmen
 - One-command install of the full stack + web panel
 - Per-site Linux user + per-site PHP-FPM pool isolation
 - Web root at `/home/<site-user>/htdocs/<domain>`
-- PHP 8.4 default; 8.2 / 8.3 / 8.4 / 8.5 on-demand
+- PHP 8.5 default; 8.2 / 8.3 / 8.4 on-demand
 - Nginx FastCGI Cache with per-site toggle and purge
 - MariaDB / MySQL choice at install time
 - Redis object cache

@@ -30,7 +30,7 @@ Use a disposable Ubuntu 24.04 (or Debian 12) server — never one holding import
 
 ```bash
 # 1. Run the installer
-sudo bash install.sh --port 8443 --db-engine mariadb1011
+sudo bash install.sh --port 8443 --db-engine mariadb123
 
 # 2. Open the panel and log in with the password printed at the end
 #    https://<server-ip>:8443
@@ -38,7 +38,7 @@ sudo bash install.sh --port 8443 --db-engine mariadb1011
 
 ### Smoke checklist
 
-- Services active: `nginx`, the default `php8.4-fpm`, `aidipanel-fpm`, `mariadb`/`mysql`, `redis-server`.
+- Services active: `nginx`, the default `php8.5-fpm`, `aidipanel-fpm`, `mariadb`/`mysql`, `redis-server`.
 - Add a plain PHP site; confirm it serves over HTTPS.
 - Add a WordPress site; confirm it serves.
 - Enable FastCGI cache; confirm `X-FastCGI-Cache: HIT` on the second request.

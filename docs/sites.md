@@ -32,7 +32,7 @@ sudo aidipanel site:add --domain example.com --user example --type php
 | `--domain` | *(required)* | Domain name |
 | `--user` | *(derived from domain)* | Dedicated Linux user for the site |
 | `--type` | `php` | `wordpress`, `laravel`, `php`, `static`, `proxy` |
-| `--php` | `8.4` | PHP version (must be installed; see PHP management) |
+| `--php` | `8.5` | PHP version (must be installed; see PHP management) |
 
 WordPress sites also require `--wp-title`, `--wp-admin-user`,
 `--wp-admin-pass-stdin`, and `--wp-admin-email`. Reverse proxies accept
@@ -261,7 +261,7 @@ server {
     }
 
     location ~ \.php$ {
-        fastcgi_pass unix:/run/php/php8.4-fpm-example.sock;
+        fastcgi_pass unix:/run/php/php8.5-fpm-example.sock;
         fastcgi_cache aidipanel_fcgi;
         fastcgi_cache_valid 200 1h;
         fastcgi_cache_bypass $skip_cache;

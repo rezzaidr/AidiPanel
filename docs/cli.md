@@ -30,10 +30,10 @@ sudo aidipanel site:add --domain example.com --user example --type php
 | `--domain` | *(required)* | Domain name |
 | `--user` | *(derived from domain)* | Dedicated no-login Linux user for the site |
 | `--type` | `php` | `wordpress`, `laravel`, `php`, `static`, `proxy` |
-| `--php` | `8.4` | PHP version (must be installed) |
+| `--php` | `8.5` | PHP version (must be installed) |
 | `--proxy-pass` | `http://127.0.0.1:3000` | Upstream URL for a proxy site |
 
-Creates `/home/<user>/htdocs/<domain>`, a PHP-FPM pool running as `<user>`, and the Nginx vhost. The default PHP version (8.4) is used when `--php` is omitted.
+Creates `/home/<user>/htdocs/<domain>`, a PHP-FPM pool running as `<user>`, and the Nginx vhost. The default PHP version (8.5) is used when `--php` is omitted.
 
 WordPress creation performs the database and WordPress installation atomically.
 Supply its required setup fields and pass the password over stdin:
@@ -175,7 +175,7 @@ stored by AidiPanel's encrypted credential broker rather than exposed in argv.
 
 ## PHP Management
 
-PHP 8.4 is installed by default. 8.2, 8.3, and 8.5 are available on-demand.
+PHP 8.5 is installed by default. 8.2, 8.3, and 8.4 are available on-demand.
 
 ### `php:list`
 
@@ -190,7 +190,7 @@ Shows each available version with its status (installed / default / available).
 Install an available version on-demand.
 
 ```bash
-aidipanel php:install --version 8.5
+aidipanel php:install --version 8.4
 ```
 
 ### `php:version`
@@ -244,7 +244,7 @@ hostname for the panel while port 8443 remains the recovery route.
 ```bash
 aidipanel service:status
 aidipanel service:restart nginx
-aidipanel service:restart php8.4-fpm
+aidipanel service:restart php8.5-fpm
 aidipanel service:restart redis
 aidipanel service:restart mariadb
 aidipanel service:reload  nginx

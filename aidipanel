@@ -57,7 +57,7 @@ if [[ -f "/etc/aidipanel/php.conf" ]]; then
   # shellcheck source=/dev/null
   source /etc/aidipanel/php.conf
 else
-  PHP_DEFAULT_VERSION="8.4"
+  PHP_DEFAULT_VERSION="8.5"
   PHP_AVAILABLE_VERSIONS="8.2 8.3 8.4 8.5"
   PHP_EXTENSIONS="fpm cli common mysql sqlite3 redis xml mbstring curl zip gd intl bcmath soap imagick opcache"
 fi

@@ -4,7 +4,7 @@
 
 | | Minimum | Recommended |
 |--|---------|-------------|
-| **OS** | Debian 11/12, Ubuntu 22.04/24.04 | Ubuntu 24.04 LTS |
+| **OS** | Debian 11/12, Ubuntu 22.04/24.04/26.04 | Ubuntu 24.04 LTS |
 | **RAM** | 512MB (1GB for WordPress) | 2GB+ |
 | **Disk** | 5GB free | 20GB+ |
 | **CPU** | 1 core | 2+ cores |
@@ -56,8 +56,8 @@ Continue only when the checksum command prints `install-aidipanel.sh: OK`.
 This installs the full stack and deploys the web panel automatically:
 
 - Nginx + FastCGI Cache
-- PHP 8.4 (default) — 8.2 / 8.3 / 8.4 / 8.5 available on-demand
-- MariaDB 10.11 LTS (default database engine)
+- PHP 8.5 (default) — 8.2 / 8.3 / 8.4 available on-demand
+- MariaDB 12.3 LTS (default database engine)
 - Redis
 - Certbot (Let's Encrypt)
 - UFW firewall + Fail2ban
@@ -87,7 +87,7 @@ The installer detects and deploys the `panel-app/` directory alongside it.
 sudo bash install.sh [OPTIONS]
 
   --port PORT           Panel HTTPS port (default: 8443)
-  --db-engine ENGINE    Database engine (default: mariadb1011)
+  --db-engine ENGINE    Database engine (default: mariadb123)
   --db-root-pass PASS   Set DB root password non-interactively
   --no-redis            Skip Redis installation
   --dry-run             Simulate install without making changes
@@ -112,11 +112,15 @@ sudo bash install.sh --no-redis
 
 | Flag | Engine | Notes |
 |------|--------|-------|
-| `mariadb1011` | MariaDB 10.11 LTS | **Default** |
-| `mariadb114` | MariaDB 11.4 LTS | Newer LTS |
-| `mariadb118` | MariaDB 11.8 | Latest |
-| `mysql80` | MySQL 8.0 | — |
+| `mariadb123` | MariaDB 12.3 LTS | **Default** |
+| `mariadb118` | MariaDB 11.8 | — |
+| `mariadb114` | MariaDB 11.4 LTS | — |
+| `mariadb1011` | MariaDB 10.11 LTS | — |
+| `mysql97` | MySQL 9.7 LTS | — |
 | `mysql84` | MySQL 8.4 LTS | — |
+| `mysql80` | MySQL 8.0 | — |
+
+> On Ubuntu 26.04 only MariaDB 11.8 / 12.3 can install (MySQL and MariaDB 10.11 / 11.4 are upstream-blocked).
 
 ---
 
@@ -138,7 +142,7 @@ sudo aidipanel site:add --domain example.com --user example --type php
 
 This creates a dedicated Linux user `example`, the web root at
 `/home/example/htdocs/example.com`, and a PHP-FPM pool running as that user.
-PHP defaults to 8.4; pass `--php 8.3` to choose another installed version.
+PHP defaults to 8.5; pass `--php 8.3` to choose another installed version.
 
 For WordPress, the web panel provides the simplest setup form. The equivalent
 CLI flow installs WordPress, its database, and its admin account together:
@@ -218,10 +222,13 @@ configuration, and runtime storage.
 
 | OS | Version | Codename |
 |----|---------|----------|
-| Ubuntu | 22.04 LTS | jammy |
+| Ubuntu | 26.04 LTS | resolute |
 | Ubuntu | 24.04 LTS | noble |
+| Ubuntu | 22.04 LTS | jammy |
 | Debian | 12 | bookworm |
 | Debian | 11 | bullseye |
+
+> Recommended: Ubuntu 24.04 LTS. On 26.04 only MariaDB 11.8 / 12.3 can install (MySQL and MariaDB 10.11 / 11.4 are upstream-blocked).
 
 ---
 

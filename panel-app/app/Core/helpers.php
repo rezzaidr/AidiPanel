@@ -512,14 +512,14 @@ function cache_baseline_exclude_urls(): array
 /**
  * PHP version policy from /etc/aidipanel/php.conf (Patch A single source of truth).
  * Parsed directly (no sudo) for speed; falls back to a sane built-in if the file
- * is missing. Returns: ['default'=>'8.4', 'available'=>['8.2','8.3','8.4','8.5']].
+ * is missing. Returns: ['default'=>'8.5', 'available'=>['8.2','8.3','8.4','8.5']].
  */
 function php_policy(): array
 {
     static $cache = null;
     if ($cache !== null) return $cache;
 
-    $default   = '8.4';
+    $default   = '8.5';
     $available = ['8.2', '8.3', '8.4', '8.5'];
 
     $conf = '/etc/aidipanel/php.conf';
@@ -615,8 +615,8 @@ function php_versions_status(): array
 {
     $policy = php_policy();
     $labels = [
-        '8.5' => 'php.label.latest',
-        '8.4' => 'php.label.default',
+        '8.5' => 'php.label.default',
+        '8.4' => 'php.label.latest',
         '8.3' => 'php.label.compat',
         '8.2' => 'php.label.legacy',
     ];
