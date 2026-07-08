@@ -7,21 +7,18 @@ class CacheController extends BaseController
     public function purge(array $params = []): void
     {
         $domain = (string) $this->request->post('domain', '');
-        $url    = (string) $this->request->post('url', '');
 
-        $args = [];
-        if ($url) {
-            $args = ['--url', $url];
-        } elseif ($domain) {
-            if (!is_valid_domain($domain)) {
-                $this->error('Invalid domain name.');
-            }
-            $args = ['--domain', $domain];
-        } else {
-            $args = ['--force'];
+        // Domain-scoped only. The legacy `--url` branch (hashes a raw URL and
+        // deletes its cache file with no ownership check → cross-tenant purge)
+        // and the `--force` (server-wide) branch are intentionally NOT offered:
+        // both UI forms send only `domain`, and exposing either to a
+        // site-scoped caller lets one tenant purge another tenant's cached page.
+        // Per-URL purge uses /cache/purge-urls, which verifies url∈domain.
+        if ($domain === '' || !is_valid_domain($domain)) {
+            $this->error('Invalid domain name.');
         }
 
-        $result = run_cli('cache:purge', $args);
+        $result = run_cli('cache:purge', ['--domain', $domain]);
 
         if ($this->request->isAjax()) {
             $this->json(['success' => $result['success'], 'message' => $result['output']]);
@@ -31,8 +28,7 @@ class CacheController extends BaseController
             $this->error('Cache purge failed: ' . $result['output']);
         }
 
-        $label = $domain ?: ($url ?: 'all');
-        \Core\DB::log('cache:purge', "Purged cache: {$label}");
+        \Core\DB::log('cache:purge', "Purged cache: {$domain}");
         $this->success('Cache purged successfully.');
     }
 
@@ -168,26 +164,6 @@ class CacheController extends BaseController
 
         \Core\DB::log('cache:config', "Cache config updated for: {$domain}");
         $this->success('Cache config saved.', "/sites/{$domain}?tab=performance");
-    }
-
-    public function redis(array $params = []): void
-    {
-        $action = (string) $this->request->post('action', '');
-        if (!in_array($action, ['enable', 'disable', 'flush'], true)) {
-            $this->error('Invalid action.');
-        }
-
-        $cmd    = "cache:redis-{$action}";
-        $result = run_cli($cmd, []);
-        if (!$result['success']) {
-            $this->error("Redis {$action} failed: " . $result['output']);
-        }
-
-        \Core\DB::log($cmd, "Redis {$action}");
-
-        $referer = (string) ($_SERVER['HTTP_REFERER'] ?? '');
-        $back    = $referer !== '' ? $referer : '/';
-        $this->success("Redis {$action} done.", $back);
     }
 
     /**

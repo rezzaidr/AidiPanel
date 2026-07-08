@@ -4,6 +4,8 @@
 
 AidiPanel is a server control panel for Ubuntu/Debian VPS, built on Nginx + FastCGI Cache + PHP-FPM + MariaDB/MySQL + Redis. It installs the full stack and a web panel in one command, and focuses on a small, fast footprint: page caching lives inside Nginx itself, and each site runs under its own isolated Linux user.
 
+**Live demo (read-only):** <https://demo.aidipanel.com> — explore the panel before installing.
+
 ## Install
 
 Start with a fresh Ubuntu/Debian VPS and fully update the base system first:
@@ -44,7 +46,7 @@ Use a fresh, dedicated VPS: the installer provisions the system web/database sta
 - **Certbot** (Let's Encrypt) with automatic renewal
 - **UFW** firewall + **Fail2ban**
 
-## Included in v1.2.0
+## Features
 
 - Site management for WordPress, PHP, Laravel, static sites, and reverse proxies
 - File manager, per-site databases and phpMyAdmin, cron jobs, and PHP tuning
@@ -107,7 +109,9 @@ WordPress creation installs WordPress, its database, and its admin account in on
 - [Security model](docs/security.md)
 - [Security policy](SECURITY.md)
 - [Architecture](docs/architecture.md)
+- [Troubleshooting](docs/troubleshooting.md)
 - [Roadmap](docs/roadmap.md)
+- [Uninstall](docs/uninstall.md)
 
 ## Support AidiPanel
 

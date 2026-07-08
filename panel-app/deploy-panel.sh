@@ -13,11 +13,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly PANEL_VERSION="1.3.1"
 readonly DEPLOY_LOCK="/run/lock/aidipanel-deploy.lock"
 
-# Resolve the default PHP version from the installed policy file, fallback 8.5.
+# Resolve the panel's PHP CLI version. Prefer the installed policy file; if it
+# is absent (an older install that never wrote one), probe the highest php*
+# CLI binary actually present rather than assuming 8.5 — a legacy box may only
+# have 8.4/8.3 and a missing binary would abort the deploy at password-hash time.
 PHP_DEFAULT_VERSION="8.5"
 if [[ -r /etc/aidipanel/php.conf ]]; then
   # shellcheck source=/dev/null
   source /etc/aidipanel/php.conf
+fi
+if ! command -v "php${PHP_DEFAULT_VERSION}" >/dev/null 2>&1; then
+  for v in 8.5 8.4 8.3 8.2; do
+    if command -v "php${v}" >/dev/null 2>&1; then
+      PHP_DEFAULT_VERSION="$v"
+      break
+    fi
+  done
 fi
 PHP_BIN="php${PHP_DEFAULT_VERSION}"
 
@@ -358,7 +369,7 @@ case "$cmd" in
     ;;
   site:add|site:delete|site:list|vhost:save|\
   cache:page|cache:redis|cache:zone|cache:status|cache:purge|cache:enable|cache:disable|\
-  cache:config|cache:redis-enable|cache:redis-disable|cache:redis-flush|cache:opcache-restart|\
+  cache:config|cache:opcache-restart|\
   db:add|db:delete|db:list|db:users|db:user-add|db:user-edit|db:user-delete|db:pma-install|db:pma-credentials|db:backup|db:server-info|\
   php:list|php:version|php:restart|php:install|php:settings|\
   ssl:install|ssl:renew|ssl:status|ssl:import|\

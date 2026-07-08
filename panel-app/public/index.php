@@ -51,7 +51,7 @@ $router->get('/login',  'AuthController@showLogin');
 $router->post('/login', 'AuthController@login');
 $router->get('/login/2fa',  'AuthController@show2fa');
 $router->post('/login/2fa', 'AuthController@verify2fa');
-$router->get('/logout', 'AuthController@logout');
+$router->post('/logout', 'AuthController@logout');
 
 // Dashboard
 $router->get('/',          'DashboardController@index');
@@ -152,7 +152,6 @@ $router->post('/sites/{domain}/sftp/key-delete',     'SiteSftpController@deleteK
 $router->post('/cache/purge',  'CacheController@purge');
 $router->post('/cache/toggle',          'CacheController@toggle');
 $router->post('/cache/config',          'CacheController@config');
-$router->post('/cache/redis',           'CacheController@redis');
 $router->post('/cache/object',          'CacheController@objectCache');
 $router->post('/cache/purge-urls',      'CacheController@purgeUrls');
 $router->post('/cache/opcache-restart', 'CacheController@opcacheRestart');

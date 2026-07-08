@@ -107,11 +107,6 @@ class Auth
         return self::role() === 'manager';
     }
 
-    public static function isClient(): bool
-    {
-        return self::role() === 'client';
-    }
-
     /**
      * A fixed-cost bcrypt hash used only to equalize the wall-clock time of a
      * failed login when the username does not exist or is inactive — so an

@@ -32,16 +32,6 @@ class Request
         return $_POST[$key] ?? $this->jsonBody()[$key] ?? $default;
     }
 
-    public function all(): array
-    {
-        return array_replace($this->jsonBody(), $_POST);
-    }
-
-    public function isPost(): bool
-    {
-        return $this->method() === 'POST';
-    }
-
     public function isAjax(): bool
     {
         return ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'XMLHttpRequest'

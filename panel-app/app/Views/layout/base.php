@@ -153,9 +153,12 @@ $assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROO
         <a href="/settings" class="flex items-center gap-2 px-3.5 py-2 text-sm text-zinc-600 hover:bg-zinc-50">
           <?= icon('settings', 'text-base text-zinc-400') ?> <?= e(t('topbar.settings')) ?>
         </a>
-        <a href="/logout" class="flex items-center gap-2 px-3.5 py-2 text-sm text-zinc-600 hover:bg-zinc-50">
-          <?= icon('logout', 'text-base text-zinc-400') ?> <?= e(t('topbar.logout')) ?>
-        </a>
+        <form method="post" action="/logout" style="display:contents">
+          <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token ?? '') ?>">
+          <button type="submit" class="flex items-center gap-2 px-3.5 py-2 text-sm text-zinc-600 hover:bg-zinc-50">
+            <?= icon('logout', 'text-base text-zinc-400') ?> <?= e(t('topbar.logout')) ?>
+          </button>
+        </form>
       </div>
     </div>
   </div>
@@ -189,7 +192,10 @@ $assetVer = static fn (string $p): string => $p . '?v=' . (@filemtime(PUBLIC_ROO
         <span class="mono text-xs text-emerald-600" x-show="copied" x-cloak><?= e(t('topbar.copied')) ?></span>
       </button>
       <a href="/settings" class="sidenav-item"><?= icon('settings', 'text-[18px]') ?><span class="flex-1"><?= e(t('topbar.settings')) ?></span></a>
-      <a href="/logout" class="sidenav-item"><?= icon('logout', 'text-[18px]') ?><span class="flex-1"><?= e(t('topbar.logout')) ?></span></a>
+      <form method="post" action="/logout" style="display:contents">
+        <input type="hidden" name="_csrf_token" value="<?= e($_csrf_token ?? '') ?>">
+        <button type="submit" class="sidenav-item"><?= icon('logout', 'text-[18px]') ?><span class="flex-1"><?= e(t('topbar.logout')) ?></span></button>
+      </form>
     </div>
   </aside>
 </div>
