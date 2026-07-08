@@ -34,10 +34,10 @@ class SiteBackupController extends BaseController
             abort(400, 'Invalid backup name.');
         }
         $this->unlockForLongOp();
-        header('Content-Type: application/gzip');
-        header('Content-Disposition: attachment; filename="' . str_replace(['"', "\r", "\n"], '', $name) . '"');
-        header('X-Content-Type-Options: nosniff');
-        $code = run_cli_download_stdin('backup:download', ['--domain', $domain], $name);
+        $code = run_cli_download_stdin('backup:download', ['--domain', $domain], $name, 'application/gzip', $name);
+        if ($code !== 0 && !headers_sent()) {
+            abort(404, 'Backup not available.');
+        }
         DB::log('backup.download', "domain={$domain} name={$name} " . ($code === 0 ? 'ok' : 'fail'));
         exit;
     }

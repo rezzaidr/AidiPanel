@@ -729,6 +729,39 @@ function run_cli(string $command, array $args = []): array
 }
 
 /**
+ * Drain stdout+stderr from a proc_open handle to completion WITHOUT the
+ * deadlock that happens when one pipe is read to EOF while the child fills the
+ * other pipe's OS buffer and then blocks on it. Interleaves reads with
+ * stream_select so neither pipe can stall the other.
+ */
+function _proc_read_both(array $pipes): array
+{
+    stream_set_blocking($pipes[1], false);
+    stream_set_blocking($pipes[2], false);
+    $stdout = '';
+    $stderr = '';
+    while (!feof($pipes[1]) || !feof($pipes[2])) {
+        $read = [];
+        if (!feof($pipes[1])) { $read[] = $pipes[1]; }
+        if (!feof($pipes[2])) { $read[] = $pipes[2]; }
+        $write = [];
+        $except = [];
+        if (@stream_select($read, $write, $except, 1) === false) {
+            break; // both pipes closed or select error
+        }
+        foreach ($read as $r) {
+            $chunk = (string) fread($r, 1 << 20);
+            if ($r === $pipes[1]) {
+                $stdout .= $chunk;
+            } else {
+                $stderr .= $chunk;
+            }
+        }
+    }
+    return [$stdout, $stderr];
+}
+
+/**
  * Run an allowed CLI command while transporting secret input only through stdin.
  */
 function run_cli_stdin(string $command, array $args, string $stdin): array
@@ -767,8 +800,7 @@ function run_cli_stdin(string $command, array $args, string $stdin): array
 
     fwrite($pipes[0], $stdin);
     fclose($pipes[0]);
-    $stdout = stream_get_contents($pipes[1]);
-    $stderr = stream_get_contents($pipes[2]);
+    [$stdout, $stderr] = _proc_read_both($pipes);
     fclose($pipes[1]);
     fclose($pipes[2]);
     $exitCode = proc_close($process);
@@ -822,8 +854,7 @@ function run_cli_upload(string $command, array $args, string $header, $srcHandle
         fwrite($pipes[0], $chunk);
     }
     fclose($pipes[0]);
-    $stdout = stream_get_contents($pipes[1]);
-    $stderr = stream_get_contents($pipes[2]);
+    [$stdout, $stderr] = _proc_read_both($pipes);
     fclose($pipes[1]);
     fclose($pipes[2]);
     $exitCode = proc_close($process);
@@ -837,12 +868,18 @@ function run_cli_upload(string $command, array $args, string $header, $srcHandle
 }
 
 /**
- * File-manager download runner. Sends $stdin (e.g. the requested path) to the CLI,
- * then streams the CLI's raw stdout straight to the browser in chunks. Caller must
- * have already sent Content-Type/Content-Disposition headers. Returns the exit code;
- * nothing useful was streamed on a non-zero exit.
+ * File-manager download runner. Sends $stdin (e.g. the requested path) to the
+ * CLI, then streams the CLI's raw stdout to the browser as an attachment.
+ *
+ * Sends the Content-Type/Content-Disposition headers ONLY once the CLI has
+ * produced output (or is still running), so a command that fails immediately
+ * (missing/unreadable file) returns non-zero WITHOUT committing a 200 — the
+ * caller can then answer 404 (it checks headers_sent() to tell an early failure
+ * from a mid-stream error, which is unavoidably a truncated 200). Stdout is
+ * streamed and stderr drained concurrently (stream_select) so a chatty child
+ * cannot deadlock on a full pipe.
  */
-function run_cli_download_stdin(string $command, array $args, string $stdin): int
+function run_cli_download_stdin(string $command, array $args, string $stdin, string $contentType, string $filename): int
 {
     $binary = '/usr/local/bin/aidipanel';
     if (!file_exists($binary)) { return 1; }
@@ -865,13 +902,66 @@ function run_cli_download_stdin(string $command, array $args, string $stdin): in
 
     fwrite($pipes[0], $stdin);
     fclose($pipes[0]);
-    while (!feof($pipes[1])) {
-        echo fread($pipes[1], 1 << 20);
-        @ob_flush();
-        @flush();
+    stream_set_blocking($pipes[1], false);
+    stream_set_blocking($pipes[2], false);
+
+    // Probe: wait for the first stdout byte OR an early process exit, without
+    // having sent any headers. Caps the wait so a wedged CLI cannot hang.
+    $first = '';
+    while (true) {
+        $read = [];
+        if (!feof($pipes[1])) { $read[] = $pipes[1]; }
+        if (!feof($pipes[2])) { $read[] = $pipes[2]; }
+        if (!$read) { break; }
+        $write = []; $except = [];
+        $n = @stream_select($read, $write, $except, 10);
+        if ($n === false || $n === 0) { break; } // select error, or no data in 10s → proceed
+        foreach ($read as $r) {
+            $chunk = (string) fread($r, 1 << 20);
+            if ($r === $pipes[1]) { $first .= $chunk; }
+        }
+        if ($first !== '') { break; } // data is flowing — commit headers + stream
+        $st = proc_get_status($process);
+        if (!($st['running'] ?? false)) { break; } // exited — decide below
     }
-    fclose($pipes[1]);
-    fclose($pipes[2]);
+
+    // Early failure: the CLI exited with no stdout (e.g. file missing/unreadable).
+    // Return without sending headers so the caller can answer 404.
+    $st = proc_get_status($process);
+    if ($first === '' && !($st['running'] ?? false)) {
+        fclose($pipes[1]); fclose($pipes[2]);
+        $code = proc_close($process);
+        return $code === 0 ? 1 : $code; // a zero-exit/no-output is treated as a failure too
+    }
+
+    // Commit the attachment headers now that output is flowing.
+    header('Content-Type: ' . $contentType);
+    header('Content-Disposition: attachment; filename="' . str_replace(['"', "\r", "\n"], '', $filename) . '"');
+    header('X-Content-Type-Options: nosniff');
+    if ($first !== '') {
+        echo $first;
+        @ob_flush(); @flush();
+    }
+
+    // Stream the remainder, draining stderr concurrently so it cannot stall stdout.
+    while (!feof($pipes[1]) || !feof($pipes[2])) {
+        $read = [];
+        if (!feof($pipes[1])) { $read[] = $pipes[1]; }
+        if (!feof($pipes[2])) { $read[] = $pipes[2]; }
+        if (!$read) { break; }
+        $write = []; $except = [];
+        if (@stream_select($read, $write, $except, 1) === false) { break; }
+        foreach ($read as $r) {
+            $chunk = (string) fread($r, 1 << 20);
+            if ($chunk === '') { continue; }
+            if ($r === $pipes[1]) {
+                echo $chunk;
+                @ob_flush(); @flush();
+            }
+            // stderr is drained and discarded; the exit code is the failure signal.
+        }
+    }
+    fclose($pipes[1]); fclose($pipes[2]);
     return proc_close($process);
 }
 

@@ -44,10 +44,10 @@ class SiteFileController extends BaseController
         if ($path === '' || $name === '') { abort(400, 'Bad path.'); }
         if ($this->demoHidesPath($path)) { abort(403, 'This file is hidden in the read-only demo.'); }
         $this->unlockForLongOp();
-        header('Content-Type: application/octet-stream');
-        header('Content-Disposition: attachment; filename="' . str_replace(['"', "\r", "\n"], '', $name) . '"');
-        header('X-Content-Type-Options: nosniff');
-        $code = run_cli_download_stdin('files:download', ['--domain', $domain], $path);
+        $code = run_cli_download_stdin('files:download', ['--domain', $domain], $path, 'application/octet-stream', $name);
+        if ($code !== 0 && !headers_sent()) {
+            abort(404, 'File not available.');
+        }
         DB::log('files.download', "domain={$domain} path={$path} " . ($code === 0 ? 'ok' : 'fail'));
         exit;
     }
@@ -174,10 +174,10 @@ class SiteFileController extends BaseController
             if ($this->demoHidesPath($p)) { abort(403, 'A selected file is hidden in the read-only demo.'); }
         }
         $this->unlockForLongOp();
-        header('Content-Type: application/zip');
-        header('Content-Disposition: attachment; filename="' . $domain . '-files.zip"');
-        header('X-Content-Type-Options: nosniff');
-        $code = run_cli_download_stdin('files:download-many', ['--domain', $domain], implode("\n", $paths));
+        $code = run_cli_download_stdin('files:download-many', ['--domain', $domain], implode("\n", $paths), 'application/zip', $domain . '-files.zip');
+        if ($code !== 0 && !headers_sent()) {
+            abort(404, 'Files not available.');
+        }
         DB::log('files.download', "domain={$domain} count=" . count($paths) . ' zip ' . ($code === 0 ? 'ok' : 'fail'));
         exit;
     }
