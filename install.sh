@@ -401,7 +401,7 @@ print_readiness_check() {
   ui_section "Readiness Check"
   ui_ok "Root access"
   ui_ok "Internet connectivity"
-  ui_ok "Ubuntu version supported"
+  ui_ok "${OS_ID^} ${OS_VERSION_ID} supported"
   ui_ok "Port ${PANEL_PORT} available"
   ui_ok "Hostname detected"
   ui_ok "No blocking pre-flight issue found"
@@ -440,7 +440,7 @@ print_blueprint() {
 _banner() {
   printf '%s\n' "AidiPanel Provisioning Console"
   ui_rule
-  printf '%s\n\n' "Fast LEMP Server Management Panel"
+  printf '%s\n\n' "Manage fast LEMP sites without the bloat"
   ui_kv "Version"    "v${PANEL_VERSION}"
   ui_kv "Stack"      "Nginx · PHP-FPM · ${DB_ENGINE_LABELS[$DB_ENGINE]%% *} · Redis · SSL"
   ui_kv "Mode"       "Fresh VPS provisioning"
@@ -2302,7 +2302,7 @@ _print_summary() {
 
   ui_section "Transformation Summary"
   printf '%-30s %s\n' "Before" "After"
-  printf '%-30s %s %s\n' "Plain Ubuntu VPS" "$(_u '→' '->')" "Managed LEMP server"
+  printf '%-30s %s %s\n' "Plain ${OS_ID^} VPS" "$(_u '→' '->')" "Managed LEMP server"
   printf '%-30s %s %s\n' "No web engine"     "$(_u '→' '->')" "Nginx ${NGINX_VERSION:-installed}"
   printf '%-30s %s %s\n' "No PHP runtime"    "$(_u '→' '->')" "PHP-FPM $(_php_list)"
   printf '%-30s %s %s\n' "No database layer" "$(_u '→' '->')" "${DB_ENGINE_LABELS[$DB_ENGINE]%% (*}"
