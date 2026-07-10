@@ -39,6 +39,7 @@ final class RoutePolicy
             '/admin/web-delivery', '/admin/settings', '/admin/settings/domain', '/admin/settings/domain/clear',
             '/admin/backups', '/admin/backups/test', '/admin/backups/destination',
             '/admin/backups/policy', '/admin/backups/run',
+            '/sites/{domain}/nginx',
             '/users', '/services', '/logs',
             '/api/services',
             '/php/restart', '/cache/opcache-restart',
@@ -58,8 +59,7 @@ final class RoutePolicy
             return self::SITE_BACKUP_DOWNLOAD;
         }
         if ($routePath === '/sites/{domain}/php'
-            || $routePath === '/sites/{domain}/php-settings'
-            || $routePath === '/sites/{domain}/nginx') {
+            || $routePath === '/sites/{domain}/php-settings') {
             return self::SITE_SETTINGS;
         }
         if (str_starts_with($routePath, '/cache/')
@@ -78,6 +78,7 @@ final class RoutePolicy
     public static function blockedInDemo(string $method, string $routePath): bool
     {
         return ($method === 'POST' && $routePath !== '/api/cli')
-            || $routePath === '/sites/{domain}/backups/download';
+            || $routePath === '/sites/{domain}/backups/download'
+            || $routePath === '/sites/{domain}/nginx';
     }
 }

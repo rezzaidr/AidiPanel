@@ -1300,6 +1300,9 @@ _cron_resolve() {
   [[ -f "$CRON_CONF" ]] || die "Site not found: ${domain}"
   CRON_USER=$(grep -oP '^\s*root\s+/home/\K[^/;]+' "$CRON_CONF" 2>/dev/null | head -1 || echo "")
   [[ -n "$CRON_USER" ]] || die "Could not resolve the site user for ${domain}."
+  _validate_site_user "$CRON_USER"
+  _site_purge_guard "$domain" "$CRON_USER" "$CRON_USER" \
+    || die "Site identity validation failed for ${domain}."
   CRON_WEBROOT=$(_vhost_webroot "$CRON_CONF")
   return 0
 }
