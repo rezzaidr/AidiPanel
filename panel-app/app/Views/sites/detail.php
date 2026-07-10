@@ -1320,6 +1320,7 @@ $tabs = [
     </div>
     <?php endif; ?>
 
+    <?php if (\Core\Auth::isAdmin()): ?>
     <!-- Nginx config -->
     <div class="card overflow-hidden">
       <div class="card-head">
@@ -1327,11 +1328,9 @@ $tabs = [
           <h2 class="card-title"><?= icon('code', 'text-zinc-400') ?> <?= e(t('site.set.nginx_title')) ?></h2>
           <p class="text-[11px] text-zinc-400 mt-0.5"><?= e(t('site.set.nginx_hint')) ?></p>
         </div>
-        <?php if (\Core\Access::canEditSiteSettings()): ?>
-          <a href="/sites/<?= e($domain) ?>/nginx" class="btn btn-sm btn-secondary">
-            <?= icon('edit', 'text-sm') ?> <?= e(t('site.set.nginx_edit')) ?>
-          </a>
-        <?php endif; ?>
+        <a href="/sites/<?= e($domain) ?>/nginx" class="btn btn-sm btn-secondary">
+          <?= icon('edit', 'text-sm') ?> <?= e(t('site.set.nginx_edit')) ?>
+        </a>
       </div>
       <?php if ($nginxConf): ?>
       <div class="border-t border-zinc-100 px-5 py-3 bg-zinc-50">
@@ -1339,6 +1338,7 @@ $tabs = [
       </div>
       <?php endif; ?>
     </div>
+    <?php endif; ?>
 
     <?php if (\Core\Access::canDeleteSite()): ?>
     <!-- Danger zone -->

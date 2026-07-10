@@ -221,6 +221,9 @@ Changing the version recreates the site's PHP-FPM pool under the new version and
 
 ## Nginx Config Editor
 
+The raw Nginx vhost editor is available to panel administrators only. Managers
+and clients use the structured per-site controls instead.
+
 ```bash
 # View current config
 cat /etc/nginx/sites-available/example.com.conf
