@@ -40,11 +40,6 @@ abstract class BaseController
         redirect($url);
     }
 
-    protected function back(): never
-    {
-        redirect(safe_back_url());
-    }
-
     protected function success(string $message, string $redirect = ''): never
     {
         flash('success', $message);
@@ -54,12 +49,6 @@ abstract class BaseController
     protected function error(string $message, string $redirect = ''): never
     {
         flash('error', $message);
-        redirect($redirect ?: safe_back_url());
-    }
-
-    protected function warning(string $message, string $redirect = ''): never
-    {
-        flash('warning', $message);
         redirect($redirect ?: safe_back_url());
     }
 

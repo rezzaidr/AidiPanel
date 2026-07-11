@@ -56,7 +56,6 @@ DB_DEFAULTS_TMP=""
 PANEL_ADMIN_PASS=""        # generated random, shown at end
 SWAP_SIZE_MB=2048
 UI_PLAIN=false        # --plain -> ASCII fallback (no unicode)
-UI_VERBOSE=false      # --verbose -> inline command output (tee), for debugging
 readonly RULE_WIDTH=47
 DEBIAN_FRONTEND=noninteractive
 export DEBIAN_FRONTEND
@@ -147,31 +146,11 @@ ui_section() { printf '\n\n%s%s%s\n' "${C_TITLE:-}" "$1" "${C_RESET:-}"; ui_rule
 ui_kv()   { printf '%s%-12s%s %s\n' "${C_KEY:-}" "$1" "${C_RESET:-}" "$2"; }
 ui_ok()   { printf '%s%s%s %s\n' "${C_OK:-}" "$(_u '✓' '[OK]')" "${C_RESET:-}" "$1"; _logf "[OK] $1"; }
 ui_warn() { printf '%s%s %s%s\n' "${C_WARN:-}" "$(_u '⚠' '[!]')" "$1" "${C_RESET:-}"; _logf "[WARN] $1"; }
-ui_fail() { printf '%s%s %s%s\n' "${C_FAIL:-}" "$(_u '✗' '[X]')" "$1" "${C_RESET:-}"; _logf "[FAIL] $1"; }
 ui_note() { printf '  %s\n' "$1"; }
 
 # Elapsed for a layer.  ui_elapsed <start_seconds>
 ui_elapsed() { local d=$(( SECONDS - $1 )); printf '\nElapsed  %02d:%02d\n' $(( d/60 )) $(( d%60 )); }
 
-# run_quiet <Layer> <step> <cmd...> — command output to the log only; on failure print a
-# fail-loud line (layer/step/exit/log) and exit with the command's code. --verbose tees
-# inline. Uses `if` (not `cmd; rc=$?`) so `set -e` doesn't abort before we read the code.
-run_quiet() {
-  local layer="$1" step="$2"; shift 2
-  _logf ">>> [${layer}] ${step}"
-  local rc=0
-  if [[ "$UI_VERBOSE" == "true" ]]; then
-    if "$@" 2>&1 | tee -a "$PANEL_LOG"; then rc=0; else rc=${PIPESTATUS[0]}; fi
-  else
-    if "$@" >> "$PANEL_LOG" 2>&1; then rc=0; else rc=$?; fi
-  fi
-  if (( rc != 0 )); then
-    ui_fail "${layer} failed at: ${step} (exit ${rc})"
-    ui_note "See ${PANEL_LOG}"
-    exit "$rc"
-  fi
-  return 0
-}
 # <<< CONSOLE_HELPERS_END
 
 _php_list() { echo "${PHP_DEFAULT_VERSION}"; }
@@ -232,9 +211,6 @@ _parse_args() {
       --plain)
         UI_PLAIN=true
         ;;
-      --verbose)
-        UI_VERBOSE=true
-        ;;
       --help|-h)
         echo "Usage: bash $0 [OPTIONS]"
         echo "  --port PORT           Panel HTTPS port (default: 8443)"
@@ -244,7 +220,6 @@ _parse_args() {
         echo "  --no-redis            Skip Redis installation"
         echo "  --dry-run             Simulate install without making changes"
         echo "  --plain               ASCII output (no unicode); for basic terminals"
-        echo "  --verbose             Show command output inline (debug)"
         exit 0
         ;;
       *)
@@ -447,7 +422,6 @@ _banner() {
   ui_kv "By"         "rezzaid"
   printf '\n'
   ui_kv "Detail log" "${PANEL_LOG}"
-  ui_kv "Verbose"    "bash install.sh --verbose"
   _logf "=== Provisioning Console start: ${PANEL_NAME} v${PANEL_VERSION} (port ${PANEL_PORT}, db ${DB_ENGINE}) ==="
 }
 
@@ -1073,13 +1047,6 @@ _db_service_name() {
   esac
 }
 
-_db_client_binary() {
-  case "$DB_ENGINE" in
-    mysql*)   echo "mysql" ;;
-    mariadb*) echo "mariadb" ;;
-  esac
-}
-
 _add_mysql_repo() {
   [[ "$DB_ENGINE" == mysql* ]] || return 0
   if [[ -f /etc/apt/sources.list.d/mysql.list ]]; then
@@ -1433,48 +1400,7 @@ _install_certbot() {
 }
 
 # ---------------------------------------------------------------------------
-# 14. PROFTPD (opt-in; NOT installed by default — see the call site in main())
-# ---------------------------------------------------------------------------
-_install_proftpd() {
-  log "Installing ProFTPD..."
-  if _pkg_installed proftpd-basic && _pkg_installed proftpd-mod-crypto; then
-    log "ProFTPD already installed — reusing package"
-  else
-    _apt_install proftpd-basic proftpd-mod-crypto
-  fi
-  [[ "$DRY_RUN" == "true" ]] && return 0
-
-  if [[ -f /etc/proftpd/proftpd.conf ]]; then
-    # Prevent the stock FTP listener on port 21; AidiPanel exposes ProFTPD as SFTP on 2022.
-    sed -i -E 's/^[[:space:]]*Port[[:space:]]+[0-9]+[[:space:]]*$/Port 2022/' /etc/proftpd/proftpd.conf
-    sed -i -E 's/^[[:space:]]*ListOptions[[:space:]].*$/# &/' /etc/proftpd/proftpd.conf
-  fi
-
-  cat > /etc/proftpd/conf.d/aidipanel.conf <<'PROFTPD_CONF'
-# AidiPanel ProFTPD - SFTP only
-LoadModule mod_sftp.c
-Port 2022
-SFTPEngine on
-SFTPLog /var/log/proftpd/sftp.log
-SFTPHostKey /etc/proftpd/ssh_host_rsa_key
-SFTPCompression delayed
-AuthOrder mod_auth_pam.c mod_auth_unix.c
-TransferLog /var/log/proftpd/xferlog
-SystemLog /var/log/proftpd/proftpd.log
-PROFTPD_CONF
-
-  if [[ ! -f /etc/proftpd/ssh_host_rsa_key ]]; then
-    ssh-keygen -q -t rsa -b 4096 -N '' -f /etc/proftpd/ssh_host_rsa_key
-  fi
-
-  run systemctl enable proftpd
-  run systemctl restart proftpd
-  ufw allow 2022/tcp comment 'ProFTPD SFTP' > /dev/null 2>&1 || true
-  ok "ProFTPD installed (SFTP on port 2022)"
-}
-
-# ---------------------------------------------------------------------------
-# 15. PANEL APPLICATION SCAFFOLD
+# 14. PANEL APPLICATION SCAFFOLD
 # ---------------------------------------------------------------------------
 _create_panel_user() {
   log "Creating system user: ${PANEL_USER}..."
@@ -1522,90 +1448,6 @@ OS_VERSION_ID=${OS_VERSION_ID}
 OS_CODENAME=${OS_CODENAME}
 INSTALLED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 PANELCONF
-
-  # WordPress vhost template
-  cat > "${PANEL_DIR}/config/vhost-template-wordpress.conf" <<'VHOST_WP'
-# AidiPanel Vhost Template — WordPress with FastCGI Cache
-# Variables replaced at site creation: %%DOMAIN%%, %%PHP_VERSION%%, %%WEBROOT%%
-
-server {
-    listen 80;
-    listen [::]:80;
-    server_name %%DOMAIN%% www.%%DOMAIN%%;
-    return 301 https://$host$request_uri;
-}
-
-server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
-    server_name %%DOMAIN%% www.%%DOMAIN%%;
-
-    root %%WEBROOT%%;
-    index index.php index.html;
-
-    ssl_certificate     /etc/ssl/%%DOMAIN%%/fullchain.pem;
-    ssl_certificate_key /etc/ssl/%%DOMAIN%%/privkey.pem;
-    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
-    ssl_prefer_server_ciphers off;
-    ssl_session_cache   shared:SSL:10m;
-    ssl_session_timeout 1d;
-    ssl_stapling        on;
-    ssl_stapling_verify on;
-
-    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header X-FastCGI-Cache $upstream_cache_status always;
-
-    include /etc/nginx/snippets/fastcgi-cache.conf;
-
-    location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot|webp|avif|mp4|webm)$ {
-        expires 30d;
-        add_header Cache-Control "public, immutable";
-        access_log off;
-        log_not_found off;
-    }
-
-    location / {
-        try_files $uri $uri/ /index.php?$args;
-    }
-
-    location ~ /\. { deny all; }
-    location ~ ^/(wp-config\.php|xmlrpc\.php|wp-cron\.php)$ { deny all; }
-    location ~* /(?:uploads|files)/.*\.php$ { deny all; }
-
-    location ~ \.php$ {
-        try_files $uri =404;
-        fastcgi_split_path_info ^(.+\.php)(/.+)$;
-        fastcgi_pass unix:/run/php/php%%PHP_VERSION%%-fpm.sock;
-        fastcgi_index index.php;
-        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-        include fastcgi_params;
-
-        #fastcgi_cache        aidipanel_fcgi;
-        # AidiPanel caches public 404 responses for 60 seconds when the FastCGI
-        # page cache is enabled. This short TTL absorbs repeated bot/scanner probes
-        # without keeping stale 404s for long. Server errors are never cached —
-        # only the codes listed below are.
-        #fastcgi_cache_valid  200 301 302 1h;
-        #fastcgi_cache_valid  404 1m;
-        #fastcgi_cache_bypass  $skip_cache;
-        #fastcgi_no_cache      $skip_cache;
-
-        fastcgi_connect_timeout 60s;
-        fastcgi_send_timeout    180s;
-        fastcgi_read_timeout    180s;
-        fastcgi_buffer_size     64k;
-        fastcgi_buffers         8 128k;
-    }
-
-    access_log /var/log/nginx/%%DOMAIN%%-access.log main buffer=8k;
-    error_log  /var/log/nginx/%%DOMAIN%%-error.log warn;
-}
-VHOST_WP
 
   chown root:root "$PANEL_DIR"
   chown -R root:"$PANEL_USER" "${PANEL_DIR}/config"
@@ -1693,7 +1535,7 @@ UNIT
 }
 
 # ---------------------------------------------------------------------------
-# 16. PANEL NGINX VHOST
+# 15. PANEL NGINX VHOST
 # ---------------------------------------------------------------------------
 _configure_panel_vhost() {
   log "Creating AidiPanel web UI Nginx vhost (port ${PANEL_PORT})..."
@@ -1763,7 +1605,7 @@ PANEL_VHOST
 }
 
 # ---------------------------------------------------------------------------
-# 17. INSTALL CLI TOOL
+# 16. INSTALL CLI TOOL
 # ---------------------------------------------------------------------------
 _download_release_asset() (
   set -Eeuo pipefail
@@ -1933,7 +1775,7 @@ require '${PANEL_DIR}/app/Core/DB.php';
 }
 
 # ---------------------------------------------------------------------------
-# 18. FAIL2BAN
+# 17. FAIL2BAN
 # ---------------------------------------------------------------------------
 _configure_sudoers() {
   log "Configuring sudoers for AidiPanel web panel..."
@@ -2159,7 +2001,7 @@ F2B
 }
 
 # ---------------------------------------------------------------------------
-# 19. CRON JOBS
+# 18. CRON JOBS
 # ---------------------------------------------------------------------------
 _setup_cron() {
   log "Setting up AidiPanel maintenance cron jobs..."
@@ -2192,7 +2034,7 @@ _provision_cloudflare_realip() {
 }
 
 # ---------------------------------------------------------------------------
-# 20. TEST & START SERVICES
+# 19. TEST & START SERVICES
 # ---------------------------------------------------------------------------
 _test_and_start_services() {
   log "Testing Nginx configuration..."
@@ -2216,7 +2058,7 @@ _test_and_start_services() {
 }
 
 # ---------------------------------------------------------------------------
-# 21. HEALTH CHECK
+# 20. HEALTH CHECK
 # ---------------------------------------------------------------------------
 _health_check() {
   log "Running post-install health check..."
@@ -2246,7 +2088,7 @@ _health_check() {
 }
 
 # ---------------------------------------------------------------------------
-# 22. CLEANUP
+# 21. CLEANUP
 # ---------------------------------------------------------------------------
 _cleanup_system() {
   log "Cleaning up..."
@@ -2258,7 +2100,7 @@ _cleanup_system() {
 }
 
 # ---------------------------------------------------------------------------
-# 23. SUMMARY — FIX #4: Show random panel password
+# 22. SUMMARY — FIX #4: Show random panel password
 # ---------------------------------------------------------------------------
 
 # True when $1 is a private / link-local / loopback address — i.e. NOT a routable
@@ -2363,7 +2205,7 @@ _print_summary() {
 }
 
 # ---------------------------------------------------------------------------
-# 24. AUTO-CLEANUP - remove the installer directory after completion
+# 23. AUTO-CLEANUP - remove the installer directory after completion
 # ---------------------------------------------------------------------------
 _cleanup_installer() {
   log "Cleaning up installer files..."
@@ -2464,8 +2306,6 @@ main() {
 
   ui_section "Control Plane"; ui_note "Deploying AidiPanel web UI and CLI"; printf '\n'
   t=$SECONDS
-  # SFTP is disabled by default (per-site users are no-login). ProFTPD setup
-  # is retained as _install_proftpd() for a future opt-in SFTP feature.
   _create_panel_user;     ui_ok "System user created: aidipanel"
   _create_panel_scaffold; ui_ok "Panel directory prepared: ${PANEL_DIR}"
   _setup_panel_fpm;       ui_ok "Panel PHP-FPM service: aidipanel-fpm (aidipanel)"
