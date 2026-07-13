@@ -1029,6 +1029,16 @@ ${proxy_block}
 VHOST
 }
 
+# Prepare a private WP-CLI cache without giving root a tenant-controlled path.
+_wp_cli_cache_dir() {
+  local user="$1" cache_dir="${HOME_BASE}/${1}/tmp/wp-cli-cache"
+  _validate_site_user "$user"
+  [[ -d "${HOME_BASE}/${user}/tmp" ]] || return 1
+  runuser -u "$user" -- mkdir -p -- "$cache_dir" || return 1
+  runuser -u "$user" -- chmod 700 -- "$cache_dir" || return 1
+  printf '%s\n' "$cache_dir"
+}
+
 # Install WordPress into an already-created site, run as the site user via WP-CLI.
 # Passwords are fed over stdin (--prompt) so they never appear in the process list.
 # Returns non-zero on any failure so the caller can roll back; detail goes to CLI_LOG.
@@ -1037,9 +1047,9 @@ _site_install_wordpress() {
   local wp_title="$5" wp_admin_user="$6" wp_admin_pass="$7" wp_admin_email="$8"
   local db_name="$9" db_user="${10}" db_pass="${11}"
 
-  local cache_dir="/tmp/aidipanel-wp-cli-cache"
-  mkdir -p "$cache_dir"
-  chown "${site_user}:${site_user}" "$cache_dir" 2>/dev/null || true
+  local cache_dir
+  cache_dir=$(_wp_cli_cache_dir "$site_user") \
+    || { warn "Could not prepare the WP-CLI cache for ${site_user}."; return 1; }
   local wp=(sudo -u "$site_user" -- env "WP_CLI_CACHE_DIR=${cache_dir}" wp --path="$webroot")
 
   _progress 65 wp_download "Downloading WordPress core"
@@ -1391,12 +1401,14 @@ _cron_toggle() {
 _cron_wp() {
   _require_root "cron:wp"
   _parse_opts "$@"
-  local domain action interval wp_bak wp_bin
+  local domain action interval wp_bak wp_bin cache_dir
   domain=$(_opt "domain"); _require_arg "domain" "$domain" "cron:wp --domain X --action enable|disable [--interval 5]"
   action=$(_opt "action"); [[ "$action" == "enable" || "$action" == "disable" ]] || die "Action must be enable or disable."
   _cron_resolve "$domain"
   [[ -f "${CRON_WEBROOT}/wp-config.php" ]] || die "This site is not a WordPress install."
-  local wp=(sudo -u "$CRON_USER" -- env "WP_CLI_CACHE_DIR=/tmp/aidipanel-wp-cli-cache" wp --path="$CRON_WEBROOT")
+  cache_dir=$(_wp_cli_cache_dir "$CRON_USER") \
+    || die "Could not prepare the WP-CLI cache for ${CRON_USER}."
+  local wp=(sudo -u "$CRON_USER" -- env "WP_CLI_CACHE_DIR=${cache_dir}" wp --path="$CRON_WEBROOT")
   wp_bin=$(command -v wp 2>/dev/null || echo /usr/local/bin/wp)   # absolute path for cron (minimal PATH)
   if [[ "$action" == "enable" ]]; then
     interval=$(_opt "interval" "5")
@@ -3764,7 +3776,7 @@ _cache_redis_site_status() {
 # Resolve a domain's per-site object-cache context. Sets OC_* globals + OC_RUNNER.
 # Prints "error=domain_not_found" and exits on an unknown/invalid domain.
 _cache_redis_resolve() {
-  local domain="$1"
+  local domain="$1" cache_dir
   _domain_valid "$domain" || { echo "error=domain_not_found"; exit 1; }
   OC_CONF="${NGINX_CONF_DIR}/${domain}.conf"
   [[ -f "$OC_CONF" ]] || { echo "error=domain_not_found"; exit 1; }
@@ -3773,8 +3785,10 @@ _cache_redis_resolve() {
   OC_SITE_TYPE=$(grep -oP '# Type: \K\w+' "$OC_CONF" 2>/dev/null | head -1 || echo "php")
   OC_WPCONFIG="${OC_WEBROOT}/wp-config.php"
   OC_EXPECTED_PREFIX="aidipanel:${OC_SITE_USER}:"
+  cache_dir=$(_wp_cli_cache_dir "$OC_SITE_USER") \
+    || { echo "error=wp_cli_cache_unavailable"; exit 1; }
   # WP-CLI runs as the SITE USER (per-site-user model) — never www-data/root/--allow-root.
-  OC_RUNNER=(sudo -u "$OC_SITE_USER" -- env "WP_CLI_CACHE_DIR=/tmp/aidipanel-wp-cli-cache" wp --path="$OC_WEBROOT")
+  OC_RUNNER=(sudo -u "$OC_SITE_USER" -- env "WP_CLI_CACHE_DIR=${cache_dir}" wp --path="$OC_WEBROOT")
 }
 
 # Read WP_REDIS_PREFIX from a wp-config.php (empty if unset). Read-only.
@@ -4983,13 +4997,30 @@ _cache_install_wp_plugins() {
     return 0
   fi
 
-  local site_user; site_user=$(stat -c '%U' "$webroot" 2>/dev/null || echo "")
-  mkdir -p /tmp/aidipanel-wp-cli-cache
-  chown "${site_user:-www-data}":"${site_user:-www-data}" /tmp/aidipanel-wp-cli-cache 2>/dev/null || true
+  local site_user cache_dir use_site_user=0
+  site_user=$(stat -c '%U' "$webroot" 2>/dev/null || echo "")
+  if [[ -n "$site_user" && -x "$(command -v sudo 2>/dev/null)" ]] \
+      && ( _validate_site_user "$site_user" ) 2>/dev/null; then
+    use_site_user=1
+    if ! cache_dir=$(_wp_cli_cache_dir "$site_user"); then
+      warn "Could not prepare the WP-CLI cache for ${site_user}; skipping plugin installation."
+      [[ "$install_nginx_helper" == "true" ]] && echo "nginx_helper=install_failed" || true
+      [[ "$install_redis_plugin"  == "true" ]] && echo "redis_plugin=install_failed"  || true
+      return 0
+    fi
+  else
+    cache_dir="/root/.cache/aidipanel/wp-cli"
+    if ! install -d -o root -g root -m 0700 -- "$cache_dir"; then
+      warn "Could not prepare the root-private WP-CLI cache; skipping plugin installation."
+      [[ "$install_nginx_helper" == "true" ]] && echo "nginx_helper=install_failed" || true
+      [[ "$install_redis_plugin"  == "true" ]] && echo "redis_plugin=install_failed"  || true
+      return 0
+    fi
+  fi
 
-  local wp_base=(env WP_CLI_CACHE_DIR=/tmp/aidipanel-wp-cli-cache wp --path="$webroot")
+  local wp_base=(env "WP_CLI_CACHE_DIR=${cache_dir}" wp --path="$webroot")
   local runner=("${wp_base[@]}")
-  if [[ -n "$site_user" ]] && command -v sudo >/dev/null 2>&1; then
+  if [[ "$use_site_user" == 1 ]]; then
     runner=(sudo -u "$site_user" "${wp_base[@]}")
   else
     runner=("${wp_base[@]}" --allow-root)
