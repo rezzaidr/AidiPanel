@@ -41,6 +41,7 @@ readonly PMA_URL_PATH="/phpmyadmin/index.php"
 readonly PMA_RUNTIME_USER="aidipanel-pma"
 readonly PMA_FPM_SOCKET="/run/php/aidipanel-pma.sock"
 readonly PMA_SESSION_DIR="/var/lib/aidipanel/phpmyadmin-sessions"
+readonly BACKUP_STAGING_ROOT="/var/lib/aidipanel/backup-staging"
 readonly DB_SECRET_DIR="/var/lib/aidipanel/db-secrets"
 readonly DB_SECRET_STORE="/var/lib/aidipanel/db-secrets/passwords.tsv"
 readonly DB_SECRET_KEY="/etc/aidipanel/db-secret.key"
@@ -2529,39 +2530,67 @@ _backup_create() {
   site_type=$(grep -oP '# Type: \K\w+' "$vconf" 2>/dev/null || echo "")
   php_ver=$(grep -oP 'php\K[0-9.]+(?=-fpm)' "$vconf" 2>/dev/null || echo "")
 
-  # Self-heal ~/backups and ~/tmp (same FS => the final mv is atomic).
-  mkdir -p "$backups" "${BACKUP_HOME}/tmp"
-  chown "${user}:${user}" "$backups" "${BACKUP_HOME}/tmp"
-  chmod 750 "$backups" "${BACKUP_HOME}/tmp"
+  # ~/backups is tenant-controlled. Reject a pre-existing symlink, then perform
+  # every creation and mode change in it with the tenant's own privileges.
+  [[ ! -L "$backups" ]] || die "Unsafe backup path: ${backups} must not be a symbolic link."
+  if [[ ! -e "$backups" ]]; then
+    runuser -u "$user" -- mkdir -p -- "$backups" \
+      || die "Could not create the site backup directory."
+  fi
+  [[ -d "$backups" && ! -L "$backups" ]] \
+    || die "Unsafe backup path: ${backups} must be a regular directory."
+  runuser -u "$user" -- chmod 750 -- "$backups" \
+    || die "Could not secure the site backup directory."
 
-  # Disk-space precheck (heuristic: max(1 GiB, 2 x webroot bytes)).
-  local wbytes need free
-  wbytes=$(du -sb "$webroot_base" 2>/dev/null | cut -f1); wbytes=${wbytes:-0}
+  # Privileged intermediates live only below a root-owned mode-0700 base.
+  [[ ! -L "$BACKUP_STAGING_ROOT" ]] \
+    || die "Unsafe backup staging path: ${BACKUP_STAGING_ROOT} must not be a symbolic link."
+  install -d -o root -g root -m 0700 -- "$BACKUP_STAGING_ROOT" \
+    || die "Could not prepare backup staging."
+  [[ -d "$BACKUP_STAGING_ROOT" && ! -L "$BACKUP_STAGING_ROOT" ]] \
+    || die "Unsafe backup staging path: ${BACKUP_STAGING_ROOT} must be a regular directory."
+
+  # Disk-space precheck: staging and destination may be separate filesystems.
+  local wbytes need backup_free staging_free backup_target staging_target
+  wbytes=$(runuser -u "$user" -- du -sb -- "$webroot_base" 2>/dev/null | cut -f1); wbytes=${wbytes:-0}
   need=$(( wbytes * 2 )); (( need < 1073741824 )) && need=1073741824
-  free=$(df -B1 --output=avail "$backups" | awk 'NR==2{print $1}')
-  (( free < need )) && die "Insufficient disk space: ${free} bytes free on $(df --output=target "$backups" | awk 'NR==2{print $1}'); need at least ${need} bytes."
+  backup_free=$(runuser -u "$user" -- df -B1 --output=avail "$backups" | awk 'NR==2{print $1}')
+  backup_target=$(runuser -u "$user" -- df --output=target "$backups" | awk 'NR==2{print $1}')
+  (( backup_free < need )) \
+    && die "Insufficient disk space: ${backup_free} bytes free on ${backup_target}; need at least ${need} bytes."
+  staging_free=$(df -B1 --output=avail "$BACKUP_STAGING_ROOT" | awk 'NR==2{print $1}')
+  staging_target=$(df --output=target "$BACKUP_STAGING_ROOT" | awk 'NR==2{print $1}')
+  (( staging_free < need )) \
+    && die "Insufficient backup staging space: ${staging_free} bytes free on ${staging_target}; need at least ${need} bytes."
 
-  # Staging dir on the same FS as ~/backups (global so the trap can guard + remove it).
-  BACKUP_STAGING=$(mktemp -d -p "${BACKUP_HOME}/tmp")
+  BACKUP_STAGING=$(mktemp -d "${BACKUP_STAGING_ROOT}/${user}.${domain}.XXXXXXXXXX") \
+    || die "Could not create backup staging."
   BACKUP_DUMP="${BACKUP_STAGING}/.my.cnf"
-  chown "${user}:${user}" "$BACKUP_STAGING"; chmod 700 "$BACKUP_STAGING"
+  BACKUP_USER="$user"
+  BACKUP_PUBLISH_TMP=""
 
-  # Guarded cleanup trap: remove staging (only if under ~/tmp/) and the creds file.
+  # Each cleanup operation is bounded to its trust zone. Root removes only root
+  # staging; an incomplete tenant publication is removed as the tenant user.
   _backup_create_cleanup() {
-    if [[ -n "${BACKUP_STAGING:-}" && "$BACKUP_STAGING" == "${BACKUP_HOME}/tmp/"* ]]; then
-      rm -rf "$BACKUP_STAGING"
+    if [[ -n "${BACKUP_PUBLISH_TMP:-}" \
+          && "$BACKUP_PUBLISH_TMP" == "${BACKUP_HOME}/backups/.aidipanel-backup."* ]]; then
+      runuser -u "$BACKUP_USER" -- rm -f -- "$BACKUP_PUBLISH_TMP" 2>/dev/null || true
     fi
-    rm -f "$BACKUP_DUMP" 2>/dev/null || true
+    if [[ -n "${BACKUP_STAGING:-}" \
+          && "$BACKUP_STAGING" == "${BACKUP_STAGING_ROOT}/"* ]]; then
+      rm -rf -- "$BACKUP_STAGING"
+    fi
   }
   trap _backup_create_cleanup EXIT INT TERM
 
-  # Phase 1: tar webroot as the site-user (source = htdocs/<domain>, NOT /public).
-  # Top-level entry inside webroot.tar.gz is <domain>/; ~/backups is a sibling, never included.
+  # Phase 1: read site files as the site user; root owns only the output stream.
+  # Top-level entry inside webroot.tar.gz remains <domain>/.
   _progress 10 tarring "Archiving webroot"
-  ( cd "$htdocs" && sudo -u "$user" tar czf "${BACKUP_STAGING}/webroot.tar.gz" "${tar_excludes[@]}" "$domain" ) \
+  ( cd "$htdocs" && runuser -u "$user" -- tar czf - "${tar_excludes[@]}" "$domain" ) \
+    > "${BACKUP_STAGING}/webroot.tar.gz" \
     || die "Failed to archive webroot."
 
-  # Phase 2: dump DB(s) as root via a mode-0600 defaults file (password never in argv/environ).
+  # Phase 2: dump DB(s) as root via a mode-0600 defaults file in root staging.
   _progress 35 dumping "Dumping database"
   _load_credentials
   local dbc; dbc=$(_db_binary)
@@ -2585,40 +2614,58 @@ _backup_create() {
           --routines --triggers --events --default-character-set=utf8mb4 \
           "$db" | gzip > "${BACKUP_STAGING}/db_${db}.sql.gz" ) \
         || die "Failed to dump database: $db"
-      chown "${user}:${user}" "${BACKUP_STAGING}/db_${db}.sql.gz"
     done
   fi
 
-  # Phase 3: manifest (dotfiles such as .my.cnf are skipped by the glob).
+  # Phase 3: manifest. The credentials dotfile is excluded by explicit members.
   local members=("webroot.tar.gz") dbjson
   for db in "${dbs[@]}"; do members+=("db_${db}.sql.gz"); done
   members+=("manifest.json")
   dbjson=$(_backup_dbjson "${dbs[@]}")
   _backup_manifest "$domain" "$user" "$site_type" "$php_ver" "$dbjson" "$BACKUP_STAGING" "$CLI_VERSION" \
     > "${BACKUP_STAGING}/manifest.json"
-  chown "${user}:${user}" "${BACKUP_STAGING}/manifest.json"
 
-  # Phase 4: bundle as the site-user (explicit member list; no literal glob).
+  # Phase 4: build in root staging, then publish through a site-user stream.
   _progress 70 bundling "Building archive"
-  sudo -u "$user" tar czf "${BACKUP_STAGING}/bundle.tar.gz" -C "${BACKUP_STAGING}" "${members[@]}" \
+  tar czf "${BACKUP_STAGING}/bundle.tar.gz" --owner="$user" --group="$user" \
+    -C "$BACKUP_STAGING" "${members[@]}" \
     || die "Failed to build bundle."
 
-  # Atomic commit into ~/backups (same-FS mv), then chmod 600 + owner assert.
   local final
   final="${backups}/${domain}_$(date +%Y%m%d_%H%M%S)_$$.tar.gz"
-  sudo -u "$user" mv "${BACKUP_STAGING}/bundle.tar.gz" "$final" || die "Failed to commit backup."
-  chmod 600 "$final"
-  [[ "$(stat -c %U "$final")" == "$user" ]] || die "Backup archive owner mismatch."
+  BACKUP_PUBLISH_TMP=$(runuser -u "$user" -- mktemp "${backups}/.aidipanel-backup.XXXXXXXXXX") \
+    || die "Could not create the backup publication file."
+  runuser -u "$user" -- tee -- "$BACKUP_PUBLISH_TMP" \
+    < "${BACKUP_STAGING}/bundle.tar.gz" >/dev/null \
+    || die "Failed to write the backup archive."
+  runuser -u "$user" -- chmod 600 -- "$BACKUP_PUBLISH_TMP" \
+    || die "Failed to secure the backup archive."
+  runuser -u "$user" -- mv -f -- "$BACKUP_PUBLISH_TMP" "$final" \
+    || die "Failed to commit backup."
+  BACKUP_PUBLISH_TMP=""
+  [[ "$(runuser -u "$user" -- stat -c %U -- "$final")" == "$user" ]] \
+    || die "Backup archive owner mismatch."
 
-  # Phase 5: prune to newest N (only after a successful commit).
+  # Phase 5: prune only after successful publication, always as the site user.
   _progress 90 pruning "Pruning old backups"
   local pf
   while IFS= read -r pf; do
-    rm -f "$pf" 2>/dev/null || sudo -u "$user" rm -f "$pf" 2>/dev/null || true
-  done < <(printf '%s\n' "${backups}/${domain}_"*.tar.gz | sort -r | _backup_prune_set "$keep" "$final" "$domain")
+    runuser -u "$user" -- rm -f -- "$pf" 2>/dev/null || true
+  done < <(
+    ( cd / && runuser -u "$user" -- find "$backups" -maxdepth 1 -type f \
+      -name "${domain}_*.tar.gz" -print ) \
+      | sort -r \
+      | _backup_prune_set "$keep" "$final" "$domain"
+  )
 
+  local final_size
+  final_size=$(runuser -u "$user" -- du -h -- "$final" | cut -f1)
+  _backup_create_cleanup
+  BACKUP_STAGING=""
+  BACKUP_DUMP=""
+  trap - EXIT INT TERM
   _progress 100 "done" "Backup created"
-  ok "Backup created: ${final} ($(du -h "$final" | cut -f1))"
+  ok "Backup created: ${final} (${final_size})"
 }
 
 # files:rename --domain X   (line1=path, line2=newName)
