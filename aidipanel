@@ -2528,7 +2528,7 @@ _backup_create() {
     tar_excludes+=(--exclude "$_archive_pat")
   done
   site_type=$(grep -oP '# Type: \K\w+' "$vconf" 2>/dev/null || echo "")
-  php_ver=$(grep -oP 'php\K[0-9.]+(?=-fpm)' "$vconf" 2>/dev/null || echo "")
+  php_ver=$(grep -oP 'php\K[0-9.]+(?=-fpm)' "$vconf" 2>/dev/null | head -1 || echo "")
 
   # ~/backups is tenant-controlled. Reject a pre-existing symlink, then perform
   # every creation and mode change in it with the tenant's own privileges.
