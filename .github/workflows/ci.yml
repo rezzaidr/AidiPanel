@@ -89,7 +89,7 @@ jobs:
         run: git diff --exit-code -- panel-app/public/assets
 
   release:
-    name: Publish Release
+    name: Prepare Draft Release
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [lint-installer, lint-php, frontend]
@@ -106,12 +106,16 @@ jobs:
           grep -Fqx "readonly PANEL_VERSION=\"${source_version}\"" panel-app/deploy-panel.sh
           # PANEL_VERSION the panel renders (footer) is defined here, separately.
           grep -Fqx "define('PANEL_VERSION', '${source_version}');" panel-app/public/index.php
+          printf 'AIDIPANEL_RELEASE_VERSION=%s\n' "$source_version" >> "$GITHUB_ENV"
 
       - name: Package install script
         run: |
           cp install.sh install-aidipanel.sh
           tar -czf aidipanel-panel-app.tar.gz panel-app/
-          sha256sum install-aidipanel.sh aidipanel aidipanel-panel-app.tar.gz > SHA256SUMS
+          {
+            printf '# AIDIPANEL_RELEASE_VERSION=%s\n' "$AIDIPANEL_RELEASE_VERSION"
+            sha256sum install-aidipanel.sh aidipanel aidipanel-panel-app.tar.gz
+          } > SHA256SUMS
 
       - name: Upload artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -122,17 +126,24 @@ jobs:
             aidipanel
             aidipanel-panel-app.tar.gz
             SHA256SUMS
+            config/release-signing-public.pub
 
-      - name: Publish GitHub Release
+      - name: Create draft GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           flags=(--verify-tag --generate-notes --title "$GITHUB_REF_NAME")
           [[ "$GITHUB_REF_NAME" == *-* ]] && flags+=(--prerelease)
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
-            gh release create "$GITHUB_REF_NAME" "${flags[@]}"
+
+          if state=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null); then
+            [[ "$state" == true ]] || { echo "Release already published; refusing upload." >&2; exit 1; }
+          else
+            gh release create "$GITHUB_REF_NAME" "${flags[@]}" --draft
+          fi
+
           gh release upload "$GITHUB_REF_NAME" \
             install-aidipanel.sh \
             aidipanel \
             aidipanel-panel-app.tar.gz \
-            SHA256SUMS
+            SHA256SUMS \
+            config/release-signing-public.pub

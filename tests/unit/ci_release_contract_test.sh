@@ -22,5 +22,8 @@ require 'grep -Fqx "readonly CLI_VERSION=\"${source_version}\"" aidipanel' 'rele
 require 'grep -Fqx "readonly PANEL_VERSION=\"${source_version}\"" panel-app/deploy-panel.sh' 'release tag must match the deployer version'
 require 'sha256sum install-aidipanel.sh aidipanel aidipanel-panel-app.tar.gz' 'release artifacts include integrity hashes'
 require 'SHA256SUMS' 'release upload includes the checksum manifest'
+require 'printf '\''# AIDIPANEL_RELEASE_VERSION=%s\n'\''' 'release manifest includes the signed version header'
+require 'gh release create "$GITHUB_REF_NAME" "${flags[@]}" --draft' 'CI creates an unpublished draft'
+require 'release-signing-public.pub' 'release publishes the public verification key'
 
 printf 'CI release contract passed\n'

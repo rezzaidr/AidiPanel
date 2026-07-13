@@ -44,6 +44,21 @@ If any check fails, the operation is refused and nothing is removed. This preven
 - TLS 1.2/1.3 and OCSP stapling in managed HTTPS vhosts. HSTS is opt-in per site
   and should be enabled only after a trusted certificate is active.
 
+## Release Authenticity
+
+- Release manifests are signed offline with ECDSA P-256. The installer and CLI
+  pin the corresponding public key and verify `SHA256SUMS.sig` before trusting
+  any release checksum.
+- `self:update` downloads and authenticates the manifest before executable
+  assets, rejects signed downgrades, and has no checksum-only fallback.
+- The one-line installer uses HTTPS for its initial bootstrap. The
+  [verified installation path](installation.md#verify-before-running-recommended)
+  authenticates the installer itself before root execution.
+- The public-key DER SHA-256 fingerprint is
+  `63cd4bf5ed9f184c9042977cec91e25d0928cc361c4e54bfb496d31f74f4d901` and must be checked through
+  an independent AidiPanel channel, not only against the key attached to the
+  same release.
+
 ## Application
 
 - CSRF protection on state-changing requests.
@@ -52,8 +67,8 @@ If any check fails, the operation is refused and nothing is removed. This preven
   assignment for client accounts.
 - Optional TOTP two-factor authentication includes one-time recovery codes.
 - Credentials are generated randomly at install and stored in `/opt/aidipanel/credentials.conf` (mode 600).
-- `self:update` verifies the CLI and panel release assets against the published
-  `SHA256SUMS` before activation and preserves existing users and runtime data.
+- `self:update` verifies the signed manifest and matching CLI/panel checksums
+  before activation, and preserves existing users and runtime data.
 
 ## Reporting
 

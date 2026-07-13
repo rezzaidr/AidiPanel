@@ -27,6 +27,7 @@ IFS=$'\n\t'
 # ---------------------------------------------------------------------------
 readonly PANEL_NAME="AidiPanel"
 readonly PANEL_VERSION="1.3.2"
+readonly AIDIPANEL_RELEASE_PUBLIC_KEY_B64="LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUZrd0V3WUhLb1pJemowQ0FRWUlLb1pJemowREFRY0RRZ0FFbmVQeXBrYjhVSkZOOFppeDV1enhETVhITFJrTQpBZkFHK3pLQjlLUjQ0N25OMVkvMkRLT0drU0pBZ21DQkJUek9sdkdhTi9Sd28xQnpxTGY3Z0w2VU53PT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg=="
 readonly PANEL_USER="aidipanel"
 readonly PANEL_DIR="/opt/aidipanel"
 readonly PANEL_LOG="/var/log/aidipanel-install.log"
@@ -1607,6 +1608,31 @@ PANEL_VHOST
 # ---------------------------------------------------------------------------
 # 16. INSTALL CLI TOOL
 # ---------------------------------------------------------------------------
+_release_public_key_write() {
+  local destination="$1"
+  ( umask 077
+    printf '%s' "$AIDIPANEL_RELEASE_PUBLIC_KEY_B64" | base64 -d > "$destination"
+  ) || return 1
+  [[ -s "$destination" ]] || return 1
+  openssl pkey -pubin -in "$destination" -noout >/dev/null 2>&1
+}
+
+_release_manifest_verify() {
+  local manifest="$1" signature="$2" public_key="$3"
+  [[ -s "$manifest" && -s "$signature" && -s "$public_key" ]] || return 1
+  openssl dgst -sha256 -verify "$public_key" -signature "$signature" "$manifest" >/dev/null 2>&1
+}
+
+_release_manifest_version() {
+  local manifest="$1" line
+  local -a lines=()
+  mapfile -t lines < <(sed -n 's/^# AIDIPANEL_RELEASE_VERSION=\(.*\)$/\1/p' "$manifest")
+  [[ "${#lines[@]}" -eq 1 ]] || return 1
+  line="${lines[0]}"
+  [[ "$line" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]] || return 1
+  printf '%s\n' "$line"
+}
+
 _download_release_asset() (
   set -Eeuo pipefail
   local asset="$1" destination="$2"
@@ -1614,21 +1640,35 @@ _download_release_asset() (
   [[ "$base" == https://* ]] || die "AidiPanel release URL must use HTTPS."
   [[ "$asset" =~ ^[A-Za-z0-9._-]+$ ]] || die "Invalid AidiPanel release asset name."
 
-  local tmp_dir manifest checksum_line
+  local tmp_dir manifest signature public_key checksum checksum_asset extra
+  local -a checksum_lines=()
   tmp_dir=$(mktemp -d)
   trap 'rm -rf -- "$tmp_dir"' EXIT
   manifest="${tmp_dir}/SHA256SUMS"
+  signature="${tmp_dir}/SHA256SUMS.sig"
+  public_key="${tmp_dir}/release-signing-public.pub"
+
+  curl -fsSL --proto '=https' --tlsv1.2 "${base}/SHA256SUMS" -o "$manifest" \
+    || die "Could not download AidiPanel release checksums."
+  curl -fsSL --proto '=https' --tlsv1.2 "${base}/SHA256SUMS.sig" -o "$signature" \
+    || die "Could not download the AidiPanel release signature."
+  _release_public_key_write "$public_key" \
+    || die "The pinned AidiPanel release public key is invalid."
+  _release_manifest_verify "$manifest" "$signature" "$public_key" \
+    || die "The AidiPanel release manifest signature is invalid."
+  _release_manifest_version "$manifest" >/dev/null \
+    || die "The signed AidiPanel release version is invalid."
+
+  mapfile -t checksum_lines < <(awk -v name="$asset" '$2 == name { print }' "$manifest")
+  [[ "${#checksum_lines[@]}" -eq 1 ]] \
+    || die "Expected exactly one checksum for AidiPanel release asset: ${asset}"
+  IFS=' ' read -r checksum checksum_asset extra <<< "${checksum_lines[0]}"
+  [[ "$checksum" =~ ^[0-9a-f]{64}$ && "$checksum_asset" == "$asset" && -z "$extra" ]] \
+    || die "Invalid checksum entry for AidiPanel release asset: ${asset}"
 
   curl -fsSL --proto '=https' --tlsv1.2 "${base}/${asset}" -o "${tmp_dir}/${asset}" \
     || die "Could not download AidiPanel release asset: ${asset}"
-  curl -fsSL --proto '=https' --tlsv1.2 "${base}/SHA256SUMS" -o "$manifest" \
-    || die "Could not download AidiPanel release checksums."
-
-  checksum_line=$(awk -v name="$asset" '$2 == name || $2 == "*" name { print; found=1 } END { if (!found) exit 1 }' "$manifest") \
-    || die "No checksum published for AidiPanel release asset: ${asset}"
-  [[ "$checksum_line" =~ ^[0-9a-fA-F]{64}[[:space:]]+\*?${asset}$ ]] \
-    || die "Invalid checksum entry for AidiPanel release asset: ${asset}"
-  (cd "$tmp_dir" && printf '%s\n' "$checksum_line" | sha256sum -c - >/dev/null) \
+  (cd "$tmp_dir" && printf '%s  %s\n' "$checksum" "$asset" | sha256sum -c - >/dev/null) \
     || die "AidiPanel release asset failed checksum verification: ${asset}"
 
   mv -f -- "${tmp_dir}/${asset}" "$destination"

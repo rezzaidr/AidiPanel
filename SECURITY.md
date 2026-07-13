@@ -12,6 +12,47 @@ branch is development code and is not the recommended production channel.
 | Latest stable release | Yes |
 | Older releases and prereleases | No |
 
+## Release Authenticity
+
+AidiPanel release manifests use an offline ECDSA P-256 signature. Installers and
+`self:update` pin the release public key, verify `SHA256SUMS.sig`, and only
+then trust the asset checksums. There is no checksum-only fallback in
+`self:update`.
+
+The public-key DER SHA-256 fingerprint is:
+
+```text
+63cd4bf5ed9f184c9042977cec91e25d0928cc361c4e54bfb496d31f74f4d901
+```
+
+Verify this value through `https://aidipanel.com/security` or the published
+AidiPanel DNS record rather than trusting only a key downloaded with the same
+release.
+
+## Maintainer Release Procedure
+
+The signing key is initialized once and reused across releases until a planned
+rotation. It is not regenerated for every version. For each release, commit the
+version changes, start from a completely clean worktree, then:
+
+```powershell
+git tag vX.Y.Z
+git push origin vX.Y.Z
+.	oolseleasesign-release.ps1 vX.Y.Z
+```
+
+The tag workflow builds an unpublished draft without access to the private key.
+After that workflow succeeds, the local signing command verifies the local and
+remote tag commits, validates every draft artifact against the exact tag,
+creates or resumes the detached signature without replacing it, verifies the
+remote copy, and only then publishes the release.
+
+Key rotation must be planned so existing installations can transition from the
+old pinned key. If compromise is suspected, stop publication, disclose the
+affected key through the security channels, and distribute the replacement
+trust anchor through an authenticated recovery release or documented manual
+recovery. Never silently replace the pinned key.
+
 ## Reporting a Vulnerability
 
 Please report security issues privately. Do **not** open a public issue for a

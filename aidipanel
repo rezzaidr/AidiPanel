@@ -16,6 +16,7 @@ IFS=$'\n\t'
 # CONSTANTS
 # ---------------------------------------------------------------------------
 readonly CLI_VERSION="1.3.2"
+readonly AIDIPANEL_RELEASE_PUBLIC_KEY_B64="LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUZrd0V3WUhLb1pJemowQ0FRWUlLb1pJemowREFRY0RRZ0FFbmVQeXBrYjhVSkZOOFppeDV1enhETVhITFJrTQpBZkFHK3pLQjlLUjQ0N25OMVkvMkRLT0drU0pBZ21DQkJUek9sdkdhTi9Sd28xQnpxTGY3Z0w2VU53PT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg=="
 readonly PANEL_DIR="/opt/aidipanel"
 readonly HOME_BASE="/home"
 readonly RESERVED_SITE_USERS=(root www-data ubuntu debian nginx mysql mariadb postgres redis aidipanel aidipanel-pma daemon bin sys sync games man lp mail news uucp proxy backup list irc gnats nobody systemd-network systemd-resolve)
@@ -10033,51 +10034,127 @@ AIDIPANEL_MOTD
   return 0
 }
 
+_release_public_key_write() {
+  local destination="$1"
+  ( umask 077
+    printf '%s' "$AIDIPANEL_RELEASE_PUBLIC_KEY_B64" | base64 -d > "$destination"
+  ) || return 1
+  [[ -s "$destination" ]] || return 1
+  openssl pkey -pubin -in "$destination" -noout >/dev/null 2>&1
+}
+
+_release_manifest_verify() {
+  local manifest="$1" signature="$2" public_key="$3"
+  [[ -s "$manifest" && -s "$signature" && -s "$public_key" ]] || return 1
+  openssl dgst -sha256 -verify "$public_key" -signature "$signature" "$manifest" >/dev/null 2>&1
+}
+
+_release_manifest_version() {
+  local manifest="$1" line
+  local -a lines=()
+  mapfile -t lines < <(sed -n 's/^# AIDIPANEL_RELEASE_VERSION=\(.*\)$/\1/p' "$manifest")
+  [[ "${#lines[@]}" -eq 1 ]] || return 1
+  line="${lines[0]}"
+  [[ "$line" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]] || return 1
+  printf '%s\n' "$line"
+}
+
+_release_version_parts() {
+  local version="$1" stable=1 rc=0
+  [[ "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-rc([0-9]+))?$ ]] || return 1
+  [[ -n "${BASH_REMATCH[4]}" ]] && { stable=0; rc="${BASH_REMATCH[5]}"; }
+  printf '%s %s %s %s %s\n' \
+    "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "$stable" "$rc"
+}
+
+_release_version_is_downgrade() {
+  local candidate="$1" current="$2"
+  local cmaj cmin cpatch cstable crc omaj omin opatch ostable orc
+  IFS=' ' read -r cmaj cmin cpatch cstable crc < <(_release_version_parts "$candidate") || return 2
+  IFS=' ' read -r omaj omin opatch ostable orc < <(_release_version_parts "$current") || return 2
+  local pair left right
+  for pair in "$cmaj:$omaj" "$cmin:$omin" "$cpatch:$opatch" "$cstable:$ostable" "$crc:$orc"; do
+    left="${pair%%:*}"
+    right="${pair#*:}"
+    (( 10#$left < 10#$right )) && return 0
+    (( 10#$left > 10#$right )) && return 1
+  done
+  return 1
+}
+
 _self_update() {
   _require_root "self:update"
   log "Checking for AidiPanel release updates..."
   local install_url="https://github.com/rezzaidr/AidiPanel/releases/latest/download/aidipanel"
   local panel_url="https://github.com/rezzaidr/AidiPanel/releases/latest/download/aidipanel-panel-app.tar.gz"
   local checksum_url="https://github.com/rezzaidr/AidiPanel/releases/latest/download/SHA256SUMS"
+  local signature_url="https://github.com/rezzaidr/AidiPanel/releases/latest/download/SHA256SUMS.sig"
   # Optional root-owned overrides are parsed as inert values, never sourced.
   if [[ -r /etc/aidipanel/update.conf ]]; then
-    local configured_url configured_panel configured_checksum
+    local configured_url configured_panel configured_checksum configured_signature
     configured_url=$(sed -n 's/^UPDATE_URL=//p' /etc/aidipanel/update.conf | tail -1)
     configured_panel=$(sed -n 's/^UPDATE_PANEL_URL=//p' /etc/aidipanel/update.conf | tail -1)
     configured_checksum=$(sed -n 's/^UPDATE_CHECKSUM_URL=//p' /etc/aidipanel/update.conf | tail -1)
+    configured_signature=$(sed -n 's/^UPDATE_SIGNATURE_URL=//p' /etc/aidipanel/update.conf | tail -1)
     [[ -n "$configured_url" ]] && install_url="$configured_url"
     [[ -n "$configured_panel" ]] && panel_url="$configured_panel"
     [[ -n "$configured_checksum" ]] && checksum_url="$configured_checksum"
+    [[ -n "$configured_signature" ]] && signature_url="$configured_signature"
   fi
-  [[ "$install_url" == https://* && "$panel_url" == https://* && "$checksum_url" == https://* ]] \
+  [[ "$install_url" == https://* && "$panel_url" == https://* && "$checksum_url" == https://* && "$signature_url" == https://* ]] \
     || die "Update URLs must use HTTPS."
 
-  local tmp_dir tmp_file panel_archive manifest checksum_line panel_checksum_line current_bin staged
+  local tmp_dir tmp_file panel_archive manifest signature public_key release_version
+  local cli_checksum cli_checksum_asset panel_checksum panel_checksum_asset extra
+  local current_bin staged version_status
+  local -a cli_checksum_lines=() panel_checksum_lines=()
   tmp_dir=$(mktemp -d /tmp/aidipanel-update.XXXXXX)
   trap 'rm -rf -- "$tmp_dir"' EXIT
   tmp_file="${tmp_dir}/aidipanel"
   panel_archive="${tmp_dir}/aidipanel-panel-app.tar.gz"
   manifest="${tmp_dir}/SHA256SUMS"
+  signature="${tmp_dir}/SHA256SUMS.sig"
+  public_key="${tmp_dir}/release-signing-public.pub"
+
+  curl -fsSL --proto '=https' --tlsv1.2 "$checksum_url" -o "$manifest" 2>/dev/null \
+    || die "Failed to download the release checksum manifest."
+  curl -fsSL --proto '=https' --tlsv1.2 "$signature_url" -o "$signature" 2>/dev/null \
+    || die "Failed to download the release manifest signature."
+  _release_public_key_write "$public_key" \
+    || die "The pinned AidiPanel release public key is invalid."
+  _release_manifest_verify "$manifest" "$signature" "$public_key" \
+    || die "The AidiPanel release manifest signature is invalid."
+  release_version=$(_release_manifest_version "$manifest") \
+    || die "The signed AidiPanel release version is invalid."
+  if _release_version_is_downgrade "$release_version" "$CLI_VERSION"; then
+    die "Refusing signed downgrade from ${CLI_VERSION} to ${release_version}."
+  else
+    version_status=$?
+    [[ "$version_status" -eq 1 ]] || die "Could not compare the signed AidiPanel release version."
+  fi
+
+  mapfile -t cli_checksum_lines < <(awk '$2 == "aidipanel" { print }' "$manifest")
+  [[ "${#cli_checksum_lines[@]}" -eq 1 ]] \
+    || die "Expected exactly one AidiPanel CLI checksum entry."
+  IFS=' ' read -r cli_checksum cli_checksum_asset extra <<< "${cli_checksum_lines[0]}"
+  [[ "$cli_checksum" =~ ^[0-9a-f]{64}$ && "$cli_checksum_asset" == "aidipanel" && -z "$extra" ]] \
+    || die "The AidiPanel CLI checksum entry is invalid."
+
+  mapfile -t panel_checksum_lines < <(awk '$2 == "aidipanel-panel-app.tar.gz" { print }' "$manifest")
+  [[ "${#panel_checksum_lines[@]}" -eq 1 ]] \
+    || die "Expected exactly one panel application checksum entry."
+  IFS=' ' read -r panel_checksum panel_checksum_asset extra <<< "${panel_checksum_lines[0]}"
+  [[ "$panel_checksum" =~ ^[0-9a-f]{64}$ && "$panel_checksum_asset" == "aidipanel-panel-app.tar.gz" && -z "$extra" ]] \
+    || die "The panel application checksum entry is invalid."
 
   curl -fsSL --proto '=https' --tlsv1.2 "$install_url" -o "$tmp_file" 2>/dev/null \
     || die "Failed to download update. Check internet connection."
-  curl -fsSL --proto '=https' --tlsv1.2 "$checksum_url" -o "$manifest" 2>/dev/null \
-    || die "Failed to download the release checksum manifest."
   curl -fsSL --proto '=https' --tlsv1.2 "$panel_url" -o "$panel_archive" 2>/dev/null \
     || die "Failed to download the matching panel application release."
 
-  checksum_line=$(awk '$2 == "aidipanel" || $2 == "*aidipanel" { print; found=1 } END { if (!found) exit 1 }' "$manifest") \
-    || die "The release checksum manifest has no AidiPanel CLI entry."
-  [[ "$checksum_line" =~ ^[0-9a-fA-F]{64}[[:space:]]+\*?aidipanel$ ]] \
-    || die "The AidiPanel CLI checksum entry is invalid."
-  (cd "$tmp_dir" && printf '%s\n' "$checksum_line" | sha256sum -c - >/dev/null) \
+  (cd "$tmp_dir" && printf '%s  %s\n' "$cli_checksum" "$cli_checksum_asset" | sha256sum -c - >/dev/null) \
     || die "Downloaded AidiPanel CLI failed checksum verification."
-
-  panel_checksum_line=$(awk '$2 == "aidipanel-panel-app.tar.gz" || $2 == "*aidipanel-panel-app.tar.gz" { print; found=1 } END { if (!found) exit 1 }' "$manifest") \
-    || die "The release checksum manifest has no panel application entry."
-  [[ "$panel_checksum_line" =~ ^[0-9a-fA-F]{64}[[:space:]]+\*?aidipanel-panel-app\.tar\.gz$ ]] \
-    || die "The panel application checksum entry is invalid."
-  (cd "$tmp_dir" && printf '%s\n' "$panel_checksum_line" | sha256sum -c - >/dev/null) \
+  (cd "$tmp_dir" && printf '%s  %s\n' "$panel_checksum" "$panel_checksum_asset" | sha256sum -c - >/dev/null) \
     || die "Downloaded panel application failed checksum verification."
 
   bash -n "$tmp_file" || die "Downloaded script has syntax errors — aborting update."
@@ -10101,7 +10178,7 @@ _self_update() {
   mv -f -- "$staged" "$current_bin" \
     || { rm -f -- "$staged"; die "Could not activate the verified CLI update."; }
 
-  ok "AidiPanel updated: panel and CLI (${current_bin})"
+  ok "AidiPanel updated to v${release_version}: panel and CLI (${current_bin})"
   # Self-heal Redis ACL isolation in case a stack/dist upgrade dropped our
   # redis.conf directives (backlog #6). No-op when ACL mode is not enabled.
   "$current_bin" cache:redis-acl --action reconcile >/dev/null 2>&1 || true

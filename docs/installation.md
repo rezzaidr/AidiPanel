@@ -44,14 +44,30 @@ curl -fsSL https://get.aidipanel.com | sudo bash -s -- --db-engine mysql84 --por
 
 ## Verify Before Running (recommended)
 
+`curl | sudo bash` relies on HTTPS to bootstrap the installer. The installer
+then verifies the signed CLI and panel artifacts, but the following path also
+authenticates the installer before it is executed as root:
+
 ```bash
 curl -fLO https://github.com/rezzaidr/AidiPanel/releases/latest/download/install-aidipanel.sh
 curl -fLO https://github.com/rezzaidr/AidiPanel/releases/latest/download/SHA256SUMS
+curl -fLO https://github.com/rezzaidr/AidiPanel/releases/latest/download/SHA256SUMS.sig
+curl -fLO https://github.com/rezzaidr/AidiPanel/releases/latest/download/release-signing-public.pub
+
+openssl pkey -pubin -in release-signing-public.pub -outform DER \
+  | sha256sum
+openssl dgst -sha256 -verify release-signing-public.pub \
+  -signature SHA256SUMS.sig SHA256SUMS
 grep ' install-aidipanel.sh$' SHA256SUMS | sha256sum -c -
 sudo bash install-aidipanel.sh
 ```
 
-Continue only when the checksum command prints `install-aidipanel.sh: OK`.
+The expected DER SHA-256 public-key fingerprint is
+`63cd4bf5ed9f184c9042977cec91e25d0928cc361c4e54bfb496d31f74f4d901`. Compare it with the independently
+published value at `https://aidipanel.com/security` or in the AidiPanel DNS
+record—not only with a key delivered by the same GitHub release. Continue only
+when OpenSSL prints `Verified OK` and the checksum command prints
+`install-aidipanel.sh: OK`.
 
 This installs the full stack and deploys the web panel automatically:
 

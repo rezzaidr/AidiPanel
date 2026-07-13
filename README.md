@@ -26,14 +26,30 @@ The installer deploys the full stack and web panel. A random admin password is p
 
 ### Verify before running (recommended)
 
-`get.aidipanel.com` redirects to the latest release installer. To review the script and check its checksum before running it as root:
+`get.aidipanel.com` redirects to the latest release installer. The quick command
+uses HTTPS to bootstrap the installer; once running, the installer verifies the
+signed CLI and panel release before deploying them. For release authentication
+before any script runs as root, download and verify all release metadata:
 
 ```bash
 curl -fLO https://github.com/rezzaidr/AidiPanel/releases/latest/download/install-aidipanel.sh
 curl -fLO https://github.com/rezzaidr/AidiPanel/releases/latest/download/SHA256SUMS
-grep ' install-aidipanel.sh$' SHA256SUMS | sha256sum -c -   # must print: install-aidipanel.sh: OK
+curl -fLO https://github.com/rezzaidr/AidiPanel/releases/latest/download/SHA256SUMS.sig
+curl -fLO https://github.com/rezzaidr/AidiPanel/releases/latest/download/release-signing-public.pub
+
+openssl pkey -pubin -in release-signing-public.pub -outform DER | sha256sum
+openssl dgst -sha256 -verify release-signing-public.pub \
+  -signature SHA256SUMS.sig SHA256SUMS
+grep ' install-aidipanel.sh$' SHA256SUMS | sha256sum -c -
 sudo bash install-aidipanel.sh
 ```
+
+The public-key fingerprint must be
+`63cd4bf5ed9f184c9042977cec91e25d0928cc361c4e54bfb496d31f74f4d901`. Confirm it independently at
+`https://aidipanel.com/security` or through the published AidiPanel DNS record;
+the copy downloaded from the same release is not an independent trust anchor.
+Continue only when OpenSSL prints `Verified OK` and the checksum prints
+`install-aidipanel.sh: OK`.
 
 Use a fresh, dedicated VPS: the installer provisions the system web/database stack and is not intended to adopt an existing production server.
 
