@@ -228,9 +228,9 @@ an existing panel. Use the verified updater instead:
 sudo aidipanel self:update
 ```
 
-The updater downloads matching CLI and panel release assets, verifies them
-against `SHA256SUMS`, and preserves panel users, passwords, sites, databases,
-configuration, and runtime storage.
+The updater first authenticates the signed release manifest, then verifies the
+matching CLI and panel assets against its `SHA256SUMS` entries. It preserves
+panel users, passwords, sites, databases, configuration, and runtime storage.
 
 ---
 

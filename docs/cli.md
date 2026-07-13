@@ -286,9 +286,10 @@ aidipanel log:tail --domain example.com --type access   # access | error | php
 aidipanel self:update
 ```
 
-`self:update` downloads the matching CLI and web-panel release assets, verifies
-both against the release `SHA256SUMS`, and deploys them together. Existing panel
-users, passwords, sites, databases, and runtime storage are preserved.
+`self:update` first authenticates the signed release manifest, then verifies the
+matching CLI and web-panel assets against its `SHA256SUMS` entries and deploys
+them together. Existing panel users, passwords, sites, databases, and runtime
+storage are preserved.
 
 `system:cloud-metadata` reports sanitized cached provider metadata when
 available. `web-delivery:status` returns read-only origin/Nginx delivery

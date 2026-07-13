@@ -38,10 +38,11 @@ version changes, start from a completely clean worktree, then:
 ```powershell
 git tag vX.Y.Z
 git push origin vX.Y.Z
-.	oolseleasesign-release.ps1 vX.Y.Z
+.\tools\release\sign-release.ps1 vX.Y.Z
 ```
 
 The tag workflow builds an unpublished draft without access to the private key.
+The maintainer-controlled private key remains outside the repository and CI.
 After that workflow succeeds, the local signing command verifies the local and
 remote tag commits, validates every draft artifact against the exact tag,
 creates or resumes the detached signature without replacing it, verifies the
