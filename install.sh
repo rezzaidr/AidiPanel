@@ -1543,15 +1543,32 @@ _configure_panel_vhost() {
   [[ "$DRY_RUN" == "true" ]] && return 0
 
   local ssl_dir="/etc/ssl/aidipanel"
-  mkdir -p "$ssl_dir"
-  if [[ ! -f "${ssl_dir}/aidipanel.crt" ]]; then
-    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-      -keyout "${ssl_dir}/aidipanel.key" \
-      -out "${ssl_dir}/aidipanel.crt" \
-      -subj "/C=ID/ST=Jakarta/L=Jakarta/O=AidiPanel/OU=Panel/CN=localhost" \
-      >> "$PANEL_LOG" 2>&1
+  local key_path="${ssl_dir}/aidipanel.key"
+  local cert_path="${ssl_dir}/aidipanel.crt"
+  [[ ! -L "$ssl_dir" ]] || die "Panel TLS directory must not be a symbolic link: ${ssl_dir}"
+  install -d -o root -g root -m 0700 -- "$ssl_dir" \
+    || die "Could not secure the panel TLS directory."
+  [[ ! -L "$key_path" && ! -L "$cert_path" ]] \
+    || die "Panel TLS files must not be symbolic links."
+  if [[ ! -f "$cert_path" ]]; then
+    ( umask 077
+      openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+        -keyout "$key_path" \
+        -out "$cert_path" \
+        -subj "/C=ID/ST=Jakarta/L=Jakarta/O=AidiPanel/OU=Panel/CN=localhost"
+    ) >> "$PANEL_LOG" 2>&1 \
+      || die "Could not generate the self-signed panel TLS certificate."
     ok "Self-signed SSL certificate generated"
   fi
+  [[ -f "$key_path" && ! -L "$key_path" ]] \
+    || die "Panel TLS private key is missing or unsafe: ${key_path}"
+  [[ -f "$cert_path" && ! -L "$cert_path" ]] \
+    || die "Panel TLS certificate is missing or unsafe: ${cert_path}"
+  chown root:root -- "$ssl_dir" "$key_path" "$cert_path" \
+    || die "Could not set panel TLS ownership."
+  chmod 0700 -- "$ssl_dir" || die "Could not secure the panel TLS directory."
+  chmod 0600 -- "$key_path" || die "Could not secure the panel TLS private key."
+  chmod 0644 -- "$cert_path" || die "Could not set the panel TLS certificate mode."
 
   cat > /etc/nginx/sites-available/aidipanel-ui.conf <<PANEL_VHOST
 # AidiPanel Web UI — port ${PANEL_PORT}

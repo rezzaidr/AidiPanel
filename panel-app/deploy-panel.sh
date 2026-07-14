@@ -44,6 +44,31 @@ credential_line() {
   printf '%s=%q\n' "$key" "$value"
 }
 
+harden_panel_tls_permissions() {
+  local ssl_dir="/etc/ssl/aidipanel"
+  local key_path="${ssl_dir}/aidipanel.key"
+  local cert_path="${ssl_dir}/aidipanel.crt"
+
+  [[ ! -e "$ssl_dir" && ! -L "$ssl_dir" ]] && return 0
+  [[ -d "$ssl_dir" && ! -L "$ssl_dir" ]] \
+    || die "Panel TLS directory is not a safe directory: ${ssl_dir}"
+  install -d -o root -g root -m 0700 -- "$ssl_dir" \
+    || die "Could not secure the panel TLS directory."
+
+  if [[ -e "$key_path" || -L "$key_path" ]]; then
+    [[ -f "$key_path" && ! -L "$key_path" ]] \
+      || die "Panel TLS private key is not a safe regular file: ${key_path}"
+    chown root:root -- "$key_path" || die "Could not set panel TLS private-key ownership."
+    chmod 0600 -- "$key_path" || die "Could not secure the panel TLS private key."
+  fi
+  if [[ -e "$cert_path" || -L "$cert_path" ]]; then
+    [[ -f "$cert_path" && ! -L "$cert_path" ]] \
+      || die "Panel TLS certificate is not a safe regular file: ${cert_path}"
+    chown root:root -- "$cert_path" || die "Could not set panel TLS certificate ownership."
+    chmod 0644 -- "$cert_path" || die "Could not set the panel TLS certificate mode."
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in --dir) shift; PANEL_DIR="$1" ;; *) ;; esac
   shift
@@ -59,6 +84,7 @@ done
 mkdir -p "$(dirname "$DEPLOY_LOCK")"
 exec 178>"$DEPLOY_LOCK"
 flock -w 30 178 || die "Another AidiPanel install or update is currently running."
+harden_panel_tls_permissions
 
 DEPLOY_STAGE=""
 DEPLOY_ROLLBACK=""
