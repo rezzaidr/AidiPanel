@@ -2522,10 +2522,16 @@ _backup_create() {
     IFS="$_oldifs"
   fi
 
-  # Per-domain lock: no parallel runs for the same site. flock is auto-released by the
-  # kernel on exit or crash, so a killed run never leaves a stale lock.
-  local lock="/tmp/aidipanel-backup-${domain//[!A-Za-z0-9.-]/_}.lock"
-  exec 9>"$lock"
+  # Per-domain lock: keep the inode in a root-only runtime directory. flock is
+  # auto-released by the kernel on exit or crash; the file must not be unlinked.
+  local lock_dir="/run/lock/aidipanel-backup"
+  [[ ! -L "$lock_dir" ]] || die "Backup lock directory must not be a symbolic link."
+  install -d -o root -g root -m 0700 -- "$lock_dir" \
+    || die "Could not prepare the backup lock directory."
+  local lock="${lock_dir}/${domain//[!A-Za-z0-9.-]/_}.lock"
+  [[ ! -L "$lock" ]] || die "Backup lock must not be a symbolic link."
+  exec 9>"$lock" || die "Could not open the backup lock."
+  chmod 0600 -- "$lock" || die "Could not secure the backup lock."
   flock -n 9 || die "Backup is already running for this site."
 
   _files_resolve "$domain"
