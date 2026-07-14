@@ -9010,6 +9010,11 @@ _ssl_import() {
   ok "Certificate imported for: ${domain}"
 }
 
+_ssl_domain_within_site() {
+  local candidate="$1" primary="$2"
+  [[ "$candidate" == "$primary" || "$candidate" == *".${primary}" ]]
+}
+
 _ssl_install() {
   _require_root "ssl:install"
   _parse_opts "$@"
@@ -9039,6 +9044,16 @@ _ssl_install() {
   # own domain leads.
   local primary="${domains[0]}"
   _domain_exists "$primary" || die "Site not found: ${primary}"
+
+  # An SSL request scoped to one managed site may contain only that site and
+  # its unclaimed subdomains. A separate vhost is a separate tenant boundary.
+  for d in "${domains[@]}"; do
+    [[ "$d" == "$primary" ]] && continue
+    _ssl_domain_within_site "$d" "$primary" \
+      || die "Certificate domain ${d} must be ${primary} or one of its subdomains."
+    ! _domain_exists "$d" \
+      || die "Certificate domain ${d} is managed as a separate AidiPanel site."
+  done
 
   command -v certbot &>/dev/null || die "Certbot (the Let's Encrypt client) is not installed on this server, so SSL cannot be issued."
 

@@ -914,7 +914,7 @@ return [
     'site.ssl.import_btn'        => 'Import',
     'site.ssl.f.issuer'          => 'Issuer',
     'site.ssl.add_domain'        => 'Add domain',
-    'site.ssl.domains_hint'      => 'The certificate will be valid for these names. Add www only if it already points to this server.',
+    'site.ssl.domains_hint'      => 'The primary domain and its subdomains may share this certificate. Add a name only if its DNS already points to this server.',
     'site.ssl.processing'        => 'Processing…',
     'site.ssl.not_secure_because'=> 'Not secure: {reason}',
     'site.ssl.reason_selfsigned' => 'self-signed (not issued by a trusted authority)',

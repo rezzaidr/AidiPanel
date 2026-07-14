@@ -35,6 +35,7 @@ class SiteSslController extends BaseController
         }
         $domains = array_values(array_filter($domains, fn($d) => $d !== $domain));
         array_unshift($domains, $domain);
+        $this->assertCertificateDomainsBelongToSite($domain, $domains);
 
         $args = ['--domains', implode(',', $domains)];
         if ($email !== '') { $args[] = '--email'; $args[] = $email; }
@@ -231,6 +232,33 @@ class SiteSslController extends BaseController
             $this->json(['ok' => false, 'error' => 'cli_failed']);
         }
         $this->json(['ok' => true] + $data);
+    }
+
+    /** @param list<string> $domains */
+    private function assertCertificateDomainsBelongToSite(string $primary, array $domains): void
+    {
+        foreach ($domains as $candidate) {
+            if ($candidate === $primary) {
+                continue;
+            }
+            if (!self::certificateDomainWithinSite($candidate, $primary)) {
+                $this->error(
+                    "Certificate domain {$candidate} must be {$primary} or one of its subdomains.",
+                    $this->tab($primary)
+                );
+            }
+            if ($this->db->row('SELECT id FROM sites WHERE domain = ?', [$candidate])) {
+                $this->error(
+                    "Certificate domain {$candidate} is managed as a separate AidiPanel site.",
+                    $this->tab($primary)
+                );
+            }
+        }
+    }
+
+    private static function certificateDomainWithinSite(string $candidate, string $primary): bool
+    {
+        return $candidate === $primary || str_ends_with($candidate, '.' . $primary);
     }
 
     /** Validate the on/off action shared by the HTTPS-option toggles. */
