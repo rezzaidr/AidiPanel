@@ -1383,7 +1383,8 @@ _configure_firewall() {
   ufw allow 80/tcp comment 'HTTP' >> "$PANEL_LOG" 2>&1
   ufw allow 443/tcp comment 'HTTPS' >> "$PANEL_LOG" 2>&1
   ufw allow "${PANEL_PORT}/tcp" comment 'AidiPanel' >> "$PANEL_LOG" 2>&1
-  ufw --force enable >> "$PANEL_LOG" 2>&1
+  ufw --force enable >> "$PANEL_LOG" 2>&1 \
+    || die "UFW could not be enabled. Check ${PANEL_LOG} before retrying the installer."
   ok "UFW enabled — existing rules preserved; HTTP, HTTPS, detected SSH, and panel ports allowed"
 }
 
