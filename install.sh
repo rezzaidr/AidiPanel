@@ -1713,6 +1713,49 @@ _install_cli() {
   ok "AidiPanel CLI installed: /usr/local/bin/aidipanel"
 }
 
+_enable_redis_acl_or_die() {
+  [[ "$INSTALL_REDIS" == "false" ]] && return 0
+  if [[ "$DRY_RUN" == "true" ]]; then
+    warn "[dry-run] skipping Redis ACL isolation"
+    return 0
+  fi
+
+  local attempt
+  for attempt in 1 2 3; do
+    if /usr/local/bin/aidipanel cache:redis-acl --action enable >> "$PANEL_LOG" 2>&1; then
+      ui_ok "Redis ACL isolation enabled (default user locked)"
+      return 0
+    fi
+    warn "Redis ACL isolation attempt ${attempt}/3 failed."
+    if [[ "$attempt" -lt 3 ]]; then
+      ui_warn "Redis ACL isolation attempt ${attempt}/3 failed — retrying"
+      sleep 2
+    fi
+  done
+
+  warn "Redis ACL isolation failed; stopping and disabling Redis."
+  systemctl disable --now redis-server >> "$PANEL_LOG" 2>&1 || true
+  if systemctl is-active --quiet redis-server; then
+    systemctl stop redis-server >> "$PANEL_LOG" 2>&1 || true
+  fi
+  if systemctl is-enabled --quiet redis-server; then
+    systemctl disable redis-server >> "$PANEL_LOG" 2>&1 || true
+  fi
+
+  local redis_active=false redis_enabled=false cli_removed=true
+  systemctl is-active --quiet redis-server && redis_active=true
+  systemctl is-enabled --quiet redis-server && redis_enabled=true
+  rm -f -- /usr/local/bin/aidipanel >> "$PANEL_LOG" 2>&1 || cli_removed=false
+
+  if [[ "$redis_active" == "true" || "$redis_enabled" == "true" ]]; then
+    die "Redis ACL isolation failed and Redis could not be stopped and disabled. Run 'systemctl disable --now redis-server' manually, check ${PANEL_LOG}, then rerun the installer."
+  fi
+  if [[ "$cli_removed" != "true" ]]; then
+    die "Redis ACL isolation failed. Redis was stopped and disabled, but incomplete CLI cleanup failed. Remove /usr/local/bin/aidipanel manually, check ${PANEL_LOG}, then rerun the installer."
+  fi
+  die "Redis ACL isolation failed after 3 attempts. Redis was stopped and disabled. Check ${PANEL_LOG}, then rerun the installer."
+}
+
 # ---------------------------------------------------------------------------
 # FIX #5: DEPLOY PANEL APP AUTOMATICALLY (one-command install)
 # ---------------------------------------------------------------------------
@@ -2368,16 +2411,7 @@ main() {
   _setup_panel_fpm;       ui_ok "Panel PHP-FPM service: aidipanel-fpm (aidipanel)"
   _configure_panel_vhost; ui_ok "Self-signed panel SSL generated"
   _install_cli;           ui_ok "CLI installed: /usr/local/bin/aidipanel"
-  # Born locked (backlog #6): now that the CLI exists and Redis is up with an
-  # aclfile, provision the admin identity and lock the `default` user. No sites
-  # exist yet, so this just closes the multi-tenant hole from the first boot.
-  if [[ "$INSTALL_REDIS" != "false" ]]; then
-    if /usr/local/bin/aidipanel cache:redis-acl --action enable >/dev/null 2>&1; then
-      ui_ok "Redis ACL isolation enabled (default user locked)"
-    else
-      ui_warn "Redis ACL isolation not enabled — run: aidipanel cache:redis-acl --action enable"
-    fi
-  fi
+  _enable_redis_acl_or_die
   _deploy_panel_app;      ui_ok "Web UI deployed"
   _install_motd;          ui_ok "SSH login banner installed"
   _setup_cron;            ui_ok "Maintenance cron configured"
