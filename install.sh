@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  AidiPanel Installer v1.3.2
+#  AidiPanel Installer v1.3.3
 #  Stack: Nginx + FastCGI Cache + PHP-FPM (multi-version) + MySQL/MariaDB + Redis
 #  Supported OS: Debian 11/12, Ubuntu 22.04/24.04/26.04 (x86_64 & arm64)
 #
@@ -26,7 +26,7 @@ IFS=$'\n\t'
 # 0. GLOBAL CONSTANTS & DEFAULTS
 # ---------------------------------------------------------------------------
 readonly PANEL_NAME="AidiPanel"
-readonly PANEL_VERSION="1.3.2"
+readonly PANEL_VERSION="1.3.3"
 readonly AIDIPANEL_RELEASE_PUBLIC_KEY_B64="LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUZrd0V3WUhLb1pJemowQ0FRWUlLb1pJemowREFRY0RRZ0FFbmVQeXBrYjhVSkZOOFppeDV1enhETVhITFJrTQpBZkFHK3pLQjlLUjQ0N25OMVkvMkRLT0drU0pBZ21DQkJUek9sdkdhTi9Sd28xQnpxTGY3Z0w2VU53PT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg=="
 readonly PANEL_USER="aidipanel"
 readonly PANEL_DIR="/opt/aidipanel"
