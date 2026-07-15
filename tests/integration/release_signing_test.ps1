@@ -283,6 +283,19 @@ switch ($action) {
 
 $module = Join-Path $PSScriptRoot '..\..\tools\release\ReleaseSigning.psm1'
 Import-Module $module -Force
+$releaseSigningModule = Get-Module ReleaseSigning
+$regularGit = & $releaseSigningModule { ConvertTo-ComparableTarMode '-rw-rw-r--' }
+$regularCheckout = & $releaseSigningModule { ConvertTo-ComparableTarMode '-rw-r--r--' }
+$executableGit = & $releaseSigningModule { ConvertTo-ComparableTarMode '-rwxrwxr-x' }
+$executableCheckout = & $releaseSigningModule { ConvertTo-ComparableTarMode '-rwxr-xr-x' }
+$groupExecutableDrift = & $releaseSigningModule { ConvertTo-ComparableTarMode '-rw-r-xr--' }
+$worldWriteDrift = & $releaseSigningModule { ConvertTo-ComparableTarMode '-rw-rw-rw-' }
+
+Assert-True ($regularGit -eq $regularCheckout) 'regular Git/archive umask difference is normalized'
+Assert-True ($executableGit -eq $executableCheckout) 'executable Git/archive umask difference is normalized'
+Assert-True ($regularCheckout -ne $executableCheckout) 'owner executable drift remains distinguishable'
+Assert-True ($regularCheckout -ne $groupExecutableDrift) 'group executable drift remains distinguishable'
+Assert-True ($regularCheckout -ne $worldWriteDrift) 'world-write drift remains distinguishable'
 
 $openssl = Find-OpenSsl
 $git = (Get-Command git -ErrorAction Stop).Source
@@ -344,6 +357,22 @@ try {
     Test-ManifestAssets -Manifest $manifestInfo -AssetDirectory $assets
     Test-DetachedSignature -OpenSsl $openssl -Manifest $manifest -Signature $signature -PublicKey $publicKey
     Compare-ReleaseArtifactsToTag -RepositoryRoot $repo -Tag 'v1.3.3' -AssetDirectory $assets
+
+    Invoke-Checked $git @('-C', $repo, 'update-index', '--chmod=+x', 'panel-app/public/index.php')
+    Invoke-Checked $git @('-C', $repo, 'commit', '-q', '-m', 'mode drift fixture')
+    $panelArchive = Join-Path $assets 'aidipanel-panel-app.tar.gz'
+    Invoke-Checked $git @(
+        '-C', $repo, 'archive', '--format=tar.gz',
+        "--output=$panelArchive", 'HEAD', '--', 'panel-app'
+    )
+    Assert-Throws {
+        Compare-ReleaseArtifactsToTag -RepositoryRoot $repo -Tag 'v1.3.3' -AssetDirectory $assets
+    } 'panel archive executable mode differs from exact tag'
+
+    Invoke-Checked $git @(
+        '-C', $repo, 'archive', '--format=tar.gz',
+        "--output=$panelArchive", 'v1.3.3', '--', 'panel-app'
+    )
 
     $originalManifest = [IO.File]::ReadAllBytes($manifest)
     [IO.File]::AppendAllText($manifest, "`n")

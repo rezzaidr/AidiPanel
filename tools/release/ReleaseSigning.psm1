@@ -183,6 +183,16 @@ function Assert-SafePanelArchive {
     }
 }
 
+function ConvertTo-ComparableTarMode {
+    param([Parameter(Mandatory)][string]$Mode)
+
+    if ($Mode.Length -ne 10) { throw "Invalid tar mode: $Mode" }
+    if ($Mode[0] -eq '-') {
+        return $Mode.Substring(0, 5) + '-' + $Mode.Substring(6)
+    }
+    return $Mode
+}
+
 function Get-TarModeMap {
     param(
         [Parameter(Mandatory)][string]$Tar,
@@ -197,6 +207,7 @@ function Get-TarModeMap {
         $mode = $line.Substring(0, 10)
         if ($mode[0] -eq 'l' -or $mode[0] -eq 'h') { throw "Archive links are not allowed: $line" }
         if ($mode[0] -eq 'd') { continue }
+        $mode = ConvertTo-ComparableTarMode -Mode $mode
         $parts = @($line -split '\s+')
         $path = $parts[-1].TrimEnd('/').Replace('\', '/')
         if ($Prefix -and -not $path.StartsWith($Prefix)) { continue }
