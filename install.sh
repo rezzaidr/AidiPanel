@@ -1802,7 +1802,7 @@ _install_cli() {
   [[ "$DRY_RUN" == "true" ]] && { warn "[dry-run] skipping CLI install"; return 0; }
 
   # The CLI is bundled inside this installer's directory or fetched from GitHub
-  local cli_src
+  local cli_src downloaded_cli=""
   # Check if aidipanel CLI exists beside this script
   local script_dir; script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   if [[ -f "${script_dir}/aidipanel" ]]; then
@@ -1810,12 +1810,22 @@ _install_cli() {
   else
     # Download the stable release asset with its published checksum.
     log "Downloading verified AidiPanel CLI release..."
-    cli_src="/tmp/aidipanel-cli-$$"
-    _download_release_asset "aidipanel" "$cli_src" >> "$PANEL_LOG" 2>&1 \
-      || { warn "Could not download verified CLI — install manually"; return 0; }
+    downloaded_cli=$(mktemp /tmp/aidipanel-cli.XXXXXX) \
+      || { warn "Could not create a secure temporary CLI file — install manually"; return 0; }
+    cli_src="$downloaded_cli"
+    if ! _download_release_asset "aidipanel" "$cli_src" >> "$PANEL_LOG" 2>&1; then
+      rm -f -- "$downloaded_cli" || true
+      warn "Could not download verified CLI — install manually"
+      return 0
+    fi
   fi
 
-  install -o root -g root -m 0755 "$cli_src" /usr/local/bin/aidipanel
+  if ! install -o root -g root -m 0755 "$cli_src" /usr/local/bin/aidipanel; then
+    [[ -z "$downloaded_cli" ]] || rm -f -- "$downloaded_cli" || true
+    die "Could not install the AidiPanel CLI."
+  fi
+  [[ -z "$downloaded_cli" ]] || rm -f -- "$downloaded_cli" \
+    || warn "Could not remove the temporary AidiPanel CLI file: ${downloaded_cli}"
   ok "AidiPanel CLI installed: /usr/local/bin/aidipanel"
 }
 
