@@ -77,6 +77,7 @@ return [
     'settings.2fa.err.bad_code'     => 'That code did not match. Check your authenticator app and try again.',
     'settings.2fa.err.password'     => 'Incorrect password.',
     'settings.2fa.err.not_enabled'  => 'Two-factor authentication is not enabled.',
+    'settings.2fa.err.unavailable'  => 'Two-factor authentication is temporarily unavailable. Contact the server administrator.',
 
     'settings.flash.profile_saved'    => 'Profile updated.',
     'settings.flash.password_changed' => 'Password updated.',

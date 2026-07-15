@@ -19,10 +19,27 @@ running anything.
 # Panel database (SQLite)
 sudo cp /opt/aidipanel/storage/db/aidipanel.sqlite ~/aidipanel.sqlite.bak
 
+# Matching TOTP encryption key (keep this backup secret)
+sudo cp /etc/aidipanel/totp.key ~/aidipanel-totp.key.bak
+
 # Site files and databases (per site)
 sudo tar czf ~/sites-backup.tar.gz /home/*/htdocs
 sudo aidipanel db:backup --name <dbname>   # repeat per database
 ```
+
+The SQLite database and TOTP key are one backup set. When restoring the
+database, restore the same key before starting the panel:
+
+```bash
+sudo install -d -o root -g root -m 0755 /etc/aidipanel
+sudo install -o root -g aidipanel -m 0640 \
+  ~/aidipanel-totp.key.bak /etc/aidipanel/totp.key
+```
+
+Without that key, existing encrypted authenticator seeds cannot be recovered.
+Users can still use an unused recovery code; otherwise reset each affected
+account as root with `aidipanel user:2fa-reset --user <name>` and enroll 2FA
+again.
 
 ## Remove the panel only (keep the stack and sites)
 

@@ -69,6 +69,103 @@ harden_panel_tls_permissions() {
   fi
 }
 
+_provision_totp_key() {
+  local key_dir="/etc/aidipanel"
+  local key_path="${key_dir}/totp.key"
+  local db_path="${PANEL_DIR}/storage/db/aidipanel.sqlite"
+  local key_dir_mode="" users_table="0" totp_column="0" encrypted_rows="0" staged=""
+
+  if [[ ! -e "$key_dir" && ! -L "$key_dir" ]]; then
+    install -d -o root -g root -m 0755 -- "$key_dir" \
+      || die "Could not create the AidiPanel configuration directory."
+  fi
+  [[ -d "$key_dir" && ! -L "$key_dir" ]] \
+    || die "AidiPanel configuration path is not a safe directory: ${key_dir}"
+  [[ "$(stat -c %u -- "$key_dir")" == "0" ]] \
+    || die "AidiPanel configuration directory must be owned by root: ${key_dir}"
+  key_dir_mode=$(stat -c %a -- "$key_dir") \
+    || die "Could not inspect AidiPanel configuration-directory permissions."
+  (( (8#${key_dir_mode} & 0022) == 0 )) \
+    || die "AidiPanel configuration directory must not be group/world-writable: ${key_dir}"
+
+  sudo -u "${PANEL_USER}" "$PHP_BIN" -r "exit(extension_loaded('sodium') ? 0 : 1);" \
+    || die "PHP Sodium is required to protect panel two-factor secrets."
+
+  if [[ -e "$key_path" || -L "$key_path" ]]; then
+    [[ -f "$key_path" && ! -L "$key_path" ]] \
+      || die "TOTP encryption key is not a safe regular file: ${key_path}"
+    [[ "$(stat -c %s -- "$key_path")" == "32" ]] \
+      || die "TOTP encryption key must contain exactly 32 bytes: ${key_path}"
+    chown root:"${PANEL_USER}" -- "$key_path" \
+      || die "Could not set TOTP encryption-key ownership."
+    chmod 0640 -- "$key_path" \
+      || die "Could not secure the TOTP encryption key."
+    sudo -u "${PANEL_USER}" test -r "$key_path" \
+      || die "The panel runtime cannot read the TOTP encryption key."
+    return 0
+  fi
+
+  if [[ -e "$db_path" || -L "$db_path" ]]; then
+    [[ -f "$db_path" && ! -L "$db_path" ]] \
+      || die "Panel database is not a safe regular file: ${db_path}"
+    users_table=$(sudo -u "${PANEL_USER}" sqlite3 "$db_path" \
+      "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='users';" 2>> /var/log/aidipanel-install.log) \
+      || die "Could not inspect the panel database before TOTP key provisioning."
+    [[ "$users_table" =~ ^[01]$ ]] \
+      || die "Panel database returned invalid users-table state."
+    if [[ "$users_table" == "1" ]]; then
+      totp_column=$(sudo -u "${PANEL_USER}" sqlite3 "$db_path" \
+        "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name='totp_secret';" 2>> /var/log/aidipanel-install.log) \
+        || die "Could not inspect the panel 2FA schema before TOTP key provisioning."
+      [[ "$totp_column" =~ ^[01]$ ]] \
+        || die "Panel database returned invalid TOTP-column state."
+      if [[ "$totp_column" == "1" ]]; then
+        encrypted_rows=$(sudo -u "${PANEL_USER}" sqlite3 "$db_path" \
+          "SELECT COUNT(*) FROM users WHERE totp_secret LIKE 'v1:%';" 2>> /var/log/aidipanel-install.log) \
+          || die "Could not inspect encrypted TOTP state in the panel database."
+      fi
+    fi
+    [[ "$encrypted_rows" =~ ^[0-9]+$ ]] \
+      || die "Panel database returned invalid encrypted TOTP state."
+    if (( encrypted_rows > 0 )); then
+      die "The TOTP encryption key is missing while encrypted accounts exist. Restore the original key to ${key_path}, or reset affected accounts with 'aidipanel user:2fa-reset'."
+    fi
+  fi
+
+  staged=$(mktemp "${key_dir}/.totp.key.XXXXXX") \
+    || die "Could not stage the TOTP encryption key."
+  chmod 0600 -- "$staged" || { rm -f -- "$staged"; die "Could not secure the staged TOTP encryption key."; }
+  if ! openssl rand 32 > "$staged"; then
+    rm -f -- "$staged"
+    die "Could not generate the TOTP encryption key."
+  fi
+  if [[ "$(stat -c %s -- "$staged")" != "32" ]]; then
+    rm -f -- "$staged"
+    die "Generated TOTP encryption key did not contain exactly 32 bytes."
+  fi
+  chown root:"${PANEL_USER}" -- "$staged" \
+    || { rm -f -- "$staged"; die "Could not set staged TOTP key ownership."; }
+  chmod 0640 -- "$staged" \
+    || { rm -f -- "$staged"; die "Could not set staged TOTP key permissions."; }
+  if ! ln -- "$staged" "$key_path"; then
+    rm -f -- "$staged"
+    die "TOTP encryption-key path appeared during creation; rerun after inspecting ${key_path}."
+  fi
+  rm -f -- "$staged"
+
+  [[ -f "$key_path" && ! -L "$key_path" ]] \
+    || die "TOTP encryption key was not published safely."
+  [[ "$(stat -c %s -- "$key_path")" == "32" ]] \
+    || die "TOTP encryption key must contain exactly 32 bytes: ${key_path}"
+  chown root:"${PANEL_USER}" -- "$key_path" \
+    || die "Could not set TOTP encryption-key ownership."
+  chmod 0640 -- "$key_path" \
+    || die "Could not secure the TOTP encryption key."
+  sudo -u "${PANEL_USER}" test -r "$key_path" \
+    || die "The panel runtime cannot read the TOTP encryption key."
+  ok "Panel TOTP encryption key ready"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in --dir) shift; PANEL_DIR="$1" ;; *) ;; esac
   shift
@@ -147,6 +244,7 @@ else
     useradd --system --gid "$PANEL_USER" --no-create-home --shell /usr/sbin/nologin "$PANEL_USER"
 fi
 getent group adm >/dev/null 2>&1 && usermod --append --groups adm "$PANEL_USER"
+_provision_totp_key
 
 PANEL_FPM_CONF="/etc/aidipanel/php-fpm/php-fpm.conf"
 [[ -f "$PANEL_FPM_CONF" ]] || die "Panel FPM config not found: ${PANEL_FPM_CONF}"
@@ -512,6 +610,21 @@ systemctl restart aidipanel-fpm
 systemctl reload nginx
 PANEL_FPM_WAS_ACTIVE=0
 ok "Nginx reloaded"
+
+# The new application and CLI are now the committed version. Do not restore an
+# older application after encrypted TOTP data may have been written.
+DEPLOY_ACTIVATED=0
+CLI_ACTIVATED=0
+
+# The deployer is root; only the PHP migration process drops privilege, while
+# the outer root shell intentionally appends its diagnostics to the root log.
+# shellcheck disable=SC2024
+if sudo -u "${PANEL_USER}" "$PHP_BIN" \
+    "${PANEL_DIR}/bin/migrate-totp-secrets.php" >> /var/log/aidipanel-install.log 2>&1; then
+  ok "TOTP secrets encrypted"
+else
+  die "The new panel version is active, but TOTP secret migration failed. Existing accounts remain compatible; check /var/log/aidipanel-install.log and rerun the update."
+fi
 
 # --------------------------------------------------------------------------
 # 8. Summary

@@ -66,9 +66,18 @@ If any check fails, the operation is refused and nothing is removed. This preven
 - Admin, manager, and client roles are enforced server-side, with per-site
   assignment for client accounts.
 - Optional TOTP two-factor authentication includes one-time recovery codes.
+  Confirmed TOTP seeds are stored with authenticated PHP Sodium encryption;
+  the server key is kept outside SQLite at `/etc/aidipanel/totp.key` with
+  `root:aidipanel` ownership and mode `0640`. This protects a database copy by
+  itself, but not a root or panel-runtime compromise.
 - Credentials are generated randomly at install and stored in `/opt/aidipanel/credentials.conf` (mode 600).
 - `self:update` verifies the signed manifest and matching CLI/panel checksums
   before activation, and preserves existing users and runtime data.
+
+Back up `/etc/aidipanel/totp.key` together with the panel SQLite database. A
+restored database containing encrypted TOTP seeds needs the same key; if it is
+lost, users must sign in with a recovery code or root must reset the account
+with `aidipanel user:2fa-reset --user <name>` before 2FA can be enrolled again.
 
 ## Reporting
 

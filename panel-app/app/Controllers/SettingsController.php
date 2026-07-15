@@ -127,7 +127,12 @@ class SettingsController extends BaseController
         if (\Core\Totp::verify($secret, $code) === false) {
             $this->error(t('settings.2fa.err.bad_code'), '/settings');
         }
-        \Core\TwoFactor::enable($uid, $secret);
+        try {
+            \Core\TwoFactor::enable($uid, $secret);
+        } catch (\RuntimeException) {
+            error_log("AidiPanel could not encrypt a new TOTP secret for user ID {$uid}.");
+            $this->error(t('settings.2fa.err.unavailable'), '/settings');
+        }
         \Core\Session::remove('twofa_pending_secret');
         \Core\Session::set('twofa_show_codes', \Core\TwoFactor::generateRecoveryCodes($uid));
         \Core\DB::log('2fa:enabled', 'Enabled two-factor authentication');

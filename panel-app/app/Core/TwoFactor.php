@@ -18,11 +18,19 @@ final class TwoFactor
     }
 
     /** Persist a confirmed secret and turn 2FA on (clears any stale replay marker). */
-    public static function enable(int $userId, string $secret): void
+    public static function enable(
+        int $userId,
+        string $secret,
+        ?TotpSecretCipher $cipher = null
+    ): void
     {
+        if (!self::isLegacySecret($secret)) {
+            throw new \RuntimeException('TOTP secret is not canonical base32.');
+        }
+        $encrypted = ($cipher ?? TotpSecretCipher::system())->encrypt($secret);
         DB::instance()->run(
             'UPDATE users SET totp_secret = ?, totp_enabled = 1, totp_confirmed_at = ?, totp_last_step = NULL WHERE id = ?',
-            [$secret, gmdate('Y-m-d H:i:s'), $userId]
+            [$encrypted, gmdate('Y-m-d H:i:s'), $userId]
         );
     }
 
@@ -42,23 +50,92 @@ final class TwoFactor
      * window via totp_last_step (a code from a step <= the last accepted step is
      * rejected). Returns true on success.
      */
-    public static function verifyTotp(int $userId, string $code): bool
+    public static function verifyTotp(
+        int $userId,
+        string $code,
+        ?TotpSecretCipher $cipher = null
+    ): bool
     {
         $db = DB::instance();
-        return $db->immediateTransaction(static function (DB $db) use ($userId, $code): bool {
+        $cipher ??= TotpSecretCipher::system();
+        return $db->immediateTransaction(static function (DB $db) use ($userId, $code, $cipher): bool {
             $row = $db->row('SELECT totp_secret, totp_last_step FROM users WHERE id = ?', [$userId]);
             if ($row === null || empty($row['totp_secret'])) {
                 return false;
             }
-            $step = Totp::verify((string) $row['totp_secret'], $code);
+
+            $stored = (string) $row['totp_secret'];
+            $legacy = !$cipher->isEncrypted($stored);
+            if ($legacy && !self::isLegacySecret($stored)) {
+                error_log("AidiPanel could not read the encrypted TOTP secret for user ID {$userId}.");
+                return false;
+            }
+            try {
+                $secret = $legacy ? $stored : $cipher->decrypt($stored);
+            } catch (\RuntimeException) {
+                error_log("AidiPanel could not read the encrypted TOTP secret for user ID {$userId}.");
+                return false;
+            }
+            if (!self::isLegacySecret($secret)) {
+                error_log("AidiPanel could not read the encrypted TOTP secret for user ID {$userId}.");
+                return false;
+            }
+
+            $step = Totp::verify($secret, $code);
             if ($step === false) {
                 return false;
             }
             if ($row['totp_last_step'] !== null && $step <= (int) $row['totp_last_step']) {
                 return false;
             }
-            $db->run('UPDATE users SET totp_last_step = ? WHERE id = ?', [$step, $userId]);
+
+            if ($legacy) {
+                try {
+                    $encrypted = $cipher->encrypt($secret);
+                } catch (\RuntimeException) {
+                    error_log("AidiPanel could not read the encrypted TOTP secret for user ID {$userId}.");
+                    return false;
+                }
+                $db->run(
+                    'UPDATE users SET totp_secret = ?, totp_last_step = ? WHERE id = ?',
+                    [$encrypted, $step, $userId]
+                );
+            } else {
+                $db->run('UPDATE users SET totp_last_step = ? WHERE id = ?', [$step, $userId]);
+            }
             return true;
+        });
+    }
+
+    /** Encrypt every legacy seed atomically and validate existing ciphertext. */
+    public static function migrateLegacySecrets(?TotpSecretCipher $cipher = null): int
+    {
+        $db = DB::instance();
+        $cipher ??= TotpSecretCipher::system();
+        return $db->immediateTransaction(static function (DB $db) use ($cipher): int {
+            $rows = $db->rows(
+                "SELECT id, totp_secret FROM users WHERE totp_secret IS NOT NULL AND totp_secret <> ''"
+            );
+            $migrated = 0;
+            foreach ($rows as $row) {
+                $stored = (string) $row['totp_secret'];
+                if ($cipher->isEncrypted($stored)) {
+                    $secret = $cipher->decrypt($stored);
+                    if (!self::isLegacySecret($secret)) {
+                        throw new \RuntimeException('Encrypted TOTP secret is not canonical base32.');
+                    }
+                    continue;
+                }
+                if (!self::isLegacySecret($stored)) {
+                    throw new \RuntimeException('Legacy TOTP secret is not canonical base32.');
+                }
+                $db->run(
+                    'UPDATE users SET totp_secret = ? WHERE id = ?',
+                    [$cipher->encrypt($stored), (int) $row['id']]
+                );
+                $migrated++;
+            }
+            return $migrated;
         });
     }
 
@@ -148,6 +225,11 @@ final class TwoFactor
     private static function normalize(string $code): string
     {
         return strtolower((string) preg_replace('/[^a-z0-9]/i', '', $code));
+    }
+
+    private static function isLegacySecret(string $secret): bool
+    {
+        return preg_match('/^[A-Z2-7]{32}$/D', $secret) === 1;
     }
 
     /** Hash a recovery code for storage with bcrypt cost 12 (same as user

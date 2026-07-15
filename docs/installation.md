@@ -199,6 +199,7 @@ site's SSL tab when appropriate.
 | `/opt/aidipanel/storage/db/aidipanel.sqlite` | Panel database |
 | `/opt/aidipanel/credentials.conf` | Generated credentials |
 | `/etc/aidipanel/php.conf` | PHP version policy (default + available) |
+| `/etc/aidipanel/totp.key` | Stable server key for encrypted TOTP seeds (`root:aidipanel`, mode `0640`) |
 | `/home/<site-user>/htdocs/<domain>` | Site web root |
 | `/etc/nginx/sites-available/` | Nginx vhost configs |
 | `/var/cache/nginx/fastcgi/` | FastCGI cache files |
@@ -230,7 +231,8 @@ sudo aidipanel self:update
 
 The updater first authenticates the signed release manifest, then verifies the
 matching CLI and panel assets against its `SHA256SUMS` entries. It preserves
-panel users, passwords, sites, databases, configuration, and runtime storage.
+panel users, passwords, sites, databases, configuration, runtime storage, and
+the existing TOTP encryption key. Updates never rotate that key.
 
 ---
 
