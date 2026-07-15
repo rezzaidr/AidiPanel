@@ -239,40 +239,178 @@ _validate_site_user() {
   return 0
 }
 
-# Create a no-login site-user if absent. Idempotent. Sets global DID_CREATE_USER.
-# flock + retry dodges the /etc/passwd|/etc/group lock race that broke the earlier attempt.
+# Create one new no-login site user and its fresh home. Sets DID_CREATE_USER=1
+# only after all account/home postconditions pass.
 _ensure_site_user() {
-  local user="$1"
-  DID_CREATE_USER=0
-  id "$user" &>/dev/null && return 0
+  local user="$1" home="${HOME_BASE}/${1}"
   local lock="/run/lock/aidipanel-useradd.lock" tries=0
+  local base_uid="" base_mode="" user_uid="" user_gid="" home_uid="" home_gid=""
+  local lock_fd
+  DID_CREATE_USER=0
+
+  if [[ ! -d "$HOME_BASE" || -L "$HOME_BASE" ]]; then
+    warn "AidiPanel home base is not a safe directory: ${HOME_BASE}"
+    return 1
+  fi
+  base_uid=$(stat -c %u -- "$HOME_BASE") \
+    || { warn "Could not inspect AidiPanel home-base ownership."; return 1; }
+  [[ "$base_uid" == "0" ]] \
+    || { warn "AidiPanel home base must be owned by root: ${HOME_BASE}"; return 1; }
+  base_mode=$(stat -c %a -- "$HOME_BASE") \
+    || { warn "Could not inspect AidiPanel home-base permissions."; return 1; }
+  if [[ ! "$base_mode" =~ ^[0-7]{3,4}$ ]] || (( (8#${base_mode} & 0022) != 0 )); then
+    warn "AidiPanel home base must not be group/world-writable: ${HOME_BASE}"
+    return 1
+  fi
+
+  exec {lock_fd}>"$lock" \
+    || { warn "Could not open the site-user creation lock."; return 1; }
+  if ! flock -w 10 "$lock_fd"; then
+    exec {lock_fd}>&-
+    warn "Another site-user change is running. Please try again."
+    return 1
+  fi
+
+  if id "$user" &>/dev/null; then
+    exec {lock_fd}>&-
+    warn "Site user appeared during creation: ${user}"
+    return 1
+  fi
+  if [[ -e "$home" || -L "$home" ]]; then
+    exec {lock_fd}>&-
+    warn "Refusing to adopt an existing site home: ${home}"
+    return 1
+  fi
+
   while (( tries < 5 )); do
-    if flock -w 10 "$lock" useradd --create-home --home-dir "${HOME_BASE}/${user}" \
-         --shell /usr/sbin/nologin "$user" >> "$CLI_LOG" 2>&1; then
-      passwd -l "$user" >> "$CLI_LOG" 2>&1 || true
+    if useradd --create-home --home-dir "$home" --shell /usr/sbin/nologin "$user" \
+         >> "$CLI_LOG" 2>&1; then
       DID_CREATE_USER=1
-      return 0
+      break
     fi
-    id "$user" &>/dev/null && return 0    # a racing call created it
-    tries=$((tries + 1)); sleep 1
+    if id "$user" &>/dev/null; then
+      DID_CREATE_USER=1
+      _remove_site_user "$user"
+      DID_CREATE_USER=0
+      exec {lock_fd}>&-
+      warn "Site-user creation left partial account state: ${user}"
+      return 1
+    fi
+    tries=$((tries + 1))
+    sleep 1
   done
-  warn "Failed to create site user '${user}' (lock contention?). Check: ${CLI_LOG}"
-  return 1
+
+  if [[ "$DID_CREATE_USER" != "1" ]]; then
+    exec {lock_fd}>&-
+    warn "Failed to create site user '${user}' (lock contention?). Check: ${CLI_LOG}"
+    return 1
+  fi
+  passwd -l "$user" >> "$CLI_LOG" 2>&1 || true
+
+  user_uid=$(id -u "$user") \
+    || { _remove_site_user "$user"; DID_CREATE_USER=0; exec {lock_fd}>&-; warn "Could not resolve the new site-user UID."; return 1; }
+  user_gid=$(id -g "$user") \
+    || { _remove_site_user "$user"; DID_CREATE_USER=0; exec {lock_fd}>&-; warn "Could not resolve the new site-user GID."; return 1; }
+  if [[ ! -d "$home" || -L "$home" ]]; then
+    _remove_site_user "$user"
+    DID_CREATE_USER=0
+    exec {lock_fd}>&-
+    warn "useradd did not create a safe site home: ${home}"
+    return 1
+  fi
+  home_uid=$(stat -c %u -- "$home") \
+    || { _remove_site_user "$user"; DID_CREATE_USER=0; exec {lock_fd}>&-; warn "Could not inspect the new site-home UID."; return 1; }
+  home_gid=$(stat -c %g -- "$home") \
+    || { _remove_site_user "$user"; DID_CREATE_USER=0; exec {lock_fd}>&-; warn "Could not inspect the new site-home GID."; return 1; }
+  if [[ "$home_uid" != "$user_uid" || "$home_gid" != "$user_gid" ]]; then
+    _remove_site_user "$user"
+    DID_CREATE_USER=0
+    exec {lock_fd}>&-
+    warn "useradd created the site home with unexpected ownership: ${home}"
+    return 1
+  fi
+
+  exec {lock_fd}>&-
+  return 0
 }
 
-# Create the per-site tree (group+setgid) and the root-owned .aidipanel-managed marker.
+# Create only the known per-site paths and publish the root-owned identity marker.
 _site_make_layout() {
   local user="$1" domain="$2" webroot="$3" home="${HOME_BASE}/${1}"
-  mkdir -p "${home}/tmp" "${home}/logs" "${home}/backups" "$webroot"
-  chown -R "${user}:${user}" "$home"
-  chmod 750 "$home" "${home}/logs" "${home}/backups"
-  chmod 700 "${home}/tmp"
-  chmod 2750 "${home}/htdocs" "$webroot"          # setgid: new files keep group <user>
-  cat > "${home}/.aidipanel-managed" <<JSON
-{ "managed_by": "aidipanel", "domain": "${domain}", "site_user": "${user}", "created_at": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" }
-JSON
-  chown root:root "${home}/.aidipanel-managed"
-  chmod 644 "${home}/.aidipanel-managed"
+  local user_uid="" user_gid="" home_uid="" home_gid=""
+  local marker="${home}/.aidipanel-managed" staged="" created_at="" path
+  local -a managed_dirs=("${home}/tmp" "${home}/logs" "${home}/backups" "${home}/htdocs" "$webroot")
+
+  if [[ "$webroot" != "${home}/htdocs/${domain}" ]]; then
+    warn "Refusing an unexpected site webroot: ${webroot}"
+    return 1
+  fi
+  user_uid=$(id -u "$user") \
+    || { warn "Could not resolve the site-user UID for layout creation."; return 1; }
+  user_gid=$(id -g "$user") \
+    || { warn "Could not resolve the site-user GID for layout creation."; return 1; }
+  if [[ ! -d "$home" || -L "$home" ]]; then
+    warn "Site home is not a safe directory: ${home}"
+    return 1
+  fi
+  home_uid=$(stat -c %u -- "$home") \
+    || { warn "Could not inspect site-home ownership."; return 1; }
+  home_gid=$(stat -c %g -- "$home") \
+    || { warn "Could not inspect site-home group ownership."; return 1; }
+  if [[ "$home_uid" != "$user_uid" || "$home_gid" != "$user_gid" ]]; then
+    warn "Site home ownership does not match the site user: ${home}"
+    return 1
+  fi
+
+  for path in "${managed_dirs[@]}"; do
+    if [[ -e "$path" || -L "$path" ]]; then
+      if [[ ! -d "$path" || -L "$path" ]]; then
+        warn "Refusing an unsafe managed site directory: ${path}"
+        return 1
+      fi
+    fi
+  done
+  if [[ -e "$marker" || -L "$marker" ]]; then
+    warn "Refusing an existing managed-site marker: ${marker}"
+    return 1
+  fi
+
+  install -d -o "$user" -g "$user" -m 0750 -- "$home" \
+    || { warn "Could not secure the site home."; return 1; }
+  install -d -o "$user" -g "$user" -m 0700 -- "${home}/tmp" \
+    || { warn "Could not create the site temporary directory."; return 1; }
+  install -d -o "$user" -g "$user" -m 0750 -- "${home}/logs" "${home}/backups" \
+    || { warn "Could not create the site logs or backups directory."; return 1; }
+  install -d -o "$user" -g "$user" -m 2750 -- "${home}/htdocs" "$webroot" \
+    || { warn "Could not create the site document root."; return 1; }
+
+  created_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
+    || { warn "Could not timestamp the managed-site marker."; return 1; }
+  staged=$(mktemp "${home}/.aidipanel-managed.XXXXXX") \
+    || { warn "Could not stage the managed-site marker."; return 1; }
+  chmod 0600 -- "$staged" \
+    || { rm -f -- "$staged"; warn "Could not secure the staged managed-site marker."; return 1; }
+  if ! printf '{ "managed_by": "aidipanel", "domain": "%s", "site_user": "%s", "created_at": "%s" }\n' \
+      "$domain" "$user" "$created_at" > "$staged"; then
+    rm -f -- "$staged"
+    warn "Could not write the managed-site marker."
+    return 1
+  fi
+  chown root:root -- "$staged" \
+    || { rm -f -- "$staged"; warn "Could not set managed-site marker ownership."; return 1; }
+  chmod 0644 -- "$staged" \
+    || { rm -f -- "$staged"; warn "Could not set managed-site marker permissions."; return 1; }
+  if ! ln -- "$staged" "$marker"; then
+    rm -f -- "$staged"
+    warn "Managed-site marker appeared during publication: ${marker}"
+    return 1
+  fi
+  if ! rm -f -- "$staged"; then
+    rm -f -- "$marker" "$staged" 2>/dev/null || true
+    warn "Could not finish managed-site marker publication."
+    return 1
+  fi
+  return 0
 }
 
 # Let nginx (www-data) read/traverse this site's tree. MVP = group model;
@@ -715,7 +853,7 @@ _site_add() {
 
   # Rollback ledger
   DID_CREATE_USER=0
-  local created_home=0 wrote_pool=0 wrote_vhost=0 enabled=0 wrote_snippet=0 wrote_db=0
+  local wrote_pool=0 wrote_vhost=0 enabled=0 wrote_snippet=0 wrote_db=0
   local db_name="" db_user="" db_pass=""
   _site_add_rollback() {
     [[ "$wrote_db"     == 1 ]] && _db_deprovision "$db_name" "$db_user"
@@ -723,17 +861,16 @@ _site_add() {
     [[ "$wrote_vhost"  == 1 ]] && rm -f "${NGINX_CONF_DIR}/${domain}.conf"
     [[ "$wrote_snippet" == 1 ]] && rm -f "$(_cache_snippet_path "$domain")"
     [[ "$wrote_pool"   == 1 ]] && _remove_fpm_pool "$site_user" "$php_ver"
-    if [[ "$DID_CREATE_USER" == 1 ]]; then
-      _remove_site_user "$site_user"   # user + home + its (otherwise-orphan) group
-    elif [[ "$created_home" == 1 ]]; then
-      rm -rf "${HOME_BASE}/${site_user}/htdocs/${domain}"
-    fi
+    [[ "$DID_CREATE_USER" == 1 ]] && _remove_site_user "$site_user"
     systemctl reload nginx >> "$CLI_LOG" 2>&1 || true
   }
 
   _progress 12 create_user "Creating site user"
   _ensure_site_user "$site_user"            || { _site_add_rollback; die "Could not create site user '${site_user}'."; }
-  _site_make_layout "$site_user" "$domain" "$webroot"; created_home=1
+  _site_make_layout "$site_user" "$domain" "$webroot" || {
+    _site_add_rollback
+    die "Could not create a safe site layout for '${site_user}'."
+  }
   _site_grant_web_access "$site_user"       || { _site_add_rollback; die "Could not grant web access for '${site_user}'."; }
   _progress 25 php_pool "Configuring PHP-FPM pool"
   _write_fpm_pool "$site_user" "$php_ver"   || { _site_add_rollback; die "PHP-FPM pool creation failed."; }
