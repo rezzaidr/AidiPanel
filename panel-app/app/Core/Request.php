@@ -48,9 +48,10 @@ class Request
         if (in_array($remote, $trustedProxies, true)) {
             $forwardedFor = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? '';
             if ($forwardedFor !== '') {
-                $firstIp = trim(explode(',', $forwardedFor)[0]);
-                if (filter_var($firstIp, FILTER_VALIDATE_IP)) {
-                    return $firstIp;
+                $forwardedIps = explode(',', $forwardedFor);
+                $rightmostIp = trim((string) array_pop($forwardedIps));
+                if (filter_var($rightmostIp, FILTER_VALIDATE_IP)) {
+                    return $rightmostIp;
                 }
             }
         }
