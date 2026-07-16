@@ -737,6 +737,10 @@ _create_fastcgi_cache_dir() {
 # re-applies it on self:update so existing servers pick it up on upgrade.
 _install_motd() {
   [[ "$DRY_RUN" == "true" ]] && return 0
+  if [[ -x /usr/local/bin/aidipanel ]] \
+      && /usr/local/bin/aidipanel system:motd-refresh >> "$PANEL_LOG" 2>&1; then
+    return 0
+  fi
   local d=/etc/update-motd.d s
   [[ -d "$d" ]] || return 0
   cat > "$d/00-aidipanel" <<'AIDIPANEL_MOTD'
@@ -751,22 +755,67 @@ grn="${e}[38;5;42m"
 bld="${e}[1m"
 rst="${e}[0m"
 
-# panel URL: configured hostname first, else primary IP + port
+# Panel URL: configured hostname, cached public IPv4, NIC public IPv4, then a
+# local IPv4 fallback. Never perform network I/O during SSH login.
+panel_conf="/opt/aidipanel/config/panel.conf"
+public_ip_cache="/var/cache/aidipanel-public-ip"
+cli_bin="/usr/local/bin/aidipanel"
+
+is_ipv4() {
+  awk -v ip="${1:-}" 'BEGIN {
+    if (split(ip,a,".") != 4) exit 1
+    for (i=1;i<=4;i++) if (a[i] !~ /^[0-9]+$/ || a[i] < 0 || a[i] > 255) exit 1
+    exit 0
+  }'
+}
+
+is_public_ipv4() {
+  awk -v ip="${1:-}" 'BEGIN {
+    if (split(ip,a,".") != 4) exit 1
+    for (i=1;i<=4;i++) if (a[i] !~ /^[0-9]+$/ || a[i] < 0 || a[i] > 255) exit 1
+    if (a[1]==0 || a[1]==10 || a[1]==127 || a[1]>=224) exit 1
+    if (a[1]==100 && a[2]>=64 && a[2]<=127) exit 1
+    if (a[1]==169 && a[2]==254) exit 1
+    if (a[1]==172 && a[2]>=16 && a[2]<=31) exit 1
+    if (a[1]==192 && (a[2]==168 || (a[2]==0 && (a[3]==0 || a[3]==2)) || (a[2]==88 && a[3]==99))) exit 1
+    if (a[1]==198 && (a[2]==18 || a[2]==19 || (a[2]==51 && a[3]==100))) exit 1
+    if (a[1]==203 && a[2]==0 && a[3]==113) exit 1
+    exit 0
+  }'
+}
+
 url=""
 p=""
-if [ -r /opt/aidipanel/config/panel.conf ]; then
-  h=$(sed -n 's/^[[:space:]]*PANEL_HOSTNAME[[:space:]]*=[[:space:]]*//p' /opt/aidipanel/config/panel.conf | tr -d '"' | head -n1)
-  p=$(sed -n 's/^[[:space:]]*PANEL_PORT[[:space:]]*=[[:space:]]*//p' /opt/aidipanel/config/panel.conf | tr -d '"' | head -n1)
+if [ -r "$panel_conf" ]; then
+  h=$(sed -n 's/^[[:space:]]*PANEL_HOSTNAME[[:space:]]*=[[:space:]]*//p' "$panel_conf" | tr -d '"' | head -n1)
+  p=$(sed -n 's/^[[:space:]]*PANEL_PORT[[:space:]]*=[[:space:]]*//p' "$panel_conf" | tr -d '"' | head -n1)
   [ -n "$h" ] && url="https://$h"
 fi
 if [ -z "$url" ]; then
-  ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+  ip=""
+  fallback_ip=""
+  if [ -r "$public_ip_cache" ]; then
+    candidate=$(sed -n '1p' "$public_ip_cache" 2>/dev/null)
+    is_public_ipv4 "$candidate" && ip="$candidate"
+  fi
+  if [ -z "$ip" ]; then
+    for candidate in $(hostname -I 2>/dev/null); do
+      if is_public_ipv4 "$candidate"; then
+        ip="$candidate"
+        break
+      fi
+      if [ -z "$fallback_ip" ] && is_ipv4 "$candidate"; then
+        fallback_ip="$candidate"
+      fi
+    done
+  fi
+  [ -n "$ip" ] || ip="$fallback_ip"
   [ -z "$p" ] && p=8443
   [ -n "$ip" ] && url="https://${ip}:${p}"
 fi
 [ -z "$url" ] && url="run: aidipanel panel:hostname <fqdn>"
 
-ver=$(sed -n 's/.*CLI_VERSION="\([^"]*\)".*/v\1/p' /usr/local/bin/aidipanel 2>/dev/null | head -n1)
+ver=$(sed -n 's/.*CLI_VERSION="\([^"]*\)".*/v\1/p' "$cli_bin" 2>/dev/null | head -n1)
 
 load=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null)
 memp=$(free 2>/dev/null | awk '/^Mem:/{if($2>0)printf "%d%%",$3/$2*100}')
@@ -792,6 +841,7 @@ AIDIPANEL_MOTD
            91-release-upgrade 95-hwe-eol 98-fsck-at-reboot; do
     if [[ -f "$d/$s" ]]; then chmod -x "$d/$s" 2>/dev/null || true; fi
   done
+  rm -f -- "${AIDIPANEL_MOTD_REFRESH_MARKER:-/run/aidipanel-motd-refresh-required}" 2>/dev/null || true
   return 0
 }
 
@@ -2343,11 +2393,17 @@ _detect_public_ip() {
 }
 
 _print_summary() {
-  local server_ip
+  local server_ip cached_ip=""
   # Interface src is correct where the public IP is bound to the NIC; on NAT clouds
   # it returns a private IP, so resolve the real public one (the panel listens on
   # all interfaces, so it's reachable there once the cloud firewall allows the port).
   server_ip=$(ip route get 8.8.8.8 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}')
+  if [[ -r /var/cache/aidipanel-public-ip ]]; then
+    cached_ip=$(tr -d '[:space:]' < /var/cache/aidipanel-public-ip)
+    if [[ "$cached_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && ! _is_private_ip "$cached_ip"; then
+      server_ip="$cached_ip"
+    fi
+  fi
   if [[ -z "$server_ip" ]] || _is_private_ip "$server_ip"; then
     local public_ip; public_ip=$(_detect_public_ip || true)
     [[ -n "$public_ip" ]] && server_ip="$public_ip"

@@ -10129,6 +10129,68 @@ _log_tail() {
   tail -n "$lines" -f "$log_file"
 }
 
+# True only for a syntactically valid, globally routable IPv4 address. This is
+# topology-based rather than provider-based: NIC-bound public addresses pass,
+# while private/VPC, CGNAT, loopback, link-local, documentation, benchmark,
+# multicast, and reserved ranges do not.
+_public_ipv4_is_global() {
+  awk -v ip="${1:-}" 'BEGIN {
+    if (split(ip,a,".") != 4) exit 1
+    for (i=1;i<=4;i++) if (a[i] !~ /^[0-9]+$/ || a[i] < 0 || a[i] > 255) exit 1
+    if (a[1]==0 || a[1]==10 || a[1]==127 || a[1]>=224) exit 1
+    if (a[1]==100 && a[2]>=64 && a[2]<=127) exit 1
+    if (a[1]==169 && a[2]==254) exit 1
+    if (a[1]==172 && a[2]>=16 && a[2]<=31) exit 1
+    if (a[1]==192 && (a[2]==168 || (a[2]==0 && (a[3]==0 || a[3]==2)) || (a[2]==88 && a[3]==99))) exit 1
+    if (a[1]==198 && (a[2]==18 || a[2]==19 || (a[2]==51 && a[3]==100))) exit 1
+    if (a[1]==203 && a[2]==0 && a[3]==113) exit 1
+    exit 0
+  }'
+}
+
+_public_ipv4_detect() {
+  local candidate url ip
+  while IFS= read -r candidate; do
+    if _public_ipv4_is_global "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done < <(hostname -I 2>/dev/null | tr ' ' '\n')
+
+  for url in https://api.ipify.org https://ifconfig.me/ip https://icanhazip.com; do
+    if ! ip=$(curl -4 -fsS --max-time 4 "$url" 2>/dev/null | tr -d '[:space:]'); then
+      continue
+    fi
+    if _public_ipv4_is_global "$ip"; then
+      printf '%s\n' "$ip"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Publish public, non-secret metadata in a root-directory entry that the
+# unprivileged MOTD can read. The aidipanel runtime owns only the regular file,
+# not /var/cache, so it can refresh content but cannot replace the path.
+_public_ipv4_cache_refresh() {
+  local cache="${AIDIPANEL_PUBLIC_IP_CACHE:-/var/cache/aidipanel-public-ip}"
+  local cache_dir staged ip
+  cache_dir=$(dirname -- "$cache")
+  [[ -d "$cache_dir" && ! -L "$cache_dir" ]] || return 1
+  [[ ! -e "$cache" || ( -f "$cache" && ! -L "$cache" ) ]] || return 1
+  [[ ! -L "$cache" ]] || return 1
+
+  ip=$(_public_ipv4_detect) || return 1
+  staged=$(mktemp "${cache_dir}/.aidipanel-public-ip.XXXXXX") || return 1
+  if ! printf '%s\n' "$ip" > "$staged" \
+      || ! chown aidipanel:aidipanel -- "$staged" \
+      || ! chmod 0644 -- "$staged" \
+      || ! mv -f -- "$staged" "$cache"; then
+    rm -f -- "$staged"
+    return 1
+  fi
+}
+
 # Install/refresh the AidiPanel SSH login banner (dynamic MOTD) and silence the
 # stock Ubuntu welcome/help/ESM/updates noise. Idempotent; called from self:update
 # so servers upgrading from a build without it pick the banner up.
@@ -10136,6 +10198,7 @@ _log_tail() {
 _apply_motd() {
   local d=/etc/update-motd.d s
   [[ -d "$d" ]] || return 0
+  _public_ipv4_cache_refresh >/dev/null 2>&1 || true
   cat > "$d/00-aidipanel" <<'AIDIPANEL_MOTD'
 #!/bin/sh
 # AidiPanel — SSH login banner (dynamic MOTD). POSIX sh, cheap reads only so it
@@ -10148,22 +10211,67 @@ grn="${e}[38;5;42m"
 bld="${e}[1m"
 rst="${e}[0m"
 
-# panel URL: configured hostname first, else primary IP + port
+# Panel URL: configured hostname, cached public IPv4, NIC public IPv4, then a
+# local IPv4 fallback. Never perform network I/O during SSH login.
+panel_conf="/opt/aidipanel/config/panel.conf"
+public_ip_cache="/var/cache/aidipanel-public-ip"
+cli_bin="/usr/local/bin/aidipanel"
+
+is_ipv4() {
+  awk -v ip="${1:-}" 'BEGIN {
+    if (split(ip,a,".") != 4) exit 1
+    for (i=1;i<=4;i++) if (a[i] !~ /^[0-9]+$/ || a[i] < 0 || a[i] > 255) exit 1
+    exit 0
+  }'
+}
+
+is_public_ipv4() {
+  awk -v ip="${1:-}" 'BEGIN {
+    if (split(ip,a,".") != 4) exit 1
+    for (i=1;i<=4;i++) if (a[i] !~ /^[0-9]+$/ || a[i] < 0 || a[i] > 255) exit 1
+    if (a[1]==0 || a[1]==10 || a[1]==127 || a[1]>=224) exit 1
+    if (a[1]==100 && a[2]>=64 && a[2]<=127) exit 1
+    if (a[1]==169 && a[2]==254) exit 1
+    if (a[1]==172 && a[2]>=16 && a[2]<=31) exit 1
+    if (a[1]==192 && (a[2]==168 || (a[2]==0 && (a[3]==0 || a[3]==2)) || (a[2]==88 && a[3]==99))) exit 1
+    if (a[1]==198 && (a[2]==18 || a[2]==19 || (a[2]==51 && a[3]==100))) exit 1
+    if (a[1]==203 && a[2]==0 && a[3]==113) exit 1
+    exit 0
+  }'
+}
+
 url=""
 p=""
-if [ -r /opt/aidipanel/config/panel.conf ]; then
-  h=$(sed -n 's/^[[:space:]]*PANEL_HOSTNAME[[:space:]]*=[[:space:]]*//p' /opt/aidipanel/config/panel.conf | tr -d '"' | head -n1)
-  p=$(sed -n 's/^[[:space:]]*PANEL_PORT[[:space:]]*=[[:space:]]*//p' /opt/aidipanel/config/panel.conf | tr -d '"' | head -n1)
+if [ -r "$panel_conf" ]; then
+  h=$(sed -n 's/^[[:space:]]*PANEL_HOSTNAME[[:space:]]*=[[:space:]]*//p' "$panel_conf" | tr -d '"' | head -n1)
+  p=$(sed -n 's/^[[:space:]]*PANEL_PORT[[:space:]]*=[[:space:]]*//p' "$panel_conf" | tr -d '"' | head -n1)
   [ -n "$h" ] && url="https://$h"
 fi
 if [ -z "$url" ]; then
-  ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+  ip=""
+  fallback_ip=""
+  if [ -r "$public_ip_cache" ]; then
+    candidate=$(sed -n '1p' "$public_ip_cache" 2>/dev/null)
+    is_public_ipv4 "$candidate" && ip="$candidate"
+  fi
+  if [ -z "$ip" ]; then
+    for candidate in $(hostname -I 2>/dev/null); do
+      if is_public_ipv4 "$candidate"; then
+        ip="$candidate"
+        break
+      fi
+      if [ -z "$fallback_ip" ] && is_ipv4 "$candidate"; then
+        fallback_ip="$candidate"
+      fi
+    done
+  fi
+  [ -n "$ip" ] || ip="$fallback_ip"
   [ -z "$p" ] && p=8443
   [ -n "$ip" ] && url="https://${ip}:${p}"
 fi
 [ -z "$url" ] && url="run: aidipanel panel:hostname <fqdn>"
 
-ver=$(sed -n 's/.*CLI_VERSION="\([^"]*\)".*/v\1/p' /usr/local/bin/aidipanel 2>/dev/null | head -n1)
+ver=$(sed -n 's/.*CLI_VERSION="\([^"]*\)".*/v\1/p' "$cli_bin" 2>/dev/null | head -n1)
 
 load=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null)
 memp=$(free 2>/dev/null | awk '/^Mem:/{if($2>0)printf "%d%%",$3/$2*100}')
@@ -10189,7 +10297,21 @@ AIDIPANEL_MOTD
            91-release-upgrade 95-hwe-eol 98-fsck-at-reboot; do
     if [[ -f "$d/$s" ]]; then chmod -x "$d/$s" 2>/dev/null || true; fi
   done
+  rm -f -- "${AIDIPANEL_MOTD_REFRESH_MARKER:-/run/aidipanel-motd-refresh-required}" 2>/dev/null || true
   return 0
+}
+
+_system_motd_refresh() {
+  _require_root "system:motd-refresh"
+  [[ "$#" -eq 0 ]] || die "system:motd-refresh does not accept arguments."
+  _apply_motd
+}
+
+_motd_repair_pending_update() {
+  local marker="${AIDIPANEL_MOTD_REFRESH_MARKER:-/run/aidipanel-motd-refresh-required}"
+  [[ "$(id -u)" -eq 0 && -f "$marker" && ! -L "$marker" ]] || return 0
+  [[ "$(stat -c '%u' -- "$marker" 2>/dev/null)" == 0 ]] || return 0
+  _apply_motd || true
 }
 
 _release_public_key_write() {
@@ -11569,12 +11691,14 @@ main() {
     demo:disable)   _demo_disable "$@" ;;
 
     # System
+    system:motd-refresh) _system_motd_refresh "$@" ;;
     system:cloud-metadata) _system_cloud_metadata "$@" ;;
     system:info)    _system_info "$@" ;;
     log:tail)       _log_tail "$@" ;;
     self:update)    _self_update "$@" ;;
 
     --version|-v)
+      _motd_repair_pending_update
       echo "AidiPanel CLI v${CLI_VERSION}"
       ;;
 

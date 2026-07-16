@@ -544,21 +544,29 @@ function server_public_ip(): string
     static $cached = null;
     if ($cached !== null) return $cached;
 
-    $file = defined('STORAGE_ROOT') ? STORAGE_ROOT . '/public_ip' : sys_get_temp_dir() . '/aidipanel_public_ip';
-    if (is_readable($file) && (time() - (int) filemtime($file)) < 3600) {
+    $sharedFile = '/var/cache/aidipanel-public-ip';
+    $legacyFile = defined('STORAGE_ROOT')
+        ? STORAGE_ROOT . '/public_ip'
+        : sys_get_temp_dir() . '/aidipanel_public_ip';
+    $isPublicIpv4 = static fn (string $ip): bool => filter_var(
+        $ip,
+        FILTER_VALIDATE_IP,
+        FILTER_FLAG_IPV4 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+    ) !== false;
+
+    foreach ([$sharedFile, $legacyFile] as $file) {
+        if (!is_readable($file) || is_link($file) || (time() - (int) @filemtime($file)) >= 3600) {
+            continue;
+        }
         $ip = trim((string) @file_get_contents($file));
-        if ($ip !== '') return $cached = $ip;
+        if ($isPublicIpv4($ip)) return $cached = $ip;
     }
 
     $ip = '';
     // 1. A public IPv4 already bound to the interface (NIC-bound public IP hosts).
     $hostIp = trim((string) @shell_exec('hostname -I 2>/dev/null'));
     foreach (preg_split('/\s+/', $hostIp) ?: [] as $cand) {
-        if ($cand !== '' && filter_var(
-            $cand,
-            FILTER_VALIDATE_IP,
-            FILTER_FLAG_IPV4 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
-        )) {
+        if ($cand !== '' && $isPublicIpv4($cand)) {
             $ip = $cand;
             break;
         }
@@ -566,8 +574,8 @@ function server_public_ip(): string
     // 2. NAT clouds: the NIC only has a private IP — ask an external echo.
     if ($ip === '') {
         foreach (['https://api.ipify.org', 'https://ifconfig.me/ip', 'https://icanhazip.com'] as $url) {
-            $out = trim((string) @shell_exec('curl -fsS --max-time 4 ' . escapeshellarg($url) . ' 2>/dev/null'));
-            if (filter_var($out, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            $out = trim((string) @shell_exec('curl -4 -fsS --max-time 4 ' . escapeshellarg($url) . ' 2>/dev/null'));
+            if ($isPublicIpv4($out)) {
                 $ip = $out;
                 break;
             }
@@ -575,7 +583,13 @@ function server_public_ip(): string
     }
 
     if ($ip !== '') {
-        @file_put_contents($file, $ip, LOCK_EX);
+        // The CLI provisions the shared file as aidipanel:aidipanel 0644 inside
+        // root-owned /var/cache. PHP may update that existing regular file but
+        // never creates or follows an alternate path there.
+        if (is_file($sharedFile) && !is_link($sharedFile) && is_writable($sharedFile)) {
+            @file_put_contents($sharedFile, $ip . "\n", LOCK_EX);
+        }
+        @file_put_contents($legacyFile, $ip . "\n", LOCK_EX);
     }
     return $cached = $ip;
 }

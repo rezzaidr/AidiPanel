@@ -626,12 +626,38 @@ else
   die "The new panel version is active, but TOTP secret migration failed. Existing accounts remain compatible; check /var/log/aidipanel-install.log and rerun the update."
 fi
 
+# Refresh shared public-IP metadata and the SSH banner through the current CLI.
+# Keep a one-shot marker after the refresh: v1.3.3's already-running updater
+# rewrites its old MOTD after this deployer returns, then invokes the new CLI's
+# --version path, which consumes the marker and restores the current template.
+if /usr/local/bin/aidipanel system:motd-refresh >/dev/null 2>&1; then
+  MOTD_REFRESH_MARKER="/run/aidipanel-motd-refresh-required"
+  motd_marker_staged=$(mktemp "/run/.aidipanel-motd-refresh-required.XXXXXX" 2>/dev/null || true)
+  if [[ -n "$motd_marker_staged" ]] \
+      && printf 'schema=1\n' > "$motd_marker_staged" \
+      && chown root:root -- "$motd_marker_staged" \
+      && chmod 0600 -- "$motd_marker_staged" \
+      && mv -f -- "$motd_marker_staged" "$MOTD_REFRESH_MARKER"; then
+    :
+  else
+    [[ -z "${motd_marker_staged:-}" ]] || rm -f -- "$motd_marker_staged"
+    warn "MOTD refreshed, but the one-shot update migration marker could not be armed"
+  fi
+fi
+
 # --------------------------------------------------------------------------
 # 8. Summary
 # --------------------------------------------------------------------------
-SERVER_IP=$(ip route get 8.8.8.8 2>/dev/null \
-    | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1);exit}}' \
-    || echo "<server-ip>")
+SERVER_IP=""
+if [[ -r /var/cache/aidipanel-public-ip ]]; then
+  SERVER_IP=$(tr -d '[:space:]' < /var/cache/aidipanel-public-ip)
+  [[ "$SERVER_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || SERVER_IP=""
+fi
+if [[ -z "$SERVER_IP" ]]; then
+  SERVER_IP=$(ip route get 8.8.8.8 2>/dev/null \
+      | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1);exit}}' \
+      || echo "<server-ip>")
+fi
 PANEL_PORT=$(grep '^PANEL_PORT=' "${PANEL_DIR}/config/panel.conf" 2>/dev/null \
     | cut -d= -f2 || echo "8443")
 PANEL_HOSTNAME=$(grep '^PANEL_HOSTNAME=' "${PANEL_DIR}/config/panel.conf" 2>/dev/null \
